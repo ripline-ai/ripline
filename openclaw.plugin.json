@@ -1,0 +1,33 @@
+{
+  "id": "pipeline-orchestrator",
+  "name": "Pipeline Orchestrator",
+  "description": "Graph-based workflow engine and tools for OpenClaw",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pipelinesDir": {
+        "type": "string",
+        "description": "Directory that contains pipeline *.json or *.yaml files"
+      },
+      "maxConcurrency": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 4,
+        "description": "Maximum concurrent pipeline runs managed by the plugin"
+      },
+      "httpPath": {
+        "type": "string",
+        "default": "/pipelines",
+        "description": "Base path for the plugin's HTTP API (for mission-control visualization)"
+      }
+    },
+    "required": ["pipelinesDir"]
+  },
+  "uiHints": {
+    "pipelinesDir": { "label": "Pipelines directory", "placeholder": "./pipelines" },
+    "maxConcurrency": { "label": "Max concurrent runs" },
+    "httpPath": { "label": "HTTP base path" }
+  }
+}

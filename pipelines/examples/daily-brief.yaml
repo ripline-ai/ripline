@@ -1,0 +1,38 @@
+id: daily_brief
+version: 1
+name: Daily Brief Workflow
+description: Generate the daily Oscars context package from raw inputs.
+entry:
+  - load_inputs
+nodes:
+  - id: load_inputs
+    type: input
+    description: Canonical pipeline input
+  - id: enrich_context
+    type: transform
+    expression: "({ date: inputs.date ?? new Date().toISOString().slice(0, 10), headlines: inputs.headlines ?? [] })"
+  - id: summarize_articles
+    type: agent
+    name: Summarize coverage
+    agentId: main
+    prompt: |
+      You are Spectra's workflows pipeline. Build the Oscars briefing for {{date}} using the headlines below.
+
+      Headlines:
+      {{JSON.stringify(headlines, null, 2)}}
+  - id: finalize
+    type: output
+    path: report
+edges:
+  - from:
+      node: load_inputs
+    to:
+      node: enrich_context
+  - from:
+      node: enrich_context
+    to:
+      node: summarize_articles
+  - from:
+      node: summarize_articles
+    to:
+      node: finalize

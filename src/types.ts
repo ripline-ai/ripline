@@ -1,0 +1,164 @@
+import type { JSONSchema7 } from "json-schema";
+
+export type PipelinePluginConfig = {
+  pipelinesDir: string;
+  maxConcurrency?: number;
+  httpPath?: string;
+};
+
+export type NodeContract = {
+  input?: JSONSchema7;
+  output?: JSONSchema7;
+};
+
+export type NodeBase = {
+  id: string;
+  name?: string;
+  description?: string;
+  contracts?: NodeContract;
+  metadata?: Record<string, unknown>;
+};
+
+export type LiteralNode = NodeBase & {
+  type: "data";
+  value: unknown;
+};
+
+export type InputNode = NodeBase & {
+  type: "input";
+  path?: string;
+};
+
+export type TransformNode = NodeBase & {
+  type: "transform";
+  expression: string;
+  assigns?: string;
+};
+
+export type AgentNode = NodeBase & {
+  type: "agent";
+  agentId?: string;
+  sessionId?: string;
+  prompt: string;
+  channel?: string;
+  deliver?: boolean;
+  thinking?: "off" | "minimal" | "low" | "medium" | "high";
+  timeoutSeconds?: number;
+};
+
+export type RunPipelineNode = NodeBase & {
+  type: "run_pipeline";
+  pipelineId: string;
+  inputMapping?: Record<string, string>;
+  mode?: "child" | "inline";
+};
+
+export type LoopNode = NodeBase & {
+  type: "loop";
+  collection: string;
+  itemVar?: string;
+  indexVar?: string;
+  maxIterations?: number;
+  exitCondition?: string;
+  body: LoopBody;
+};
+
+export type LoopBody = {
+  pipelineId?: string;
+  entry?: string[];
+  nodes?: PipelineNode[];
+  edges?: PipelineEdge[];
+};
+
+export type CheckpointNode = NodeBase & {
+  type: "checkpoint";
+  reason?: string;
+  resumeKey?: string;
+};
+
+export type OutputNode = NodeBase & {
+  type: "output";
+  path?: string;
+  merge?: boolean;
+};
+
+export type PipelineNode =
+  | LiteralNode
+  | InputNode
+  | TransformNode
+  | AgentNode
+  | RunPipelineNode
+  | LoopNode
+  | CheckpointNode
+  | OutputNode;
+
+export type PipelineEdge = {
+  id?: string;
+  from: { node: string; port?: string };
+  to: { node: string; port?: string };
+  when?: string;
+};
+
+export type PipelineContracts = {
+  input?: JSONSchema7;
+  output?: JSONSchema7;
+};
+
+export type PipelineDefinition = {
+  id: string;
+  version?: string | number;
+  name?: string;
+  description?: string;
+  entry: string[];
+  nodes: PipelineNode[];
+  edges: PipelineEdge[];
+  contracts?: PipelineContracts;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export type PipelineRegistryEntry = {
+  definition: PipelineDefinition;
+  mtimeMs: number;
+  path: string;
+};
+
+export type PipelineRunStatus =
+  | "pending"
+  | "running"
+  | "paused"
+  | "errored"
+  | "completed";
+
+export type PipelineRunStep = {
+  nodeId: string;
+  status: "pending" | "running" | "completed" | "errored" | "skipped" | "paused";
+  startedAt?: number;
+  finishedAt?: number;
+  data?: unknown;
+  error?: string;
+  iteration?: number;
+};
+
+export type PipelineRunRecord = {
+  id: string;
+  pipelineId: string;
+  parentRunId?: string;
+  childRunIds: string[];
+  status: PipelineRunStatus;
+  startedAt: number;
+  updatedAt: number;
+  inputs: Record<string, unknown>;
+  outputs?: Record<string, unknown>;
+  cursor?: {
+    nextNodeIndex: number;
+    context: Record<string, unknown>;
+  };
+  waitFor?: {
+    nodeId: string;
+    reason?: string;
+    resumeKey?: string;
+  };
+  steps: PipelineRunStep[];
+  error?: string;
+};
