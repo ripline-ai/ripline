@@ -4,11 +4,20 @@ export type PipelinePluginConfig = {
   pipelinesDir: string;
   maxConcurrency?: number;
   httpPath?: string;
+  httpPort?: number;
+  authToken?: string;
+  /** Directory for run state (default .ripline/runs). Used by HTTP server. */
+  runsDir?: string;
 };
 
 export type NodeContract = {
   input?: JSONSchema7;
   output?: JSONSchema7;
+};
+
+export type NodeRetryConfig = {
+  maxAttempts: number;
+  delayMs?: number;
 };
 
 export type NodeBase = {
@@ -17,6 +26,8 @@ export type NodeBase = {
   description?: string;
   contracts?: NodeContract;
   metadata?: Record<string, unknown>;
+  /** Retry transient failures: max attempts and optional delay between attempts. */
+  retry?: NodeRetryConfig;
 };
 
 export type LiteralNode = NodeBase & {
@@ -39,6 +50,8 @@ export type AgentNode = NodeBase & {
   type: "agent";
   agentId?: string;
   sessionId?: string;
+  /** When true or omitted, use a new session per run (context isolation). When false, use run-level sessionId for continuity. */
+  resetSession?: boolean;
   prompt: string;
   channel?: string;
   deliver?: boolean;
@@ -79,7 +92,27 @@ export type CheckpointNode = NodeBase & {
 export type OutputNode = NodeBase & {
   type: "output";
   path?: string;
+  /** Artifact key to write (default: this node's id). */
+  source?: string;
   merge?: boolean;
+};
+
+/** Convention for breakdown nodes: emit tasks[] for downstream enqueue node. */
+export type TaskItem = {
+  id: string;
+  title: string;
+  detail?: string;
+  priority?: number | string;
+};
+
+export type EnqueueNode = NodeBase & {
+  type: "enqueue";
+  /** Child pipeline to run for each task (or once with full list in batch mode). */
+  pipelineId: string;
+  /** Artifact key containing tasks array (default "tasks"). */
+  tasksSource?: string;
+  /** batch = one child run with inputs.tasks = full list; per-item = one run per task. */
+  mode?: "batch" | "per-item";
 };
 
 export type PipelineNode =
@@ -90,7 +123,8 @@ export type PipelineNode =
   | RunPipelineNode
   | LoopNode
   | CheckpointNode
-  | OutputNode;
+  | OutputNode
+  | EnqueueNode;
 
 export type PipelineEdge = {
   id?: string;
@@ -140,10 +174,16 @@ export type PipelineRunStep = {
   iteration?: number;
 };
 
+export type QueueMode = "batch" | "per-item";
+
 export type PipelineRunRecord = {
   id: string;
   pipelineId: string;
   parentRunId?: string;
+  /** When this run was created by an enqueue node. */
+  taskId?: string;
+  /** When this run was created by an enqueue node. */
+  queueMode?: QueueMode;
   childRunIds: string[];
   status: PipelineRunStatus;
   startedAt: number;

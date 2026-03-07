@@ -1,0 +1,36 @@
+name: Ripline demo
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run demo pipeline
+        run: npm run demo
+
+      - name: Upload demo artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ripline-demo-artifact
+          path: dist/demo-artifact.json

@@ -1,7 +1,7 @@
 id: daily_brief
 version: 1
 name: Daily Brief Workflow
-description: Generate the daily Oscars context package from raw inputs.
+description: Generate a daily brief from date and headlines.
 entry:
   - load_inputs
 nodes:
@@ -16,7 +16,7 @@ nodes:
     name: Summarize coverage
     agentId: main
     prompt: |
-      You are Spectra's workflows pipeline. Build the Oscars briefing for {{date}} using the headlines below.
+      Build a daily briefing for {{date}} using the headlines below.
 
       Headlines:
       {{JSON.stringify(headlines, null, 2)}}

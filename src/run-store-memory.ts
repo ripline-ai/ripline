@@ -1,0 +1,73 @@
+import { randomUUID } from "node:crypto";
+import type { PipelineRunRecord, PipelineRunStep, PipelineRunStatus } from "./types.js";
+import type { RunStore, RunStoreCreateParams, RunStoreCursor, RunStoreListOptions } from "./run-store.js";
+
+export class MemoryRunStore implements RunStore {
+  private readonly records = new Map<string, PipelineRunRecord>();
+
+  async createRun(params: RunStoreCreateParams): Promise<PipelineRunRecord> {
+    const id = randomUUID();
+    const now = Date.now();
+    const record: PipelineRunRecord = {
+      id,
+      pipelineId: params.pipelineId,
+      ...(params.parentRunId !== undefined && { parentRunId: params.parentRunId }),
+      ...(params.taskId !== undefined && { taskId: params.taskId }),
+      ...(params.queueMode !== undefined && { queueMode: params.queueMode }),
+      childRunIds: [],
+      status: "pending",
+      startedAt: now,
+      updatedAt: now,
+      inputs: params.inputs,
+      steps: [],
+    };
+    this.records.set(id, record);
+    return record;
+  }
+
+  async load(runId: string): Promise<PipelineRunRecord | null> {
+    const record = this.records.get(runId);
+    if (!record) return null;
+    return JSON.parse(JSON.stringify(record)) as PipelineRunRecord;
+  }
+
+  async save(record: PipelineRunRecord): Promise<void> {
+    record.updatedAt = Date.now();
+    this.records.set(record.id, JSON.parse(JSON.stringify(record)) as PipelineRunRecord);
+  }
+
+  async appendStep(record: PipelineRunRecord, step: PipelineRunStep): Promise<void> {
+    record.steps.push(step);
+    await this.save(record);
+  }
+
+  async completeRun(record: PipelineRunRecord, outputs?: Record<string, unknown>): Promise<void> {
+    record.status = "completed";
+    if (outputs !== undefined) record.outputs = outputs;
+    await this.save(record);
+  }
+
+  async failRun(record: PipelineRunRecord, error: string): Promise<void> {
+    record.status = "errored";
+    record.error = error;
+    await this.save(record);
+  }
+
+  async updateCursor(record: PipelineRunRecord, cursor: RunStoreCursor): Promise<void> {
+    record.cursor = cursor;
+    await this.save(record);
+  }
+
+  async list(options?: RunStoreListOptions): Promise<PipelineRunRecord[]> {
+    let runs = Array.from(this.records.values()).map((r) => JSON.parse(JSON.stringify(r)) as PipelineRunRecord);
+    if (options?.status !== undefined) {
+      runs = runs.filter((r) => r.status === options!.status);
+    }
+    if (options?.status === "pending" || options?.status === "running") {
+      runs = [...runs].sort((a, b) => a.startedAt - b.startedAt);
+    } else {
+      runs = [...runs].sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+    return runs;
+  }
+}

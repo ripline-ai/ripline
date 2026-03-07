@@ -20,14 +20,33 @@
       "httpPath": {
         "type": "string",
         "default": "/pipelines",
-        "description": "Base path for the plugin's HTTP API (for mission-control visualization)"
+        "description": "Base path for the plugin's HTTP API (e.g. for dashboards or visualizations)"
+      },
+      "httpPort": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 65535,
+        "default": 4001,
+        "description": "Port for the HTTP API server when started by the plugin"
+      },
+      "authToken": {
+        "type": "string",
+        "description": "Optional bearer token for API authentication (if set, Authorization: Bearer <token> required)"
+      },
+      "runsDir": {
+        "type": "string",
+        "default": ".ripline/runs",
+        "description": "Directory for run artifacts (run state, run.json per run). Relative paths resolve from the workspace. Default: .ripline/runs"
       }
     },
     "required": ["pipelinesDir"]
   },
   "uiHints": {
     "pipelinesDir": { "label": "Pipelines directory", "placeholder": "./pipelines" },
+    "runsDir": { "label": "Runs directory", "placeholder": ".ripline/runs" },
     "maxConcurrency": { "label": "Max concurrent runs" },
-    "httpPath": { "label": "HTTP base path" }
+    "httpPath": { "label": "HTTP base path" },
+    "httpPort": { "label": "HTTP port" },
+    "authToken": { "label": "API auth token (optional)" }
   }
 }

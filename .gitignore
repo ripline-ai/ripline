@@ -5,5 +5,17 @@ dist
 .idea
 .vscode
 *.log
-
 ._*
+
+# Ripline run store and backlog (local runtime data)
+.ripline/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Build and tooling
+*.tsbuildinfo
+coverage
+.turbo

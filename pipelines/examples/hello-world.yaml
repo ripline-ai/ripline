@@ -1,0 +1,24 @@
+id: hello_world
+name: Hello World Pipeline
+entry:
+  - intake
+nodes:
+  - id: intake
+    type: input
+    description: Provide `person` and optional `goal` fields
+  - id: enrich
+    type: transform
+    expression: "({ greeting: `Hello, ${inputs.person}!`, goal: inputs.goal ?? 'explore Ripline' })"
+  - id: finalize
+    type: output
+    path: hello.result
+    source: enrich
+edges:
+  - from:
+      node: intake
+    to:
+      node: enrich
+  - from:
+      node: enrich
+    to:
+      node: finalize

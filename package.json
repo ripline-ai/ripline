@@ -4,7 +4,11 @@
   "description": "Pipeline orchestration plugin for OpenClaw with graph DSL, loops, recursion, and agent delegation",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "ripline": "bin/ripline.js"
+  },
   "files": [
+    "bin",
     "dist",
     "openclaw.plugin.json",
     "README.md",
@@ -12,10 +16,13 @@
     "pipelines"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node node_modules/typescript/bin/tsc -p tsconfig.json",
     "check": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "test": "vitest run"
+    "test": "vitest run",
+    "demo": "npm run build && node dist/cli/run.js --demo",
+    "demo:area-owner": "npx tsx scripts/run-area-owner-demo.ts",
+    "cron:area-owner": "npx tsx scripts/run-area-owner-cron.ts"
   },
   "keywords": [
     "openclaw",
@@ -27,16 +34,27 @@
   "author": "Craig Midwinter",
   "license": "MIT",
   "dependencies": {
+    "@fastify/cors": "^11.2.0",
     "@sinclair/typebox": "^0.34.48",
     "ajv": "^8.18.0",
+    "chalk": "^5.6.2",
+    "commander": "^14.0.3",
+    "fastify": "^5.8.1",
     "json-schema": "^0.4.0",
+    "mnemonist": "^0.40.3",
     "uuid": "^11.0.3",
     "yaml": "^2.7.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/node": "^22.13.4",
+    "@types/json-schema": "^7.0.15",
+    "@types/node": "^22.19.15",
     "typescript": "^5.7.3",
     "vitest": "^4.0.18"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
   }
 }

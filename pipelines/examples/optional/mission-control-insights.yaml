@@ -1,0 +1,54 @@
+id: mission_control_insights
+name: Mission Control Insights Intake
+entry:
+  - intake
+nodes:
+  - id: intake
+    type: input
+    description: "Optional request metadata (trigger=cron|manual, focus areas)."
+  - id: nova-ideas
+    type: agent
+    agentId: nova
+    prompt: |
+      You are Nova, the Mission Control designer. Review the latest board/dash features and propose 3-5 UI or workflow improvements Craig should consider today.
+      Focus areas (if provided): {{JSON.stringify(inputs.focus ?? [])}}
+      Respond as JSON: [{"id","title","detail","impact"}].
+  - id: quill-watch
+    type: agent
+    agentId: qa
+    prompt: |
+      You are Quill QA. List potential bugs/regressions or UX papercuts affecting Mission Control right now. Include severity + reproduction notes. Respond as JSON array of issues.
+  - id: synthesize
+    type: transform
+    expression: "({ suggestions: artifacts['nova-ideas'].items ?? [], qaFindings: artifacts['quill-watch'].issues ?? [] })"
+  - id: needs-exec-selection
+    type: checkpoint
+    reason: "Craig must select which ideas/bugs to pursue"
+    resumeKey: mission-control-selection
+  - id: prepare-tasks
+    type: transform
+    expression: "(() => { const picked = inputs.selection ?? artifacts.selection ?? []; return picked.map((item, index) => ({ id: item.id ?? `sel-${index + 1}`, title: item.title ?? `Idea ${index + 1}`, detail: item.detail ?? '', priority: item.priority ?? 'medium', origin: item.origin ?? 'mission-control-insights' })); })()"
+    assigns: tasks
+  - id: enqueue-delivery
+    type: enqueue
+    tasksSource: tasks
+    pipelineId: mission_control_delivery
+  - id: report
+    type: output
+    path: insights.report
+    source: synthesize
+edges:
+  - from: { node: intake }
+    to:   { node: nova-ideas }
+  - from: { node: nova-ideas }
+    to:   { node: quill-watch }
+  - from: { node: quill-watch }
+    to:   { node: synthesize }
+  - from: { node: synthesize }
+    to:   { node: needs-exec-selection }
+  - from: { node: needs-exec-selection }
+    to:   { node: prepare-tasks }
+  - from: { node: prepare-tasks }
+    to:   { node: enqueue-delivery }
+  - from: { node: synthesize }
+    to:   { node: report }

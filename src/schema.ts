@@ -1,5 +1,9 @@
 import { z } from "zod";
-import type { PipelineDefinition } from "./types.js";
+import type {
+  LoopBody,
+  PipelineDefinition,
+  PipelineNode,
+} from "./types.js";
 
 const jsonSchema = z.record(z.any());
 
@@ -12,6 +16,12 @@ const baseNode = z.object({
     .object({
       input: jsonSchema.optional(),
       output: jsonSchema.optional(),
+    })
+    .optional(),
+  retry: z
+    .object({
+      maxAttempts: z.number().int().min(1),
+      delayMs: z.number().int().min(0).optional(),
     })
     .optional(),
 });
@@ -37,6 +47,8 @@ const agentNode = baseNode.extend({
   prompt: z.string().min(1),
   agentId: z.string().optional(),
   sessionId: z.string().optional(),
+  /** When true or omitted, use a new session per run (context isolation). When false, use run-level sessionId for continuity. */
+  resetSession: z.boolean().optional(),
   channel: z.string().optional(),
   deliver: z.boolean().optional(),
   thinking: z.enum(["off", "minimal", "low", "medium", "high"]).optional(),
@@ -50,7 +62,7 @@ const runPipelineNode = baseNode.extend({
   mode: z.enum(["child", "inline"]).optional(),
 });
 
-const loopBody = z
+const loopBodySchema = z
   .object({
     pipelineId: z.string().optional(),
     entry: z.array(z.string()).optional(),
@@ -74,7 +86,7 @@ const loopBody = z
         message: "loop body requires either pipelineId or inline nodes",
       });
     }
-  });
+  }) as z.ZodType<LoopBody>;
 
 const loopNode = baseNode.extend({
   type: z.literal("loop"),
@@ -83,7 +95,7 @@ const loopNode = baseNode.extend({
   indexVar: z.string().optional(),
   maxIterations: z.number().int().positive().optional(),
   exitCondition: z.string().optional(),
-  body: loopBody,
+  body: loopBodySchema,
 });
 
 const checkpointNode = baseNode.extend({
@@ -95,19 +107,30 @@ const checkpointNode = baseNode.extend({
 const outputNode = baseNode.extend({
   type: z.literal("output"),
   path: z.string().optional(),
+  source: z.string().optional(),
   merge: z.boolean().optional(),
 });
 
-const nodeSchema = z.discriminatedUnion("type", [
-  literalNode,
-  inputNode,
-  transformNode,
-  agentNode,
-  runPipelineNode,
-  loopNode,
-  checkpointNode,
-  outputNode,
-]);
+const enqueueNode = baseNode.extend({
+  type: z.literal("enqueue"),
+  pipelineId: z.string().min(1),
+  tasksSource: z.string().optional(),
+  mode: z.enum(["batch", "per-item"]).optional(),
+});
+
+const nodeSchema = z.lazy(() =>
+  z.discriminatedUnion("type", [
+    literalNode,
+    inputNode,
+    transformNode,
+    agentNode,
+    runPipelineNode,
+    loopNode,
+    checkpointNode,
+    outputNode,
+    enqueueNode,
+  ])
+) as z.ZodType<PipelineNode>;
 
 const edgeSchema = z.object({
   id: z.string().optional(),
@@ -116,7 +139,7 @@ const edgeSchema = z.object({
   when: z.string().optional(),
 });
 
-export const pipelineDefinitionSchema: z.ZodType<PipelineDefinition> = z
+export const pipelineDefinitionSchema = z
   .object({
     id: z.string().min(1),
     version: z.union([z.string(), z.number()]).optional(),
@@ -135,7 +158,21 @@ export const pipelineDefinitionSchema: z.ZodType<PipelineDefinition> = z
     metadata: z.record(z.any()).optional(),
   })
   .superRefine((value, ctx) => {
-    const nodeIds = new Set(value.nodes.map((node) => node.id));
+    const nodeIds = new Set<string>();
+    const duplicates = new Set<string>();
+    for (const node of value.nodes) {
+      if (nodeIds.has(node.id)) {
+        duplicates.add(node.id);
+      }
+      nodeIds.add(node.id);
+    }
+    for (const id of duplicates) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `duplicate node id: ${id}`,
+        path: ["nodes"],
+      });
+    }
     for (const entryNode of value.entry) {
       if (!nodeIds.has(entryNode)) {
         ctx.addIssue({
@@ -159,4 +196,4 @@ export const pipelineDefinitionSchema: z.ZodType<PipelineDefinition> = z
         });
       }
     }
-  });
+  }) as z.ZodType<PipelineDefinition>;

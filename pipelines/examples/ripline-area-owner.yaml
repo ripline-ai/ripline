@@ -1,0 +1,44 @@
+id: ripline-area-owner
+name: Ripline Area Owner Loop
+entry:
+  - area-owner-intake
+nodes:
+  - id: area-owner-intake
+    type: input
+    description: Signals from the area owner (opportunities, issues, backlog)
+  - id: break-down
+    type: agent
+    agentId: vector
+    prompt: |
+      Break the signals into discrete features with acceptance criteria.
+  - id: design-spec
+    type: agent
+    agentId: nova
+    prompt: |
+      Describe UX/data requirements for each feature.
+  - id: engineering-plan
+    type: agent
+    agentId: vector
+    prompt: |
+      Produce implementation plan + owners for each feature.
+  - id: implementation-queue
+    type: output
+    path: ripline/backlog
+    source: engineering-plan
+edges:
+  - from:
+      node: area-owner-intake
+    to:
+      node: break-down
+  - from:
+      node: break-down
+    to:
+      node: design-spec
+  - from:
+      node: design-spec
+    to:
+      node: engineering-plan
+  - from:
+      node: engineering-plan
+    to:
+      node: implementation-queue

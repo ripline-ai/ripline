@@ -1,0 +1,14 @@
+{
+  "signals": [
+    {
+      "type": "opportunity",
+      "title": "Unify login across web and mobile",
+      "description": "Single sign-on and consistent auth UX"
+    },
+    {
+      "type": "issue",
+      "title": "Slow dashboard load",
+      "description": "Dashboard takes >3s on first load"
+    }
+  ]
+}

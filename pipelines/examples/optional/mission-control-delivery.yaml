@@ -1,0 +1,56 @@
+id: mission_control_delivery
+name: Mission Control Delivery Loop
+entry:
+  - intake
+nodes:
+  - id: intake
+    type: input
+    description: "Accepts either {task} (single item) or {tasks}[] when batch-triggered."
+  - id: normalize
+    type: transform
+    expression: "(() => { const items = Array.isArray(inputs.tasks) ? inputs.tasks : inputs.task ? [inputs.task] : []; if (items.length === 0) throw new Error('No tasks supplied'); return { items }; })()"
+  - id: loop-items
+    type: loop
+    collection: "normalize.items"
+    itemVar: task
+    body:
+      entry:
+        - nova-breakdown
+      nodes:
+        - id: nova-breakdown
+          type: agent
+          agentId: nova
+          prompt: |
+            Break the following Mission Control idea into concrete user stories with clear UX flows and components.
+            {{JSON.stringify(loop.task, null, 2)}}
+            Respond with JSON {"stories": [{"id","title","flow","components"}], "assets": ["..."]}.
+        - id: vector-plan
+          type: agent
+          agentId: vector
+          prompt: |
+            Given the UX plan below, outline the implementation approach (files/modules to touch, risks, estimates).
+            {{JSON.stringify(artifacts['nova-breakdown'], null, 2)}}
+            Output JSON {"plan": [{"step","detail"}], "estimates": {"devHours": number}}.
+        - id: forge-implementation
+          type: agent
+          agentId: forge
+          prompt: |
+            Using the plan from Vector, produce the implementation checklist (commands, PR targets, test notes).
+            {{JSON.stringify(artifacts['vector-plan'], null, 2)}}
+            Output JSON {"checklist": [{"item","owner"}], "notes": string}.
+        - id: finalize-item
+          type: output
+          path: "delivery.items"
+          source: forge-implementation
+          merge: true
+  - id: summary
+    type: output
+    path: delivery.summary
+    source: normalize
+edges:
+  - from: { node: intake }
+    to:   { node: normalize }
+  - from: { node: normalize }
+    to:   { node: loop-items }
+  - from: { node: normalize }
+    to:   { node: summary }

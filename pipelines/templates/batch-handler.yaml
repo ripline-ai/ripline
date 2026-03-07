@@ -1,0 +1,41 @@
+# Batch handler template — consumes a list of tasks (from enqueue node) and runs
+# design -> engineering -> implementation. Use as child pipeline for type: enqueue
+# in per-item mode (inputs.task) or batch mode (inputs.tasks).
+# See docs/stories/story-13-subtask-queue.md.
+
+id: batch-handler
+version: "1.0"
+name: Batch task handler
+description: Consumes tasks from a parent enqueue node; design, engineering, implementation.
+tags:
+  - template
+  - batch
+  - enqueue
+
+entry:
+  - start
+
+nodes:
+  - id: start
+    type: input
+    description: Receives task (per-item) or tasks (batch) from parent enqueue node
+  - id: design
+    type: agent
+    prompt: "Given the task(s), produce a short design spec. Task(s): {{ JSON.stringify(inputs.task || inputs.tasks) }}"
+    agentId: design
+  - id: engineering
+    type: agent
+    prompt: "Given the design, produce an engineering plan. Design: {{ JSON.stringify(artifacts.design) }}"
+    agentId: engineering
+  - id: implementation
+    type: output
+    path: result
+    source: engineering
+
+edges:
+  - from: { node: start }
+    to: { node: design }
+  - from: { node: design }
+    to: { node: engineering }
+  - from: { node: engineering }
+    to: { node: implementation }

@@ -1,0 +1,228 @@
+import path from "node:path";
+import { readFileSync } from "node:fs";
+import { Command } from "commander";
+import chalk from "chalk";
+import type { AgentRunner } from "../pipeline/executors/agent.js";
+import { loadPipelineDefinition } from "../lib/pipeline/loader.js";
+import { DeterministicRunner, type RunnerOptions } from "../pipeline/runner.js";
+import { loadInputs, parseEnvPairs } from "./helpers.js";
+import { startServer } from "../server.js";
+import { PipelineRunStore } from "../run-store.js";
+import { createRunQueue } from "../run-queue.js";
+
+export type RiplineCliOptions = {
+  defaults?: {
+    runsDir?: string;
+    pipelinesDir?: string;
+  };
+  agentRunner?: AgentRunner;
+};
+
+function getVersion(): string {
+  try {
+    const p = path.join(process.cwd(), "package.json");
+    const pkg = JSON.parse(readFileSync(p, "utf-8")) as { version?: string };
+    return pkg.version ?? "0.1.0";
+  } catch {
+    return "0.1.0";
+  }
+}
+
+function collectEnv(value: string, acc: string[]): string[] {
+  acc.push(value);
+  return acc;
+}
+
+export function createRiplineCliProgram(options: RiplineCliOptions = {}): Command {
+  const program = new Command("ripline");
+  const defaultRunsDir = options.defaults?.runsDir ?? path.join(process.cwd(), ".ripline", "runs");
+  const defaultPipelinesDir = options.defaults?.pipelinesDir ?? path.join(process.cwd(), "pipelines");
+  const defaultPipelinePath = path.join(defaultPipelinesDir, "examples", "hello-world.yaml");
+
+  program
+    .description("Run a pipeline from a definition file or the default Hello World example")
+    .version(getVersion())
+    .option("-p, --pipeline <path>", "Path to pipeline YAML/JSON (default: pipelines/examples/hello-world.yaml)")
+    .option("-i, --inputs <json-or-path>", "Inputs as inline JSON or path to JSON file")
+    .option("-e, --env <key=value>", "Env key=value pairs merged into context (repeatable)", collectEnv, [])
+    .option("--resume <runId>", "Resume a paused or failed run by ID")
+    .option("-o, --out <path>", "Write final outputs to this JSON file")
+    .option("--runs-dir <path>", "Directory for run state (default: .ripline/runs or RIPLINE_RUNS_DIR)")
+    .option("-v, --verbose", "Pretty logging with node id/type/duration")
+    .option("--demo", "Run Ripline with sample inputs and deterministic stub agent; writes to dist/demo-artifact.json")
+    .option("--enqueue", "Add run to queue (pending) instead of executing inline; prints runId and exits")
+    .option("--tail <mode>", "Tail mode: 'queue' = list (and optionally watch) queued work")
+    .option("--follow", "With --tail queue: keep polling and printing queue state")
+    .action(async (opts) => {
+      const runsDirRaw = opts.runsDir ?? process.env.RIPLINE_RUNS_DIR ?? defaultRunsDir;
+      const runsDir = path.isAbsolute(runsDirRaw) ? path.resolve(runsDirRaw) : path.join(process.cwd(), runsDirRaw);
+      const verbose = opts.verbose ?? false;
+      const isDemo = opts.demo === true;
+      const enqueue = opts.enqueue === true;
+      const tailQueue = opts.tail === "queue";
+      const follow = opts.follow === true;
+
+      let definition;
+      let inputs: Record<string, unknown> = {};
+      let outPath: string | undefined;
+      let agentRunner: AgentRunner | undefined = options.agentRunner;
+
+      if (tailQueue) {
+        const store = new PipelineRunStore(runsDir);
+        await store.init();
+        const listAndPrint = async () => {
+          const pending = await store.list({ status: "pending" });
+          const running = await store.list({ status: "running" });
+          const ts = new Date().toISOString();
+          if (pending.length === 0 && running.length === 0) {
+            console.log(chalk.gray(`[${ts}] queue: 0 pending, 0 running`));
+          } else {
+            console.log(chalk.cyan(`[${ts}] queue: ${pending.length} pending, ${running.length} running`));
+            for (const r of pending) {
+              console.log(chalk.gray(`  pending ${r.id} pipeline=${r.pipelineId} parentRunId=${r.parentRunId ?? "-"}`));
+            }
+            for (const r of running) {
+              console.log(chalk.gray(`  running ${r.id} pipeline=${r.pipelineId}`));
+            }
+          }
+        };
+        await listAndPrint();
+        if (follow) {
+          const interval = setInterval(listAndPrint, 2000);
+          process.on("SIGINT", () => {
+            clearInterval(interval);
+            process.exit(0);
+          });
+        }
+        return;
+      }
+
+      if (enqueue) {
+        definition = loadPipelineDefinition(path.resolve(opts.pipeline ?? defaultPipelinePath));
+        if (opts.inputs) {
+          try {
+            inputs = await loadInputs(opts.inputs);
+          } catch (e) {
+            console.error(chalk.red("Invalid --inputs: " + (e instanceof Error ? e.message : String(e))));
+            process.exit(1);
+          }
+        }
+        const store = new PipelineRunStore(runsDir);
+        await store.init();
+        const queue = createRunQueue(store);
+        const runId = await queue.enqueue(definition.id, inputs);
+        console.log(runId);
+        return;
+      }
+
+      if (isDemo) {
+        definition = loadPipelineDefinition(path.resolve(defaultPipelinePath));
+        const samplePath = path.resolve(process.cwd(), "samples", "hello-world-inputs.json");
+        try {
+          inputs = await loadInputs(samplePath);
+        } catch (e) {
+          console.error(chalk.red("Demo failed: could not load samples/hello-world-inputs.json"));
+          process.exit(1);
+        }
+        outPath = path.resolve(process.cwd(), "dist", "demo-artifact.json");
+        if (!agentRunner) {
+          agentRunner = async ({ agentId, prompt }) => ({
+            text: `[demo] ${agentId}: ${prompt.slice(0, 60)}…`,
+            tokenUsage: { input: 0, output: 0 },
+          });
+        }
+      } else {
+        definition = loadPipelineDefinition(path.resolve(opts.pipeline ?? defaultPipelinePath));
+        if (opts.inputs) {
+          try {
+            inputs = await loadInputs(opts.inputs);
+          } catch (e) {
+            console.error(chalk.red("Invalid --inputs: " + (e instanceof Error ? e.message : String(e))));
+            process.exit(1);
+          }
+        }
+        outPath = opts.out ? path.resolve(opts.out) : undefined;
+      }
+
+      const env = parseEnvPairs(opts.env ?? []);
+
+      const runnerOptions: RunnerOptions = {
+        runsDir,
+        verbose,
+        quiet: true,
+        ...(outPath !== undefined && { outPath }),
+        ...(agentRunner !== undefined && { agentRunner }),
+      };
+      const runner = new DeterministicRunner(definition, runnerOptions);
+
+      const nodeStartedAt = new Map<string, number>();
+      if (verbose) {
+        runner.on("node.started", (e: { nodeId: string; nodeType: string; at: number }) => {
+          nodeStartedAt.set(e.nodeId, e.at);
+          console.log(chalk.cyan(`  → ${e.nodeId}`) + chalk.gray(` (${e.nodeType})`));
+        });
+        runner.on("node.completed", (e: { nodeId: string; nodeType: string; at: number }) => {
+          const start = nodeStartedAt.get(e.nodeId);
+          const duration = start != null ? `${e.at - start}ms` : "?";
+          console.log(chalk.green(`  ✓ ${e.nodeId}`) + chalk.gray(` (${e.nodeType}, ${duration})`));
+        });
+        runner.on("node.errored", (e: { nodeId: string; nodeType: string; error: string }) => {
+          console.error(chalk.red(`  ✗ ${e.nodeId}`) + chalk.gray(` (${e.nodeType})`) + chalk.red(` ${e.error}`));
+        });
+      }
+
+      try {
+        const runOpts: { inputs: Record<string, unknown>; resumeRunId?: string; env?: Record<string, string> } = {
+          inputs,
+        };
+        if (opts.resume !== undefined) runOpts.resumeRunId = opts.resume;
+        if (Object.keys(env).length > 0) runOpts.env = env;
+        const record = await runner.run(runOpts);
+
+        if (!verbose) {
+          console.log(`Run ${record.id} → ${path.join(runsDir, record.id, "run.json")}`);
+        }
+        if (record.status === "paused") {
+          console.log(chalk.yellow(`Paused at checkpoint; resume with: --resume ${record.id}`));
+        }
+        if (outPath) {
+          console.log(chalk.gray(`Outputs → ${outPath}`));
+        }
+      } catch (err) {
+        console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("serve")
+    .description("Start the HTTP API server (GET /pipelines, POST /pipelines/:id/run, GET /runs/:runId, GET /runs/:runId/stream, GET /metrics)")
+    .option("--port <number>", "Port (default: 4001)", "4001")
+    .option("--pipelines-dir <path>", "Pipelines directory", defaultPipelinesDir)
+    .option("--runs-dir <path>", "Run state directory (or set RIPLINE_RUNS_DIR)", defaultRunsDir)
+    .option("--max-concurrency <n>", "Max concurrent pipeline runs (0 = inline; default 1)", "1")
+    .option("--auth-token <token>", "Optional bearer token for API auth")
+    .action(async (opts) => {
+      const port = parseInt(opts.port, 10);
+      const maxConcurrency = Math.max(0, parseInt(opts.maxConcurrency, 10) || 0);
+      const pipelinesDir = path.resolve(process.cwd(), opts.pipelinesDir ?? defaultPipelinesDir);
+      const runsDirRaw = opts.runsDir ?? process.env.RIPLINE_RUNS_DIR ?? defaultRunsDir;
+      const runsDir = path.isAbsolute(runsDirRaw) ? path.resolve(runsDirRaw) : path.join(process.cwd(), runsDirRaw);
+      console.log(chalk.cyan(`Starting HTTP server on port ${port}`));
+      console.log(chalk.gray(`  pipelines: ${pipelinesDir}`));
+      console.log(chalk.gray(`  runs: ${runsDir}`));
+      console.log(chalk.gray(`  maxConcurrency: ${maxConcurrency}`));
+      if (opts.authToken) console.log(chalk.gray("  auth: Bearer token required"));
+      const { close } = await startServer({
+        pipelinesDir,
+        runsDir,
+        httpPort: port,
+        maxConcurrency,
+        ...(opts.authToken && { authToken: opts.authToken }),
+      });
+      process.on("SIGINT", () => close().then(() => process.exit(0)));
+      process.on("SIGTERM", () => close().then(() => process.exit(0)));
+    });
+
+  return program;
+}

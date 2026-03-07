@@ -1,0 +1,158 @@
+# Ripline Area-Owner template — area owner → exec → delivery → satisfaction gate
+# Copy to pipelines/local/ and run with sample inputs; adapt agent IDs and prompts as needed.
+# See docs/templates/ripline-area-owner.md for customization.
+
+id: ripline-area-owner
+version: "1.0"
+name: Ripline Area Owner Loop
+description: |
+  Turns area-owner signals (opportunities, issues, backlog) into a structured
+  implementation queue: break-down → design spec → engineering plan → backlog artifact.
+tags:
+  - ripline
+  - area-owner
+  - template
+metadata:
+  author: Ripline
+  template: true
+  sampleInputs: samples/ripline-area-owner-inputs.json
+
+entry:
+  - area-owner-intake
+
+nodes:
+  - id: area-owner-intake
+    type: input
+    description: Signals from the area owner (opportunities, issues, backlog)
+    contracts:
+      input:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        type: object
+        required: [signals]
+        properties:
+          signals:
+            type: array
+            items:
+              type: object
+              required: [type, title]
+              properties:
+                type: { type: string, enum: [opportunity, issue, backlog] }
+                title: { type: string }
+                description: { type: string }
+      output:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        type: object
+        required: [signals]
+        properties:
+          signals: { type: array, items: { type: object } }
+
+  - id: break-down
+    type: agent
+    agentId: vector
+    prompt: |
+      Break the signals into discrete features with acceptance criteria.
+    description: Produces a list of features with acceptance criteria from signals
+    contracts:
+      input:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        type: object
+        required: [signals]
+        properties:
+          signals: { type: array, items: { type: object } }
+      output:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        type: object
+        required: [features]
+        properties:
+          features:
+            type: array
+            items:
+              type: object
+              properties:
+                id: { type: string }
+                title: { type: string }
+                acceptanceCriteria: { type: array, items: { type: string } }
+
+  - id: design-spec
+    type: agent
+    agentId: nova
+    prompt: |
+      Describe UX/data requirements for each feature.
+    description: UX and data requirements per feature
+    contracts:
+      input:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        type: object
+        required: [features]
+        properties:
+          features: { type: array, items: { type: object } }
+      output:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        type: object
+        required: [designSpecs]
+        properties:
+          designSpecs:
+            type: array
+            items:
+              type: object
+              properties:
+                featureId: { type: string }
+                ux: { type: string }
+                data: { type: object }
+
+  - id: engineering-plan
+    type: agent
+    agentId: vector
+    prompt: |
+      Produce implementation plan + owners for each feature.
+    description: Implementation plan and owners per feature
+    contracts:
+      input:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        type: object
+        required: [designSpecs]
+        properties:
+          designSpecs: { type: array, items: { type: object } }
+      output:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        type: object
+        required: [plan]
+        properties:
+          plan:
+            type: object
+            properties:
+              items:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    featureId: { type: string }
+                    steps: { type: array }
+                    owner: { type: string }
+
+  - id: implementation-queue
+    type: output
+    path: ripline/backlog
+    source: engineering-plan
+    description: Writes the backlog artifact (implementation queue) to the run output
+    contracts:
+      input:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        type: object
+        properties:
+          plan: { type: object }
+      output:
+        $schema: "https://json-schema.org/draft/2020-12/schema"
+        type: object
+        properties:
+          "ripline/backlog": { type: object }
+
+edges:
+  - from: { node: area-owner-intake }
+    to: { node: break-down }
+  - from: { node: break-down }
+    to: { node: design-spec }
+  - from: { node: design-spec }
+    to: { node: engineering-plan }
+  - from: { node: engineering-plan }
+    to: { node: implementation-queue }

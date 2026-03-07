@@ -1,0 +1,115 @@
+import path from "node:path";
+import type { Command } from "commander";
+import { createRiplineCliProgram } from "./cli/program.js";
+import { startServer, type StartServerOptions } from "./server.js";
+import type { PipelinePluginConfig } from "./types.js";
+import { createOpenClawAgentRunner, type OpenClawPluginApi } from "./openclaw-agent-runner.js";
+
+interface PluginLogger {
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+}
+
+/** Optional OpenClaw runtime; when present, agent nodes delegate to openclaw agent --json. */
+interface PluginApi {
+  pluginConfig?: unknown;
+  logger: PluginLogger;
+  registerCli: (builder: (ctx: { program: Command }) => void, opts: { commands: string[] }) => void;
+  registerService: (svc: { id: string; start: () => Promise<void> | void; stop: () => Promise<void> | void }) => void;
+  /** When the plugin runs inside OpenClaw, runtime provides runCommandWithTimeout for agent runs. */
+  runtime?: OpenClawPluginApi["runtime"];
+}
+
+const DEFAULT_RUNS_DIR = ".ripline/runs";
+
+export type NormalizedConfig = {
+  pipelinesDir: string;
+  runsDir: string;
+  httpPort: number;
+  httpPath: string;
+  maxConcurrency: number;
+  authToken?: string;
+};
+
+/** Resolve path: absolute unchanged, relative from process.cwd() (workspace). */
+function resolvePath(value: string): string {
+  return path.isAbsolute(value) ? path.resolve(value) : path.join(process.cwd(), value);
+}
+
+export { createOpenClawAgentRunner, type OpenClawPluginApi } from "./openclaw-agent-runner.js";
+
+export function normalizeConfig(raw: unknown): NormalizedConfig {
+  const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const pipelinesDir = typeof source.pipelinesDir === "string" && source.pipelinesDir.trim()
+    ? resolvePath(source.pipelinesDir)
+    : path.join(process.cwd(), "pipelines");
+  const runsDir = typeof source.runsDir === "string" && source.runsDir.trim()
+    ? resolvePath(source.runsDir)
+    : path.join(process.cwd(), DEFAULT_RUNS_DIR);
+  const httpPort = typeof source.httpPort === "number" ? source.httpPort : 4001;
+  const httpPath = typeof source.httpPath === "string" ? source.httpPath : "/pipelines";
+  const authToken = typeof source.authToken === "string" ? source.authToken : undefined;
+  const maxConcurrency = typeof source.maxConcurrency === "number" ? source.maxConcurrency : 1;
+  const config: NormalizedConfig = { pipelinesDir, runsDir, httpPort, httpPath, maxConcurrency };
+  if (authToken) config.authToken = authToken;
+  return config;
+}
+
+function hasOpenClawRuntime(api: PluginApi): api is PluginApi & OpenClawPluginApi {
+  return Boolean(
+    api.runtime?.system?.runCommandWithTimeout &&
+    typeof api.runtime.system.runCommandWithTimeout === "function"
+  );
+}
+
+export default {
+  id: "pipeline-orchestrator",
+  name: "Pipeline Orchestrator",
+  description: "Ripline pipeline engine + CLI",
+  register(api: PluginApi) {
+    const cfg = normalizeConfig(api.pluginConfig);
+    const agentRunner = hasOpenClawRuntime(api)
+      ? createOpenClawAgentRunner(api)
+      : undefined;
+    let serverHandle: { close: () => Promise<void> } | null = null;
+
+    api.registerCli(
+      ({ program }) => {
+        const ripline = createRiplineCliProgram({
+          defaults: {
+            runsDir: cfg.runsDir,
+            pipelinesDir: cfg.pipelinesDir,
+          },
+          ...(agentRunner !== undefined && { agentRunner }),
+        });
+        program.addCommand(ripline);
+      },
+      { commands: ["ripline"] },
+    );
+
+    api.registerService({
+      id: "pipeline-orchestrator.http",
+      start: async () => {
+        const options: StartServerOptions = {
+          pipelinesDir: cfg.pipelinesDir,
+          runsDir: cfg.runsDir,
+          httpPort: cfg.httpPort,
+          httpPath: cfg.httpPath,
+          maxConcurrency: cfg.maxConcurrency,
+          ...(cfg.authToken ? { authToken: cfg.authToken } : {}),
+          ...(agentRunner !== undefined && { agentRunner }),
+        };
+        api.logger.info(
+          `[pipeline] serving pipelines from ${options.pipelinesDir} (runs=${options.runsDir}) on port ${options.httpPort}`,
+        );
+        serverHandle = await startServer(options);
+      },
+      stop: async () => {
+        if (!serverHandle) return;
+        await serverHandle.close();
+        serverHandle = null;
+      },
+    });
+  },
+};

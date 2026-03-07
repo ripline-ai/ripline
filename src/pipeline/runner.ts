@@ -1,0 +1,473 @@
+import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
+import path from "node:path";
+import fs from "node:fs/promises";
+import type {
+  PipelineDefinition,
+  PipelineNode,
+  PipelineRunRecord,
+  PipelineRunStep,
+} from "../types.js";
+import type { RunStore } from "../run-store.js";
+import { PipelineRunStore } from "../run-store.js";
+import type { RunQueue } from "../run-queue.js";
+import { executeNode } from "./executors/index.js";
+import type { AgentRunner } from "./executors/index.js";
+
+export type RunContext = {
+  inputs: Record<string, unknown>;
+  artifacts: Record<string, unknown>;
+  env: Record<string, string>;
+  outputs: Record<string, unknown>;
+  outPath?: string;
+  /** Run-level session ID for agent nodes with resetSession: false (shared conversation). */
+  sessionId?: string;
+};
+
+export type NodeRunContext = {
+  inputs: Record<string, unknown>;
+  artifacts: Record<string, unknown>;
+  env: Record<string, string>;
+};
+
+export type RunnerOptions = {
+  runsDir?: string;
+  /** Optional RunStore; defaults to file-based PipelineRunStore in runsDir. */
+  store?: RunStore;
+  /** Optional queue for enqueue node (required when pipeline may enqueue child runs). */
+  queue?: RunQueue;
+  verbose?: boolean;
+  /** When true, do not log node.started/completed/errored to console (caller handles logging). */
+  quiet?: boolean;
+  /** Required for agent nodes (e.g. OpenClaw sessions_spawn). */
+  agentRunner?: AgentRunner;
+  /** If set, write final outputs to this path as JSON. */
+  outPath?: string;
+};
+
+export type NodeStartedEvent = { nodeId: string; nodeType: string; at: number };
+export type NodeCompletedEvent = {
+  nodeId: string;
+  nodeType: string;
+  at: number;
+  artifactSummary?: string;
+};
+export type NodeErroredEvent = {
+  nodeId: string;
+  nodeType: string;
+  at: number;
+  error: string;
+};
+
+const DEFAULT_RUNS_DIR = ".ripline/runs";
+
+export class DeterministicRunner extends EventEmitter {
+  private readonly store: RunStore;
+  private readonly nodeById: Map<string, PipelineNode>;
+  private readonly runnerOptions: RunnerOptions;
+
+  constructor(
+    private readonly definition: PipelineDefinition,
+    options: RunnerOptions = {}
+  ) {
+    super();
+    this.runnerOptions = options;
+    const runsDir = path.resolve(options.runsDir ?? DEFAULT_RUNS_DIR);
+    this.store = options.store ?? new PipelineRunStore(runsDir);
+    this.nodeById = new Map(definition.nodes.map((n) => [n.id, n]));
+  }
+
+  /**
+   * Build adjacency (from -> [to]) and indegree maps, then Kahn-style sort from entry.
+   * Throws if any edge references a missing node or if graph has a cycle / unreachable nodes.
+   */
+  getExecutionOrder(): string[] {
+    const nodeIds = new Set(this.definition.nodes.map((n) => n.id));
+
+    for (const edge of this.definition.edges) {
+      if (!nodeIds.has(edge.from.node)) {
+        throw new Error(`Edge references missing node: ${edge.from.node}`);
+      }
+      if (!nodeIds.has(edge.to.node)) {
+        throw new Error(`Edge references missing node: ${edge.to.node}`);
+      }
+    }
+
+    const adjacency = new Map<string, string[]>();
+    const indegree = new Map<string, number>();
+
+    for (const node of this.definition.nodes) {
+      adjacency.set(node.id, []);
+      indegree.set(node.id, 0);
+    }
+
+    for (const edge of this.definition.edges) {
+      const from = edge.from.node;
+      const to = edge.to.node;
+      adjacency.get(from)?.push(to);
+      indegree.set(to, (indegree.get(to) ?? 0) + 1);
+    }
+
+    const entrySet = new Set(this.definition.entry);
+    for (const e of entrySet) {
+      indegree.set(e, 0);
+    }
+
+    const queue = [...this.definition.entry];
+    const order: string[] = [];
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      order.push(current);
+      for (const next of adjacency.get(current) ?? []) {
+        const d = (indegree.get(next) ?? 0) - 1;
+        indegree.set(next, d);
+        if (d === 0) {
+          queue.push(next);
+        }
+      }
+    }
+
+    if (order.length < this.definition.nodes.length) {
+      const missing = this.definition.nodes.filter((n) => !order.includes(n.id));
+      const ids = missing.map((n) => n.id).join(", ");
+      throw new Error(
+        `Pipeline has a cycle or unreachable nodes. Not reached: ${ids}`
+      );
+    }
+
+    return order;
+  }
+
+  async run(options: {
+    inputs?: Record<string, unknown>;
+    resumeRunId?: string;
+    /** Execute an existing pending run (e.g. claimed from queue). Run must be pending and pipelineId must match. */
+    startRunId?: string;
+    /** Env key=value overrides merged into context.env (after process.env). */
+    env?: Record<string, string>;
+  }): Promise<PipelineRunRecord> {
+    const order = this.getExecutionOrder();
+
+    if ("init" in this.store && typeof this.store.init === "function") {
+      await (this.store as { init(): Promise<void> }).init();
+    }
+
+    let record: PipelineRunRecord;
+    let context: RunContext;
+    let startIndex: number;
+
+    if (options.startRunId) {
+      const loaded = await this.store.load(options.startRunId);
+      if (!loaded) throw new Error(`Run not found: ${options.startRunId}`);
+      if (loaded.pipelineId !== this.definition.id) {
+        throw new Error(`Run pipeline ${loaded.pipelineId} does not match definition ${this.definition.id}`);
+      }
+      if (loaded.status !== "pending" && loaded.status !== "running") {
+        throw new Error(`Run ${options.startRunId} is not startable (status: ${loaded.status})`);
+      }
+      record = loaded;
+      const steps: PipelineRunStep[] = order.map((nodeId) => ({ nodeId, status: "pending" }));
+      record.steps = steps;
+      record.status = "running";
+      const baseEnv = { ...process.env, ...options.env } as Record<string, string>;
+      context = {
+        inputs: record.inputs,
+        artifacts: {},
+        env: baseEnv,
+        outputs: {},
+        sessionId: randomUUID(),
+        ...(this.runnerOptions.outPath !== undefined && { outPath: this.runnerOptions.outPath }),
+      };
+      await this.store.save(record);
+      startIndex = 0;
+      this.emit("run.started", record);
+    } else if (options.resumeRunId) {
+      const loaded = await this.store.load(options.resumeRunId);
+      if (!loaded) throw new Error(`Run not found: ${options.resumeRunId}`);
+      if (loaded.pipelineId !== this.definition.id) {
+        throw new Error(`Run pipeline ${loaded.pipelineId} does not match definition ${this.definition.id}`);
+      }
+      if (loaded.status !== "errored" && loaded.status !== "paused") {
+        throw new Error(`Run ${options.resumeRunId} is not resumable (status: ${loaded.status})`);
+      }
+      record = loaded;
+      const cursor = record.cursor ?? { nextNodeIndex: 0, context: {} };
+      startIndex = cursor.nextNodeIndex;
+      const ctx = (cursor.context || {}) as {
+        inputs?: Record<string, unknown>;
+        artifacts?: Record<string, unknown>;
+        outputs?: Record<string, unknown>;
+        sessionId?: string;
+      };
+      const baseEnv = { ...process.env, ...options.env } as Record<string, string>;
+      context = {
+        inputs: ctx.inputs ?? record.inputs,
+        artifacts: { ...ctx.artifacts },
+        env: baseEnv,
+        outputs: { ...(ctx.outputs ?? record.outputs ?? {}) },
+        ...(ctx.sessionId !== undefined && { sessionId: ctx.sessionId }),
+        ...(this.runnerOptions.outPath !== undefined && { outPath: this.runnerOptions.outPath }),
+      };
+      for (let k = 0; k < startIndex; k++) {
+        const s = record.steps[k];
+        if (s?.status === "completed" && s.data && typeof s.data === "object" && "artifactKey" in s.data && "artifactValue" in s.data) {
+          const d = s.data as { artifactKey: string; artifactValue: unknown };
+          context.artifacts[d.artifactKey] = d.artifactValue;
+        }
+      }
+      record.status = "running";
+      delete record.error;
+      await this.store.save(record);
+      this.emit("run.started", record);
+    } else {
+      record = await this.store.createRun({
+        pipelineId: this.definition.id,
+        inputs: options.inputs ?? {},
+      });
+      const baseEnv = { ...process.env, ...options.env } as Record<string, string>;
+      context = {
+        inputs: record.inputs,
+        artifacts: {},
+        env: baseEnv,
+        outputs: {},
+        sessionId: randomUUID(),
+        ...(this.runnerOptions.outPath !== undefined && { outPath: this.runnerOptions.outPath }),
+      };
+      const steps: PipelineRunStep[] = order.map((nodeId) => ({ nodeId, status: "pending" }));
+      record.steps = steps;
+      record.status = "running";
+      await this.store.save(record);
+      startIndex = 0;
+      this.emit("run.started", record);
+    }
+
+    const steps = record.steps;
+
+    for (let i = startIndex; i < order.length; i++) {
+      const nodeId = order[i]!;
+      const node = this.nodeById.get(nodeId)!;
+      const step = steps[i]!;
+      const startedAt = Date.now();
+
+      if (step.status === "completed" || step.status === "skipped") {
+        continue;
+      }
+
+      step.status = "running";
+      step.startedAt = startedAt;
+      record.updatedAt = Date.now();
+      await this.store.save(record);
+
+      const startedEvent = { nodeId, nodeType: node.type, at: startedAt } as NodeStartedEvent;
+      this.emit("node.started", startedEvent);
+      if (!this.runnerOptions.quiet) {
+        console.log(`[${new Date(startedAt).toISOString()}] node.started ${nodeId} (${node.type})`);
+      }
+
+      if (node.type === "checkpoint") {
+        const checkpointNode = node as import("../types.js").CheckpointNode;
+        record.waitFor = {
+          nodeId,
+          ...(checkpointNode.reason !== undefined && { reason: checkpointNode.reason }),
+          ...(checkpointNode.resumeKey !== undefined && { resumeKey: checkpointNode.resumeKey }),
+        };
+        record.status = "paused";
+        step.status = "paused";
+        step.finishedAt = Date.now();
+        await this.store.updateCursor(record, {
+          nextNodeIndex: i + 1,
+          context: {
+            inputs: context.inputs,
+            artifacts: context.artifacts,
+            outputs: context.outputs,
+            ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
+          },
+        });
+        record.updatedAt = Date.now();
+        await this.store.save(record);
+        return record;
+      }
+
+      const maxAttempts = node.retry?.maxAttempts ?? 1;
+      const retryDelayMs = node.retry?.delayMs ?? 0;
+      let lastErr: unknown;
+      let nodeResult: Awaited<ReturnType<typeof executeNode>> = null;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const executorContext = this.getExecutorContext(node, context, record);
+          nodeResult = await executeNode(
+            node,
+            executorContext,
+            this.runnerOptions.agentRunner !== undefined
+              ? { agentRunner: this.runnerOptions.agentRunner }
+              : undefined
+          );
+          lastErr = undefined;
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (attempt < maxAttempts && retryDelayMs > 0) {
+            await new Promise((r) => setTimeout(r, retryDelayMs));
+          }
+        }
+      }
+
+      if (lastErr === undefined) {
+        if (nodeResult) {
+          step.data = {
+            artifactKey: nodeResult.artifactKey,
+            artifactSize: this.artifactSize(nodeResult.value),
+            artifactValue: nodeResult.value,
+          };
+          if (nodeResult.childRunIds?.length) {
+            record.childRunIds = [...(record.childRunIds ?? []), ...nodeResult.childRunIds];
+            record.waitFor = {
+              nodeId,
+              reason: "children",
+            };
+            record.status = "paused";
+            step.status = "completed";
+            step.finishedAt = Date.now();
+            await this.store.updateCursor(record, {
+              nextNodeIndex: i + 1,
+              context: {
+                inputs: context.inputs,
+                artifacts: context.artifacts,
+                outputs: context.outputs,
+                ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
+              },
+            });
+            record.updatedAt = Date.now();
+            await this.store.save(record);
+            this.emit("node.completed", {
+              nodeId,
+              nodeType: node.type,
+              at: step.finishedAt,
+              artifactSummary: `${nodeResult.childRunIds.length} child run(s) enqueued`,
+            } as NodeCompletedEvent);
+            if (!this.runnerOptions.quiet) {
+              console.log(
+                `[${new Date(step.finishedAt!).toISOString()}] node.completed ${nodeId} (${node.type}) ${nodeResult.childRunIds.length} child run(s) enqueued; paused until complete`
+              );
+            }
+            return record;
+          }
+        }
+        const finishedAt = Date.now();
+        step.status = "completed";
+        step.finishedAt = finishedAt;
+
+        const stepData = step.data as { artifactKey?: string; artifactSize?: number } | undefined;
+        const artifactSummary = this.summarizeArtifacts(context.artifacts, stepData);
+        const completedEvent = {
+          nodeId,
+          nodeType: node.type,
+          at: finishedAt,
+          artifactSummary,
+        } as NodeCompletedEvent;
+        this.emit("node.completed", completedEvent);
+        if (!this.runnerOptions.quiet) {
+          const summary = artifactSummary ? ` ${artifactSummary}` : "";
+          console.log(`[${new Date(finishedAt).toISOString()}] node.completed ${nodeId} (${node.type})${summary}`);
+        }
+      } else {
+        const err = lastErr;
+        const finishedAt = Date.now();
+        step.status = "errored";
+        step.finishedAt = finishedAt;
+        step.error = err instanceof Error ? err.message : String(err);
+        await this.store.updateCursor(record, {
+          nextNodeIndex: i,
+          context: {
+            inputs: context.inputs,
+            artifacts: context.artifacts,
+            outputs: context.outputs,
+            ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
+          },
+        });
+        await this.store.failRun(record, step.error);
+        const erroredEvent = {
+          nodeId,
+          nodeType: node.type,
+          at: finishedAt,
+          error: step.error,
+        } as NodeErroredEvent;
+        this.emit("node.errored", erroredEvent);
+        if (!this.runnerOptions.quiet) {
+          console.error(`[${new Date(finishedAt).toISOString()}] node.errored ${nodeId} (${node.type}) ${step.error}`);
+        }
+        throw err;
+      }
+
+      record.updatedAt = Date.now();
+      await this.store.save(record);
+    }
+
+    await this.store.completeRun(record, context.outputs);
+
+    if (context.outPath) {
+      await fs.mkdir(path.dirname(context.outPath), { recursive: true });
+      await fs.writeFile(context.outPath, JSON.stringify(context.outputs, null, 2), "utf8");
+    }
+
+    return record;
+  }
+
+  private getExecutorContext(
+    node: PipelineNode,
+    context: RunContext,
+    record?: PipelineRunRecord
+  ): import("./executors/types.js").ExecutorContext {
+    const base = this.getNodeContext(node, context);
+    return {
+      ...base,
+      outputs: context.outputs,
+      ...(context.outPath !== undefined && { outPath: context.outPath }),
+      ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
+      ...(record && {
+        runId: record.id,
+        store: this.store,
+        queue: this.runnerOptions.queue,
+      }),
+    };
+  }
+
+  private getNodeContext(node: PipelineNode, context: RunContext): NodeRunContext {
+    const requested = node.contracts?.input;
+    if (!requested || typeof requested !== "object") {
+      return { inputs: context.inputs, artifacts: context.artifacts, env: context.env };
+    }
+    const artifacts =
+      typeof requested.properties === "object"
+        ? Object.fromEntries(
+            Object.keys(requested.properties).filter((k) => k in context.artifacts).map((k) => [k, context.artifacts[k]])
+          )
+        : context.artifacts;
+    return { inputs: context.inputs, artifacts, env: context.env };
+  }
+
+  private artifactSize(value: unknown): number {
+    try {
+      return JSON.stringify(value).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  private summarizeArtifacts(
+    artifacts: Record<string, unknown>,
+    stepData?: { artifactKey?: string; artifactSize?: number }
+  ): string {
+    const parts: string[] = [];
+    if (stepData?.artifactKey != null) {
+      parts.push(`${stepData.artifactKey}:${stepData.artifactSize ?? 0}B`);
+    }
+    const keys = Object.keys(artifacts);
+    if (keys.length > 0) {
+      parts.push(keys.map((k) => `${k}:${typeof artifacts[k]}`).join(", "));
+    }
+    return parts.filter(Boolean).join("; ");
+  }
+}

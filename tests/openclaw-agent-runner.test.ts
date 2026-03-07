@@ -1,0 +1,224 @@
+import { describe, expect, it } from "vitest";
+import {
+  createOpenClawAgentRunner,
+  type OpenClawPluginApi,
+} from "../src/openclaw-agent-runner.js";
+
+describe("createOpenClawAgentRunner", () => {
+  it("builds openclaw agent --json with agentId and prompt, parses JSON to AgentResult", async () => {
+    let capturedCmd: string[] = [];
+    let capturedStdin: string | undefined;
+    const api: OpenClawPluginApi = {
+      runtime: {
+        system: {
+          runCommandWithTimeout: async (cmd, stdin, timeoutMs) => {
+            capturedCmd = cmd;
+            capturedStdin = stdin;
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                text: "Hello from agent",
+                tokenUsage: { input: 10, output: 5 },
+              }),
+              stderr: "",
+            };
+          },
+        },
+      },
+    };
+
+    const runner = createOpenClawAgentRunner(api);
+    const result = await runner({
+      agentId: "vector",
+      prompt: "Summarize this.",
+    });
+
+    expect(capturedCmd).toContain("openclaw");
+    expect(capturedCmd).toContain("agent");
+    expect(capturedCmd).toContain("--json");
+    expect(capturedCmd).toContain("--agent");
+    expect(capturedCmd).toContain("vector");
+    expect(capturedCmd).toContain("--session");
+    const sessionIdx = capturedCmd.indexOf("--session");
+    expect(sessionIdx).toBeGreaterThanOrEqual(0);
+    const sessionValue = capturedCmd[sessionIdx + 1];
+    expect(sessionValue).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(capturedStdin).toBe("Summarize this.");
+    expect(result.text).toBe("Hello from agent");
+    expect(result.tokenUsage).toEqual({ input: 10, output: 5 });
+  });
+
+  it("passes thinking and timeoutSeconds to command", async () => {
+    let capturedCmd: string[] = [];
+    const api: OpenClawPluginApi = {
+      runtime: {
+        system: {
+          runCommandWithTimeout: async (cmd) => {
+            capturedCmd = cmd;
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({ text: "ok" }),
+              stderr: "",
+            };
+          },
+        },
+      },
+    };
+
+    const runner = createOpenClawAgentRunner(api);
+    await runner({
+      agentId: "nova",
+      prompt: "Hi",
+      thinking: "high",
+      timeoutSeconds: 60,
+    });
+
+    const cmdStr = capturedCmd.join(" ");
+    expect(cmdStr).toMatch(/--agent\s+nova|nova.*--agent/);
+    expect(cmdStr).toMatch(/--thinking\s+high|high.*--thinking/);
+    expect(cmdStr).toMatch(/--timeout\s+60|60.*--timeout/);
+  });
+
+  it("throws with clear message when exit code is non-zero", async () => {
+    const api: OpenClawPluginApi = {
+      runtime: {
+        system: {
+          runCommandWithTimeout: async () => ({
+            exitCode: 1,
+            stdout: "",
+            stderr: "Agent session failed: timeout",
+          }),
+        },
+      },
+    };
+
+    const runner = createOpenClawAgentRunner(api);
+    await expect(
+      runner({ agentId: "default", prompt: "Hi" })
+    ).rejects.toThrow(/agent.*failed|timeout|stderr/i);
+  });
+
+  it("throws when stdout is not valid agent JSON", async () => {
+    const api: OpenClawPluginApi = {
+      runtime: {
+        system: {
+          runCommandWithTimeout: async () => ({
+            exitCode: 0,
+            stdout: "not json",
+            stderr: "",
+          }),
+        },
+      },
+    };
+
+    const runner = createOpenClawAgentRunner(api);
+    await expect(
+      runner({ agentId: "default", prompt: "Hi" })
+    ).rejects.toThrow(/JSON|parse|envelope/i);
+  });
+
+  it("passes --session with new UUID when resetSession is true or omitted", async () => {
+    let capturedCmd: string[] = [];
+    const api: OpenClawPluginApi = {
+      runtime: {
+        system: {
+          runCommandWithTimeout: async (cmd) => {
+            capturedCmd = cmd;
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({ text: "ok" }),
+              stderr: "",
+            };
+          },
+        },
+      },
+    };
+
+    const runner = createOpenClawAgentRunner(api);
+    await runner({ agentId: "default", prompt: "Hi" });
+
+    expect(capturedCmd).toContain("--session");
+    const sessionIdx = capturedCmd.indexOf("--session");
+    const sessionValue = capturedCmd[sessionIdx + 1];
+    expect(sessionValue).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  });
+
+  it("passes --session with provided sessionId when resetSession is false", async () => {
+    let capturedCmd: string[] = [];
+    const api: OpenClawPluginApi = {
+      runtime: {
+        system: {
+          runCommandWithTimeout: async (cmd) => {
+            capturedCmd = cmd;
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({ text: "ok" }),
+              stderr: "",
+            };
+          },
+        },
+      },
+    };
+
+    const runner = createOpenClawAgentRunner(api);
+    await runner({
+      agentId: "nova",
+      prompt: "Continue",
+      resetSession: false,
+      sessionId: "shared-run-session-xyz",
+    });
+
+    expect(capturedCmd).toContain("--session");
+    const sessionIdx = capturedCmd.indexOf("--session");
+    expect(capturedCmd[sessionIdx + 1]).toBe("shared-run-session-xyz");
+  });
+
+  it("passes --session with new UUID when resetSession is false but sessionId is missing", async () => {
+    let capturedCmd: string[] = [];
+    const api: OpenClawPluginApi = {
+      runtime: {
+        system: {
+          runCommandWithTimeout: async (cmd) => {
+            capturedCmd = cmd;
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({ text: "ok" }),
+              stderr: "",
+            };
+          },
+        },
+      },
+    };
+
+    const runner = createOpenClawAgentRunner(api);
+    await runner({
+      agentId: "default",
+      prompt: "Hi",
+      resetSession: false,
+    });
+
+    expect(capturedCmd).toContain("--session");
+    const sessionIdx = capturedCmd.indexOf("--session");
+    const sessionValue = capturedCmd[sessionIdx + 1];
+    expect(sessionValue).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  });
+
+  it("returns text and optional tokenUsage when envelope has only text", async () => {
+    const api: OpenClawPluginApi = {
+      runtime: {
+        system: {
+          runCommandWithTimeout: async () => ({
+            exitCode: 0,
+            stdout: JSON.stringify({ text: "Only text" }),
+            stderr: "",
+          }),
+        },
+      },
+    };
+
+    const runner = createOpenClawAgentRunner(api);
+    const result = await runner({ agentId: "default", prompt: "Hi" });
+    expect(result.text).toBe("Only text");
+    expect(result.tokenUsage).toBeUndefined();
+  });
+});
