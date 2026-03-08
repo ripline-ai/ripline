@@ -22,15 +22,15 @@ Ripline is the pipeline engine for delegating work to agents. Use it when:
 ## Starting a pipeline run
 
 ```
-POST http://localhost:4001/pipelines/<pipelineId>/runs
+POST http://localhost:4001/pipelines/<pipelineId>/run
 Content-Type: application/json
 
-{ "task": "your task description here" }
+{ "inputs": { "task": "your task description here" } }
 ```
 
-Returns immediately:
+Returns immediately with HTTP 202:
 ```json
-{ "runId": "abc-123", "status": "pending" }
+{ "runId": "abc-123" }
 ```
 
 ## Polling for completion
@@ -41,20 +41,23 @@ GET http://localhost:4001/runs/<runId>
 
 ```json
 {
-  "runId": "abc-123",
+  "id": "abc-123",
+  "pipelineId": "delegate_to_vector",
   "status": "completed",
-  "artifacts": {
-    "vector-run": {
+  "outputs": {
+    "delegation.result": {
       "text": "Here's what Vector produced...",
-      "tokenUsage": { "input": 1200, "output": 800 }
+      "tokenUsage": { "input": 161, "output": 161 }
     }
   }
 }
 ```
 
-Status values: `pending` → `running` → `completed` | `failed` | `errored`
+The agent output is in `outputs["delegation.result"].text`.
 
-Poll every 2–5 seconds. Break when status is `completed`, `failed`, or `errored`.
+Status values: `running` → `completed` | `errored`
+
+Poll every 3–5 seconds. Break when status is `completed` or `errored`.
 
 ## Available pipelines
 
@@ -68,9 +71,11 @@ Pipelines also live as YAML in `/home/openclaw/.openclaw/workspace/pipelines/`.
 ### delegate_to_vector
 Delegates a task to Vector and returns his output as an artifact.
 
-```json
-POST /pipelines/delegate_to_vector/runs
-{ "task": "Build the Wintermute Kanban MVP. Initialize Next.js with App Router and Tailwind, bind to 0.0.0.0:3000, implement /kanban with on-disk task persistence, REST API at /api/tasks, and keep it running in the background." }
+```
+POST http://localhost:4001/pipelines/delegate_to_vector/run
+Content-Type: application/json
+
+{ "inputs": { "task": "Build the Wintermute Kanban MVP. Initialize Next.js with App Router and Tailwind, bind to 0.0.0.0:3000, implement /kanban with on-disk task persistence, REST API at /api/tasks, and keep it running in the background." } }
 ```
 
 ## Creating a new pipeline
