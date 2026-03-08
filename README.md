@@ -243,6 +243,95 @@ Ripline can coordinate a multi-stage product flow: area-owner signals → breakd
 
 ---
 
+## Multi-agent async orchestration
+
+Ripline is designed for workflows where multiple specialized agents must coordinate without blocking each other. The core pattern: each agent node runs as a fully isolated subprocess via `openclaw agent --json`, so slow or long-running agents never starve fast ones.
+
+### How it works
+
+```
+Pipeline YAML  →  Ripline scheduler  →  openclaw agent --json  →  JSON artifact
+                   (4 concurrent          (isolated session,
+                    workers)               fresh context)
+```
+
+1. **Declare the flow** as a graph of `agent` nodes in YAML. Edges express data dependencies, not timing.
+2. **Ripline queues runs** and dispatches up to `maxConcurrency` nodes simultaneously.
+3. **Each agent call** spawns `openclaw agent --json --agent <id> --session-id <uuid> --message <prompt>`. The UUID keeps sessions isolated so accumulated history from one run can't contaminate another.
+4. **Artifacts propagate** through the graph: the JSON output of each node becomes available to downstream nodes as template variables (`{{nodeid.text}}` or `{{variableName}}`).
+
+### Example: parallel breakdown + spec pipeline
+
+```yaml
+id: product_spec
+name: Parallel product spec
+entry: [intake]
+nodes:
+  - id: intake
+    type: input
+  - id: break-down
+    type: agent
+    agentId: vector
+    prompt: "Break {{task}} into engineering features."
+  - id: design-spec
+    type: agent
+    agentId: nova
+    prompt: "Write a design spec for these features: {{break-down.text}}"
+  - id: eng-plan
+    type: agent
+    agentId: vector
+    prompt: "Estimate effort for: {{design-spec.text}}"
+  - id: result
+    type: output
+    source: eng-plan
+edges:
+  - { from: { node: intake },      to: { node: break-down } }
+  - { from: { node: break-down },  to: { node: design-spec } }
+  - { from: { node: design-spec }, to: { node: eng-plan } }
+  - { from: { node: eng-plan },    to: { node: result } }
+```
+
+Each agent sees only the slice of context relevant to its step. `vector` and `nova` can be different models, tools, or personas — Ripline doesn't care.
+
+### Fire-and-forget spawning
+
+Trigger a pipeline run asynchronously via HTTP and poll for completion:
+
+```bash
+# Enqueue a run (returns immediately with a runId)
+run_id=$(curl -s -X POST http://localhost:4001/pipelines/product_spec/runs \
+  -H "Content-Type: application/json" \
+  -d '{"task":"OAuth login flow"}' | jq -r '.runId')
+
+# Poll until done
+while true; do
+  status=$(curl -s http://localhost:4001/runs/$run_id | jq -r '.status')
+  [[ "$status" == "completed" || "$status" == "failed" || "$status" == "errored" ]] && break
+  sleep 2
+done
+
+# Fetch artifacts
+curl -s http://localhost:4001/runs/$run_id | jq '.artifacts'
+```
+
+### Session isolation
+
+By default every agent node gets a fresh `--session-id` (UUID). This means:
+- No history bleeds between pipeline runs or between nodes in the same run.
+- You can run the same pipeline concurrently without agents seeing each other's context.
+
+To keep continuity across nodes (e.g. a multi-turn conversation flow), set `resetSession: false` on downstream nodes and pass a shared `sessionId` in the run context. The scheduler threads the session ID through automatically.
+
+### Scaling
+
+| Setting | Effect |
+|---|---|
+| `maxConcurrency: 4` (default) | Up to 4 agent nodes run in parallel across all active pipeline runs |
+| `timeoutSeconds` per node | Per-node deadline; the scheduler kills the subprocess and marks the node `errored` |
+| `runsDir` | Persist run state across restarts; resume with `ripline run --resume <runId>` |
+
+---
+
 ## Roadmap
 
 - [ ] Type-safe config schemas per node type

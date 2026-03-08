@@ -27,6 +27,7 @@ export async function executeAgent(
 ): Promise<NodeResult> {
   const agentId = node.agentId ?? "default";
   const prompt = interpolateTemplate(node.prompt, {
+    inputs: context.inputs,
     ...context.inputs,
     ...context.artifacts,
     env: context.env,
