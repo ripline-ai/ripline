@@ -46,11 +46,13 @@ export function createRunQueue(store: RunStore): RunQueue {
 
     async claimNext(): Promise<PipelineRunRecord | null> {
       const pending = await store.list({ status: "pending" });
-      if (pending.length === 0) return null;
-      const record = pending[0]!;
-      record.status = "running";
-      await store.save(record);
-      return record;
+      for (const candidate of pending) {
+        if (await store.claimRun(candidate.id)) {
+          // Re-load to get the saved "running" record with updated timestamp
+          return await store.load(candidate.id) ?? candidate;
+        }
+      }
+      return null;
     },
 
     async depth(): Promise<number> {

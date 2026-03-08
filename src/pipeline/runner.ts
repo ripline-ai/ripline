@@ -188,7 +188,7 @@ export class DeterministicRunner extends EventEmitter {
       if (loaded.pipelineId !== this.definition.id) {
         throw new Error(`Run pipeline ${loaded.pipelineId} does not match definition ${this.definition.id}`);
       }
-      if (loaded.status !== "errored" && loaded.status !== "paused") {
+      if (!["errored", "paused", "pending", "running"].includes(loaded.status)) {
         throw new Error(`Run ${options.resumeRunId} is not resumable (status: ${loaded.status})`);
       }
       record = loaded;

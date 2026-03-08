@@ -153,6 +153,103 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     }
   }
 
+  /** POST /runs/:runId/retry - requeue an errored/paused run from a given node (or the first errored node) */
+  fastify.post<{ Params: { runId: string }; Body: { fromNode?: string } }>(
+    "/runs/:runId/retry",
+    {
+      preHandler: requireAuth,
+      handler: async (request, reply) => {
+        const { runId } = request.params;
+        const { fromNode } = (request.body as { fromNode?: string }) ?? {};
+
+        let record: PipelineRunRecord | null;
+        try {
+          record = await loadRunWithRetry(runId);
+        } catch (err) {
+          return reply.status(500).send({ error: "Internal Server Error", message: String(err) });
+        }
+        if (!record) {
+          return reply.status(404).send({ error: "Not Found", message: `Run ${runId} not found` });
+        }
+        if (record.status !== "errored" && record.status !== "paused") {
+          return reply.status(409).send({
+            error: "Conflict",
+            message: `Run ${runId} cannot be retried (status: ${record.status})`,
+          });
+        }
+
+        const entry = await registry.get(record.pipelineId);
+        if (!entry) {
+          return reply.status(404).send({ error: "Not Found", message: `Pipeline ${record.pipelineId} not found` });
+        }
+
+        const tempRunner = new DeterministicRunner(entry.definition, { store, runsDir, quiet: true, agentRunner });
+        const order = tempRunner.getExecutionOrder();
+
+        let targetIndex: number;
+        if (fromNode) {
+          targetIndex = order.indexOf(fromNode);
+          if (targetIndex === -1) {
+            return reply.status(400).send({
+              error: "Bad Request",
+              message: `Node "${fromNode}" not found in pipeline ${record.pipelineId}. Nodes: ${order.join(", ")}`,
+            });
+          }
+        } else {
+          const erroredStep = record.steps.find((s) => s.status === "errored");
+          const erroredNodeId = erroredStep?.nodeId;
+          targetIndex = erroredNodeId !== undefined ? order.indexOf(erroredNodeId) : 0;
+          if (targetIndex === -1) targetIndex = 0;
+        }
+
+        // Reset steps from targetIndex onwards
+        for (let i = targetIndex; i < record.steps.length; i++) {
+          record.steps[i] = { nodeId: record.steps[i]!.nodeId, status: "pending" };
+        }
+
+        // Rebuild artifact context from completed steps before targetIndex
+        const artifacts: Record<string, unknown> = {};
+        for (let k = 0; k < targetIndex; k++) {
+          const s = record.steps[k];
+          if (
+            s?.status === "completed" &&
+            s.data &&
+            typeof s.data === "object" &&
+            "artifactKey" in s.data &&
+            "artifactValue" in s.data
+          ) {
+            const d = s.data as { artifactKey: string; artifactValue: unknown };
+            artifacts[d.artifactKey] = d.artifactValue;
+          }
+        }
+
+        record.cursor = {
+          nextNodeIndex: targetIndex,
+          context: { inputs: record.inputs, artifacts, outputs: record.outputs ?? {} },
+        };
+        record.status = "pending";
+        record.updatedAt = Date.now();
+        delete record.error;
+        await store.save(record);
+
+        if (!scheduler) {
+          // No scheduler — run inline in background using resumeRunId path
+          const inlineRunner = new DeterministicRunner(entry.definition, {
+            store,
+            runsDir,
+            quiet: true,
+            agentRunner,
+          });
+          inlineRunner.run({ resumeRunId: runId }).catch((err) => {
+            console.error(`[server] retry run failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        }
+
+        return reply.status(202).send({ runId: record.id, fromNode: order[targetIndex] });
+      },
+    }
+  );
+
   /** GET /runs/:runId - run record + status */
   fastify.get<{ Params: { runId: string } }>("/runs/:runId", {
     preHandler: requireAuth,

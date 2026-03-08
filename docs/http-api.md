@@ -125,6 +125,50 @@ Server-Sent Events stream: each event is a `data:` line with the current run rec
 curl -N http://localhost:4001/runs/550e8400-e29b-41d4-a716-446655440000/stream
 ```
 
+### Retry a run from a node
+
+```http
+POST /runs/:runId/retry
+Content-Type: application/json
+```
+
+Re-queues an `errored` or `paused` run for execution, optionally from a specific node. Completed steps before the target node are preserved and their artifacts replayed into context — only the target node and everything after it re-execute.
+
+If `fromNode` is omitted, execution resumes from the first errored node. If the run has no errored steps, it retries from the beginning.
+
+**Request body:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `fromNode` | string (optional) | Node ID to retry from. Must exist in the pipeline. Defaults to first errored node. |
+
+**Example — retry from first error:**
+```bash
+curl -X POST http://localhost:4001/runs/550e8400-e29b-41d4-a716-446655440000/retry \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+**Example — retry from a specific node:**
+```bash
+curl -X POST http://localhost:4001/runs/550e8400-e29b-41d4-a716-446655440000/retry \
+  -H "Content-Type: application/json" \
+  -d '{"fromNode": "queue"}'
+```
+
+**Response (202 Accepted):**
+```json
+{
+  "runId": "550e8400-e29b-41d4-a716-446655440000",
+  "fromNode": "queue"
+}
+```
+
+**Error responses:**
+- `404` — run or pipeline not found
+- `409` — run is not in `errored` or `paused` state
+- `400` — `fromNode` does not exist in the pipeline
+
 ## Plugin config
 
 In `openclaw.plugin.json` (or the host config), you can set:

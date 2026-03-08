@@ -4,6 +4,8 @@ import type { RunStore, RunStoreCreateParams, RunStoreCursor, RunStoreListOption
 
 export class MemoryRunStore implements RunStore {
   private readonly records = new Map<string, PipelineRunRecord>();
+  // In-process claim set — guards against concurrent async callers within the same process
+  private readonly activeClaims = new Set<string>();
 
   async createRun(params: RunStoreCreateParams): Promise<PipelineRunRecord> {
     const id = randomUUID();
@@ -69,5 +71,29 @@ export class MemoryRunStore implements RunStore {
       runs = [...runs].sort((a, b) => b.updatedAt - a.updatedAt);
     }
     return runs;
+  }
+
+  async claimRun(runId: string): Promise<boolean> {
+    // activeClaims guards the async gap; record mutation is synchronous so effectively atomic
+    if (this.activeClaims.has(runId)) return false;
+    const record = this.records.get(runId);
+    if (!record || record.status !== "pending") return false;
+    this.activeClaims.add(runId);
+    record.status = "running";
+    record.updatedAt = Date.now();
+    this.activeClaims.delete(runId);
+    return true;
+  }
+
+  async recoverStaleRuns(): Promise<number> {
+    let recovered = 0;
+    for (const record of this.records.values()) {
+      if (record.status === "running") {
+        record.status = "pending";
+        record.updatedAt = Date.now();
+        recovered++;
+      }
+    }
+    return recovered;
   }
 }

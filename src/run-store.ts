@@ -31,6 +31,19 @@ export interface RunStore {
   updateCursor(record: PipelineRunRecord, cursor: RunStoreCursor): Promise<void>;
   /** List runs, optionally filtered by status. Pending/running returned FIFO (oldest first). */
   list(options?: RunStoreListOptions): Promise<PipelineRunRecord[]>;
+  /**
+   * Atomically claim a pending run for execution using an O_EXCL lock file.
+   * Returns true if this caller successfully claimed it (status set to running),
+   * false if another worker already claimed it. Safe for concurrent callers.
+   */
+  claimRun(runId: string): Promise<boolean>;
+  /**
+   * Recover orphaned runs left in "running" state by a previous crashed process.
+   * Deletes stale claim lock files and resets all "running" runs back to "pending".
+   * Should be called once at scheduler startup before workers begin polling.
+   * Returns the number of runs recovered.
+   */
+  recoverStaleRuns(): Promise<number>;
 }
 
 export class PipelineRunStore implements RunStore {
@@ -126,5 +139,47 @@ export class PipelineRunStore implements RunStore {
       filtered = [...filtered].sort((a, b) => b.updatedAt - a.updatedAt);
     }
     return filtered;
+  }
+
+  async claimRun(runId: string): Promise<boolean> {
+    const lockPath = path.join(this.runDir(runId), "claim.lock");
+    let fd: fs.FileHandle | null = null;
+    try {
+      // O_EXCL | O_CREAT = atomic exclusive create; EEXIST if another worker beat us to it
+      fd = await fs.open(lockPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL);
+      await fd.close();
+      fd = null;
+      // We hold the lock — verify still pending before committing
+      const record = await this.load(runId);
+      if (!record || record.status !== "pending") {
+        await fs.unlink(lockPath).catch(() => {});
+        return false;
+      }
+      record.status = "running";
+      await this.save(record);
+      await fs.unlink(lockPath).catch(() => {});
+      return true;
+    } catch (err) {
+      if (fd) await fd.close().catch(() => {});
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw err;
+    }
+  }
+
+  async recoverStaleRuns(): Promise<number> {
+    const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
+    // Remove any claim lock files left by crashed workers
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      const lockPath = path.join(this.runDir(ent.name), "claim.lock");
+      await fs.unlink(lockPath).catch(() => {});
+    }
+    // Reset all "running" runs to "pending" — nothing is actually running on a fresh start
+    const running = await this.list({ status: "running" });
+    for (const record of running) {
+      record.status = "pending";
+      await this.save(record);
+    }
+    return running.length;
   }
 }

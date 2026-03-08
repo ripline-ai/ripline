@@ -63,9 +63,11 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
           quiet: true,
           ...(agentRunner && { agentRunner }),
         });
-        await runner.run({
-          startRunId: record.id,
-        });
+        await runner.run(
+          record.cursor !== undefined
+            ? { resumeRunId: record.id }
+            : { startRunId: record.id }
+        );
         completedRunsCount++;
         durations.push(Date.now() - startMs);
 
@@ -111,6 +113,12 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
   return {
     start() {
       stopped = false;
+      // Reset any runs orphaned in "running" state by a previous crash before workers begin
+      store.recoverStaleRuns().then((count) => {
+        if (count > 0) {
+          console.log(`[scheduler] recovered ${count} orphaned running run(s) → pending`);
+        }
+      }).catch(() => {});
       for (let i = 0; i < maxConcurrency; i++) {
         workers.push(worker());
       }
