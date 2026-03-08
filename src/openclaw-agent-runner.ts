@@ -13,14 +13,20 @@ export type OpenClawPluginApi = {
   };
 };
 
-/** JSON envelope from `openclaw agent --json`. Supports both legacy {text} and current {status, result} formats. */
+/** JSON envelope from `openclaw agent --json`. Supports both legacy {text} and current {status, result:{payloads}} formats. */
 type AgentJsonEnvelope = {
+  // Legacy flat format
   text?: string;
   tokenUsage?: { input?: number; output?: number };
+  // Current openclaw format
   status?: string;
   result?: {
     payloads?: Array<{ text?: string }>;
-    meta?: { agentMeta?: { usage?: { input?: number; output?: number } } };
+    meta?: {
+      agentMeta?: {
+        usage?: { input?: number; output?: number };
+      };
+    };
   };
 };
 
@@ -63,10 +69,9 @@ export function createOpenClawAgentRunner(api: OpenClawPluginApi): AgentRunner {
       throw new Error(`Agent run failed: ${msg}`);
     }
 
-    // Strip any config warning lines that precede the JSON object
+    // openclaw CLI may prepend config warning lines before the JSON payload
     const jsonStart = stdout.indexOf("{");
     const jsonText = jsonStart >= 0 ? stdout.slice(jsonStart).trim() : stdout.trim();
-
     let envelope: unknown;
     try {
       envelope = JSON.parse(jsonText) as AgentJsonEnvelope;
@@ -78,12 +83,13 @@ export function createOpenClawAgentRunner(api: OpenClawPluginApi): AgentRunner {
 
     if (!envelope || typeof envelope !== "object") {
       throw new Error(
-        `Agent JSON envelope must have a "text" string. Got: ${JSON.stringify(envelope).slice(0, 200)}`
+        `Agent output was not a JSON object. stdout: ${stdout.slice(0, 200)}`
       );
     }
 
     const env = envelope as AgentJsonEnvelope;
-    // Support both legacy {text} format and current {status, result:{payloads:[{text}]}} format
+
+    // Extract text: support both legacy {text} and current {result:{payloads:[{text}]}} formats
     const text =
       typeof env.text === "string"
         ? env.text
@@ -91,20 +97,17 @@ export function createOpenClawAgentRunner(api: OpenClawPluginApi): AgentRunner {
 
     if (typeof text !== "string") {
       throw new Error(
-        `Agent JSON envelope must have a "text" string. Got: ${JSON.stringify(envelope).slice(0, 200)}`
+        `Could not extract text from agent output. Got: ${JSON.stringify(envelope).slice(0, 200)}`
       );
     }
 
-    const usageFromResult = env.result?.meta?.agentMeta?.usage;
-    const tokenUsage = env.tokenUsage ?? usageFromResult;
-
+    // Extract token usage from either format
+    const usageRaw = env.tokenUsage ?? env.result?.meta?.agentMeta?.usage;
     const result: AgentResult = { text };
-    if (tokenUsage && typeof tokenUsage === "object") {
+    if (usageRaw && typeof usageRaw === "object") {
       result.tokenUsage = {
-        ...(typeof tokenUsage.input === "number" && { input: tokenUsage.input }),
-        ...(typeof tokenUsage.output === "number" && {
-          output: tokenUsage.output,
-        }),
+        ...(typeof (usageRaw as { input?: number }).input === "number" && { input: (usageRaw as { input: number }).input }),
+        ...(typeof (usageRaw as { output?: number }).output === "number" && { output: (usageRaw as { output: number }).output }),
       };
     }
     return result;

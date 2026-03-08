@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 
 /**
  * Write JSON to a file atomically: write to `<targetPath>.<random>.tmp` then rename into place.
- * The unique suffix prevents concurrent writers from clobbering each other's temp files.
+ * Uses a unique tmp suffix to avoid race conditions when multiple writers target the same file.
  * Readers never see half-written JSON.
  */
 export async function writeJsonAtomically(targetPath: string, data: unknown): Promise<void> {
