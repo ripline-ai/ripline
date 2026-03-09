@@ -110,8 +110,9 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
       const options: Record<string, unknown> = {
         cwd,
         permissionMode: mode === "plan" ? "plan" : "acceptEdits",
+        allowDangerouslySkipPermissions: true,
         maxTurns,
-        abortController: controller.signal,
+        abortController: controller,
         ...(allowedTools !== undefined && { allowedTools }),
         ...(disallowedTools !== undefined && disallowedTools.length > 0 && { disallowedTools }),
         ...(Object.keys(hooks).length > 0 && { hooks }),
