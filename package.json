@@ -34,6 +34,7 @@
   "author": "Craig Midwinter",
   "license": "MIT",
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.71",
     "@fastify/cors": "^11.2.0",
     "@sinclair/typebox": "^0.34.48",
     "ajv": "^8.18.0",

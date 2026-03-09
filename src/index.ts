@@ -5,7 +5,11 @@ import { startServer, type StartServerOptions } from "./server.js";
 import type { PipelinePluginConfig } from "./types.js";
 import { createOpenClawAgentRunner, type OpenClawPluginApi } from "./openclaw-agent-runner.js";
 import { createLlmAgentRunner } from "./llm-agent-runner.js";
-import { normalizeLlmAgentConfigFromPlugin } from "./agent-runner-config.js";
+import { createClaudeCodeRunner } from "./claude-code-runner.js";
+import {
+  normalizeLlmAgentConfigFromPlugin,
+  normalizeClaudeCodeConfigFromPlugin,
+} from "./agent-runner-config.js";
 
 interface PluginLogger {
   info: (...args: unknown[]) => void;
@@ -41,9 +45,12 @@ function resolvePath(value: string): string {
 
 export { createOpenClawAgentRunner, type OpenClawPluginApi } from "./openclaw-agent-runner.js";
 export { createLlmAgentRunner, type LlmAgentRunnerConfig } from "./llm-agent-runner.js";
+export { createClaudeCodeRunner, type ClaudeCodeRunnerConfig } from "./claude-code-runner.js";
 export {
   normalizeLlmAgentConfigFromPlugin,
+  normalizeClaudeCodeConfigFromPlugin,
   resolveStandaloneLlmAgentConfig,
+  resolveClaudeCodeConfig,
   resolveLlmAgentConfigFromEnv,
   loadLlmAgentConfigFromFile,
 } from "./agent-runner-config.js";
@@ -78,12 +85,16 @@ export default {
   description: "Ripline pipeline engine + CLI",
   register(api: PluginApi) {
     const cfg = normalizeConfig(api.pluginConfig);
-    const agentRunner = hasOpenClawRuntime(api)
-      ? createOpenClawAgentRunner(api)
-      : (() => {
-          const llmConfig = normalizeLlmAgentConfigFromPlugin(api.pluginConfig);
-          return llmConfig ? createLlmAgentRunner(llmConfig) : undefined;
-        })();
+    let agentRunner: ReturnType<typeof createOpenClawAgentRunner> | ReturnType<typeof createLlmAgentRunner> | undefined;
+    let claudeCodeRunner: ReturnType<typeof createClaudeCodeRunner> | undefined;
+    if (hasOpenClawRuntime(api)) {
+      agentRunner = createOpenClawAgentRunner(api);
+    } else {
+      const llmConfig = normalizeLlmAgentConfigFromPlugin(api.pluginConfig);
+      if (llmConfig) agentRunner = createLlmAgentRunner(llmConfig);
+      const claudeCodeConfig = normalizeClaudeCodeConfigFromPlugin(api.pluginConfig);
+      if (claudeCodeConfig) claudeCodeRunner = createClaudeCodeRunner(claudeCodeConfig);
+    }
     let serverHandle: { close: () => Promise<void> } | null = null;
 
     api.registerCli(
@@ -94,6 +105,7 @@ export default {
             pipelinesDir: cfg.pipelinesDir,
           },
           ...(agentRunner !== undefined && { agentRunner }),
+          ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
         });
         program.addCommand(ripline);
       },
@@ -111,6 +123,7 @@ export default {
           maxConcurrency: cfg.maxConcurrency,
           ...(cfg.authToken ? { authToken: cfg.authToken } : {}),
           ...(agentRunner !== undefined && { agentRunner }),
+          ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
         };
         api.logger.info(
           `[pipeline] serving pipelines from ${options.pipelinesDir} (runs=${options.runsDir}) on port ${options.httpPort}`,

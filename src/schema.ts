@@ -53,6 +53,9 @@ const agentNode = baseNode.extend({
   deliver: z.boolean().optional(),
   thinking: z.enum(["off", "minimal", "low", "medium", "high"]).optional(),
   timeoutSeconds: z.number().int().positive().optional(),
+  runner: z.literal("claude-code").optional(),
+  mode: z.enum(["plan", "execute"]).optional(),
+  cwd: z.string().optional(),
 });
 
 const runPipelineNode = baseNode.extend({

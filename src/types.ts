@@ -57,6 +57,12 @@ export type AgentNode = NodeBase & {
   deliver?: boolean;
   thinking?: "off" | "minimal" | "low" | "medium" | "high";
   timeoutSeconds?: number;
+  /** Opt-in to Claude Code runner for this node. When set, claudeCodeRunner must be provided in runner options. */
+  runner?: "claude-code";
+  /** For runner: claude-code — "plan" = read-only; "execute" = full access. Default when runner is claude-code: "execute". */
+  mode?: "plan" | "execute";
+  /** Working directory for Claude Code (supports template interpolation). */
+  cwd?: string;
 };
 
 export type RunPipelineNode = NodeBase & {

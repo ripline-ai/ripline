@@ -27,6 +27,8 @@ export type ServerConfig = PipelinePluginConfig & {
   runsDir?: string;
   /** When set (e.g. by OpenClaw plugin), agent nodes use this runner; otherwise stub. */
   agentRunner?: AgentRunner;
+  /** For agent nodes with runner: claude-code. Not set when running inside OpenClaw. */
+  claudeCodeRunner?: AgentRunner;
 };
 
 export async function createApp(config: ServerConfig): Promise<FastifyInstance> {
@@ -39,6 +41,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     process.env.RIPLINE_AGENT_RUNNER === "stub"
       ? stubAgentRunner
       : (config.agentRunner ?? stubAgentRunner);
+  const claudeCodeRunner = config.claudeCodeRunner;
   const maxConcurrency = config.maxConcurrency ?? 0;
   const queue = createRunQueue(store);
   const scheduler =
@@ -49,6 +52,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           registry,
           maxConcurrency,
           agentRunner,
+          ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
         })
       : null;
   if (scheduler) scheduler.start();
@@ -103,6 +107,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           runsDir,
           quiet: true,
           agentRunner,
+          ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
         });
         const runIdPromise = new Promise<string>((resolve) => {
           runner.once("run.started", (record: PipelineRunRecord) => resolve(record.id));
@@ -183,7 +188,13 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           return reply.status(404).send({ error: "Not Found", message: `Pipeline ${record.pipelineId} not found` });
         }
 
-        const tempRunner = new DeterministicRunner(entry.definition, { store, runsDir, quiet: true, agentRunner });
+        const tempRunner = new DeterministicRunner(entry.definition, {
+          store,
+          runsDir,
+          quiet: true,
+          agentRunner,
+          ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+        });
         const order = tempRunner.getExecutionOrder();
 
         let targetIndex: number;
@@ -239,6 +250,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
             runsDir,
             quiet: true,
             agentRunner,
+            ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
           });
           inlineRunner.run({ resumeRunId: runId }).catch((err) => {
             console.error(`[server] retry run failed: ${err instanceof Error ? err.message : String(err)}`);

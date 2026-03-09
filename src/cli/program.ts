@@ -10,7 +10,11 @@ import { startServer } from "../server.js";
 import { PipelineRunStore } from "../run-store.js";
 import { createRunQueue } from "../run-queue.js";
 import { createLlmAgentRunner, type LlmAgentRunnerConfig } from "../llm-agent-runner.js";
-import { resolveStandaloneLlmAgentConfig } from "../agent-runner-config.js";
+import { createClaudeCodeRunner } from "../claude-code-runner.js";
+import {
+  resolveStandaloneLlmAgentConfig,
+  resolveClaudeCodeConfig,
+} from "../agent-runner-config.js";
 
 export type RiplineCliOptions = {
   defaults?: {
@@ -18,6 +22,7 @@ export type RiplineCliOptions = {
     pipelinesDir?: string;
   };
   agentRunner?: AgentRunner;
+  claudeCodeRunner?: AgentRunner;
 };
 
 function getVersion(): string {
@@ -71,6 +76,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       let inputs: Record<string, unknown> = {};
       let outPath: string | undefined;
       let agentRunner: AgentRunner | undefined = options.agentRunner;
+      let claudeCodeRunner: AgentRunner | undefined = options.claudeCodeRunner;
 
       if (tailQueue) {
         const store = new PipelineRunStore(runsDir);
@@ -158,6 +164,10 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
           );
           if (llmConfig) agentRunner = createLlmAgentRunner(llmConfig);
         }
+        if (!claudeCodeRunner) {
+          const claudeCodeConfig = resolveClaudeCodeConfig({ cwd: process.cwd() });
+          if (claudeCodeConfig) claudeCodeRunner = createClaudeCodeRunner(claudeCodeConfig);
+        }
       }
 
       const env = parseEnvPairs(opts.env ?? []);
@@ -168,6 +178,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         quiet: true,
         ...(outPath !== undefined && { outPath }),
         ...(agentRunner !== undefined && { agentRunner }),
+        ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
       };
       const runner = new DeterministicRunner(definition, runnerOptions);
 
@@ -236,12 +247,15 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         hasAgentOverrides ? { cwd: process.cwd(), overrides: agentOverrides } : { cwd: process.cwd() }
       );
       const agentRunner = llmConfig ? createLlmAgentRunner(llmConfig) : undefined;
+      const claudeCodeConfig = resolveClaudeCodeConfig({ cwd: process.cwd() });
+      const claudeCodeRunner = claudeCodeConfig ? createClaudeCodeRunner(claudeCodeConfig) : undefined;
       console.log(chalk.cyan(`Starting HTTP server on port ${port}`));
       console.log(chalk.gray(`  pipelines: ${pipelinesDir}`));
       console.log(chalk.gray(`  runs: ${runsDir}`));
       console.log(chalk.gray(`  maxConcurrency: ${maxConcurrency}`));
       if (opts.authToken) console.log(chalk.gray("  auth: Bearer token required"));
       if (agentRunner) console.log(chalk.gray("  agent: LLM runner (standalone)"));
+      if (claudeCodeRunner) console.log(chalk.gray("  agent: Claude Code runner (standalone)"));
       const { close } = await startServer({
         pipelinesDir,
         runsDir,
@@ -249,6 +263,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         maxConcurrency,
         ...(opts.authToken && { authToken: opts.authToken }),
         ...(agentRunner && { agentRunner }),
+        ...(claudeCodeRunner && { claudeCodeRunner }),
       });
       process.on("SIGINT", () => close().then(() => process.exit(0)));
       process.on("SIGTERM", () => close().then(() => process.exit(0)));

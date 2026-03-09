@@ -26,6 +26,7 @@ In short: turn messy cross-team workflows into a graph you can see, change, and 
 - In-memory run store with resumable IDs and JSON payload snapshots
 - CLI runner for local testing plus plugin hook for OpenClaw
 - HTTP surface (default `/pipelines`) for boards, metrics, and visualizations
+- **Per-node agent runners:** optional `runner: claude-code` with **plan** (read-only) or **execute** mode and configurable `cwd`; see [Using Claude Code as a runner](docs/agent-integration.md#using-claude-code-as-a-runner)
 
 ---
 

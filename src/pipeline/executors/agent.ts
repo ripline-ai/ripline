@@ -18,7 +18,18 @@ export type AgentRunner = (params: {
   sessionId?: string;
   thinking?: "off" | "minimal" | "low" | "medium" | "high";
   timeoutSeconds?: number;
+  /** Set when node has runner: claude-code; runners that don't use it ignore. */
+  runner?: "claude-code";
+  mode?: "plan" | "execute";
+  cwd?: string;
 }) => Promise<AgentResult>;
+
+const interpolationContext = (context: ExecutorContext) => ({
+  inputs: context.inputs,
+  ...context.inputs,
+  ...context.artifacts,
+  env: context.env,
+});
 
 export async function executeAgent(
   node: AgentNode,
@@ -26,17 +37,18 @@ export async function executeAgent(
   agentRunner: AgentRunner
 ): Promise<NodeResult> {
   const agentId = node.agentId ?? "default";
-  let prompt = interpolateTemplate(node.prompt, {
-    inputs: context.inputs,
-    ...context.inputs,
-    ...context.artifacts,
-    env: context.env,
-  });
+  const ctx = interpolationContext(context);
+  let prompt = interpolateTemplate(node.prompt, ctx);
 
   if (node.contracts?.output && typeof node.contracts.output === "object") {
     const schemaBlock = `\n\nRespond with a single JSON object only (no markdown, code fences, or explanation). Your response must conform to this schema:\n\`\`\`json\n${JSON.stringify(node.contracts.output, null, 2)}\n\`\`\``;
     prompt = prompt + schemaBlock;
   }
+
+  const resolvedCwd =
+    node.cwd !== undefined && node.cwd.trim() !== ""
+      ? interpolateTemplate(node.cwd.trim(), ctx)
+      : undefined;
 
   const resetSession = node.resetSession ?? true;
   const result = await agentRunner({
@@ -46,6 +58,9 @@ export async function executeAgent(
     ...(resetSession === false && context.sessionId !== undefined && { sessionId: context.sessionId }),
     ...(node.thinking !== undefined && { thinking: node.thinking }),
     ...(node.timeoutSeconds !== undefined && { timeoutSeconds: node.timeoutSeconds }),
+    ...(node.runner !== undefined && { runner: node.runner }),
+    ...(node.mode !== undefined && { mode: node.mode }),
+    ...(resolvedCwd !== undefined && { cwd: resolvedCwd }),
   });
 
   const value = {
