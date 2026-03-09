@@ -66,6 +66,8 @@ Each node in the template has optional `contracts.input` and `contracts.output` 
 - **engineering-plan**: consumes `designSpecs`, produces `plan` (e.g. items with featureId, steps, owner).
 - **implementation-queue**: consumes the plan and writes the backlog artifact to the output path.
 
+**Runtime enforcement**: `contracts.output` is enforced at runtime. After a node runs, its output artifact is validated against the node’s output schema. If validation fails, the node step is marked errored and the run fails (and will retry if the node has `retry` configured). For **agent nodes**, the contract applies to the *payload*: the runner parses the agent’s reply as JSON and validates that object. Agents with an output contract must therefore return **valid JSON** conforming to the schema; the runner also appends the schema to the agent prompt so the model is instructed to produce that shape.
+
 If you add nodes or change payload shapes, update the corresponding `contracts` in the YAML so they stay accurate for validation or tooling.
 
 ## Adapting to other feature areas

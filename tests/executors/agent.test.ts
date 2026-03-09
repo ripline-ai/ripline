@@ -135,4 +135,35 @@ describe("Agent executor", () => {
     expect(capturedParams?.resetSession).toBe(false);
     expect(capturedParams?.sessionId).toBeUndefined();
   });
+
+  it("appends output schema instruction to prompt when contracts.output is set", async () => {
+    let capturedParams: Parameters<AgentRunner>[0] | null = null;
+    const capturingRunner: AgentRunner = async (params) => {
+      capturedParams = params;
+      return { text: "ok" };
+    };
+    const outputSchema = { type: "object" as const, required: ["features"], properties: { features: { type: "array" } } };
+    const node: AgentNode = {
+      id: "writer",
+      type: "agent",
+      prompt: "Write features.",
+      contracts: { output: outputSchema },
+    };
+    const context: ExecutorContext = {
+      inputs: {},
+      artifacts: {},
+      env: {},
+      outputs: {},
+    };
+
+    await executeAgent(node, context, capturingRunner);
+
+    expect(capturedParams?.prompt).toContain("Write features.");
+    expect(capturedParams?.prompt).toContain("JSON object only");
+    expect(capturedParams?.prompt).toContain("no markdown");
+    expect(capturedParams?.prompt).toContain("required");
+    expect(capturedParams?.prompt).toContain("features");
+    expect(capturedParams?.prompt).toContain("type");
+    expect(capturedParams?.prompt).toContain("object");
+  });
 });

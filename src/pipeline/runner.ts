@@ -11,6 +11,7 @@ import type {
 import type { RunStore } from "../run-store.js";
 import { PipelineRunStore } from "../run-store.js";
 import type { RunQueue } from "../run-queue.js";
+import { validateOutputContract } from "../lib/contract-validate.js";
 import { executeNode } from "./executors/index.js";
 import type { AgentRunner } from "./executors/index.js";
 
@@ -304,6 +305,14 @@ export class DeterministicRunner extends EventEmitter {
               ? { agentRunner: this.runnerOptions.agentRunner }
               : undefined
           );
+          if (nodeResult && node.contracts?.output) {
+            validateOutputContract(
+              node.id,
+              node.type,
+              node.contracts.output,
+              nodeResult.value
+            );
+          }
           lastErr = undefined;
           break;
         } catch (err) {

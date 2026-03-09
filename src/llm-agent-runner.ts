@@ -1,0 +1,181 @@
+import type { AgentResult, AgentRunner } from "./pipeline/executors/agent.js";
+
+export type LlmAgentRunnerConfig = {
+  provider: "ollama" | "openai" | "anthropic";
+  model: string;
+  apiKey?: string;
+  baseURL?: string;
+};
+
+const OLLAMA_DEFAULT_BASE = "http://localhost:11434";
+const OPENAI_DEFAULT_BASE = "https://api.openai.com/v1";
+const ANTHROPIC_DEFAULT_BASE = "https://api.anthropic.com/v1";
+
+function extractOllamaText(data: {
+  message?: { content?: string | Array<{ type?: string; text?: string }> };
+}): string {
+  const content = data.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const parts = content
+      .filter((p) => p?.type === "text" && typeof p.text === "string")
+      .map((p) => (p as { text: string }).text);
+    return parts.join("");
+  }
+  throw new Error("Could not extract text from Ollama response");
+}
+
+function extractOpenAIText(data: {
+  choices?: Array<{ message?: { content?: string } }>;
+}): string {
+  const text = data.choices?.[0]?.message?.content;
+  if (typeof text === "string") return text;
+  throw new Error("Could not extract text from OpenAI response");
+}
+
+function extractAnthropicText(data: {
+  content?: Array<{ type?: string; text?: string }>;
+}): string {
+  const first = data.content?.[0];
+  if (first?.type === "text" && typeof first.text === "string")
+    return first.text;
+  throw new Error("Could not extract text from Anthropic response");
+}
+
+/**
+ * Create an AgentRunner that calls Ollama, OpenAI, or Anthropic APIs.
+ * Use when running standalone without OpenClaw. Single model for all agent nodes.
+ */
+export function createLlmAgentRunner(config: LlmAgentRunnerConfig): AgentRunner {
+  const { provider, model, apiKey, baseURL } = config;
+
+  return async (params): Promise<AgentResult> => {
+    const timeoutMs =
+      params.timeoutSeconds !== undefined
+        ? params.timeoutSeconds * 1000
+        : 300_000;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      if (provider === "ollama") {
+        const base = baseURL ?? OLLAMA_DEFAULT_BASE;
+        const url = `${base.replace(/\/$/, "")}/api/chat`;
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: "user", content: params.prompt }],
+            stream: false,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+          const body = await res.text();
+          throw new Error(
+            `Ollama request failed: ${res.status} ${res.statusText}${body ? ` - ${body.slice(0, 200)}` : ""}`
+          );
+        }
+        const data = (await res.json()) as unknown;
+        const text = extractOllamaText(
+          data as Parameters<typeof extractOllamaText>[0]
+        );
+        return { text };
+      }
+
+      if (provider === "openai") {
+        const base = baseURL ?? OPENAI_DEFAULT_BASE;
+        const url = `${base.replace(/\/$/, "")}/chat/completions`;
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+        const res = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model,
+            messages: [{ role: "user", content: params.prompt }],
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+          const body = await res.text();
+          throw new Error(
+            `OpenAI request failed: ${res.status} ${res.statusText}${body ? ` - ${body.slice(0, 200)}` : ""}`
+          );
+        }
+        const data = (await res.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+          usage?: { prompt_tokens?: number; completion_tokens?: number };
+        };
+        const text = extractOpenAIText(data);
+        const result: AgentResult = { text };
+        if (
+          data.usage &&
+          typeof data.usage.prompt_tokens === "number" &&
+          typeof data.usage.completion_tokens === "number"
+        ) {
+          result.tokenUsage = {
+            input: data.usage.prompt_tokens,
+            output: data.usage.completion_tokens,
+          };
+        }
+        return result;
+      }
+
+      if (provider === "anthropic") {
+        const base = baseURL ?? ANTHROPIC_DEFAULT_BASE;
+        const url = `${base.replace(/\/$/, "")}/messages`;
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          "anthropic-version": "2023-06-01",
+        };
+        if (apiKey) headers["x-api-key"] = apiKey;
+        const res = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model,
+            max_tokens: 4096,
+            messages: [{ role: "user", content: params.prompt }],
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+          const body = await res.text();
+          throw new Error(
+            `Anthropic request failed: ${res.status} ${res.statusText}${body ? ` - ${body.slice(0, 200)}` : ""}`
+          );
+        }
+        const data = (await res.json()) as {
+          content?: Array<{ type?: string; text?: string }>;
+          usage?: { input_tokens?: number; output_tokens?: number };
+        };
+        const text = extractAnthropicText(data);
+        const result: AgentResult = { text };
+        if (
+          data.usage &&
+          typeof data.usage.input_tokens === "number" &&
+          typeof data.usage.output_tokens === "number"
+        ) {
+          result.tokenUsage = {
+            input: data.usage.input_tokens,
+            output: data.usage.output_tokens,
+          };
+        }
+        return result;
+      }
+
+      throw new Error(`Unsupported LLM provider: ${provider}`);
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error) throw err;
+      throw new Error(String(err));
+    }
+  };
+}

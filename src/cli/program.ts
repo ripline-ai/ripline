@@ -9,6 +9,8 @@ import { loadInputs, parseEnvPairs } from "./helpers.js";
 import { startServer } from "../server.js";
 import { PipelineRunStore } from "../run-store.js";
 import { createRunQueue } from "../run-queue.js";
+import { createLlmAgentRunner, type LlmAgentRunnerConfig } from "../llm-agent-runner.js";
+import { resolveStandaloneLlmAgentConfig } from "../agent-runner-config.js";
 
 export type RiplineCliOptions = {
   defaults?: {
@@ -53,6 +55,9 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
     .option("--enqueue", "Add run to queue (pending) instead of executing inline; prints runId and exits")
     .option("--tail <mode>", "Tail mode: 'queue' = list (and optionally watch) queued work")
     .option("--follow", "With --tail queue: keep polling and printing queue state")
+    .option("--agent-provider <provider>", "Standalone agent: ollama | openai | anthropic (or set RIPLINE_AGENT_PROVIDER)")
+    .option("--agent-model <model>", "Standalone agent model (or set RIPLINE_AGENT_MODEL)")
+    .option("--agent-base-url <url>", "Standalone agent base URL (or set RIPLINE_AGENT_BASE_URL)")
     .action(async (opts) => {
       const runsDirRaw = opts.runsDir ?? process.env.RIPLINE_RUNS_DIR ?? defaultRunsDir;
       const runsDir = path.isAbsolute(runsDirRaw) ? path.resolve(runsDirRaw) : path.join(process.cwd(), runsDirRaw);
@@ -142,6 +147,17 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
           }
         }
         outPath = opts.out ? path.resolve(opts.out) : undefined;
+        if (!agentRunner) {
+          const overrides: Partial<LlmAgentRunnerConfig> = {};
+          if (opts.agentProvider) overrides.provider = opts.agentProvider as LlmAgentRunnerConfig["provider"];
+          if (opts.agentModel) overrides.model = opts.agentModel;
+          if (opts.agentBaseUrl) overrides.baseURL = opts.agentBaseUrl;
+          const hasOverrides = Object.keys(overrides).length > 0;
+          const llmConfig = resolveStandaloneLlmAgentConfig(
+            hasOverrides ? { cwd: process.cwd(), overrides } : { cwd: process.cwd() }
+          );
+          if (llmConfig) agentRunner = createLlmAgentRunner(llmConfig);
+        }
       }
 
       const env = parseEnvPairs(opts.env ?? []);
@@ -202,23 +218,37 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
     .option("--runs-dir <path>", "Run state directory (or set RIPLINE_RUNS_DIR)", defaultRunsDir)
     .option("--max-concurrency <n>", "Max concurrent pipeline runs (0 = inline; default 1)", "1")
     .option("--auth-token <token>", "Optional bearer token for API auth")
+    .option("--agent-provider <provider>", "Standalone agent: ollama | openai | anthropic")
+    .option("--agent-model <model>", "Standalone agent model")
+    .option("--agent-base-url <url>", "Standalone agent base URL")
     .action(async (opts) => {
       const port = parseInt(opts.port, 10);
       const maxConcurrency = Math.max(0, parseInt(opts.maxConcurrency, 10) || 0);
       const pipelinesDir = path.resolve(process.cwd(), opts.pipelinesDir ?? defaultPipelinesDir);
       const runsDirRaw = opts.runsDir ?? process.env.RIPLINE_RUNS_DIR ?? defaultRunsDir;
       const runsDir = path.isAbsolute(runsDirRaw) ? path.resolve(runsDirRaw) : path.join(process.cwd(), runsDirRaw);
+      const agentOverrides: Partial<LlmAgentRunnerConfig> = {};
+      if (opts.agentProvider) agentOverrides.provider = opts.agentProvider as LlmAgentRunnerConfig["provider"];
+      if (opts.agentModel) agentOverrides.model = opts.agentModel;
+      if (opts.agentBaseUrl) agentOverrides.baseURL = opts.agentBaseUrl;
+      const hasAgentOverrides = Object.keys(agentOverrides).length > 0;
+      const llmConfig = resolveStandaloneLlmAgentConfig(
+        hasAgentOverrides ? { cwd: process.cwd(), overrides: agentOverrides } : { cwd: process.cwd() }
+      );
+      const agentRunner = llmConfig ? createLlmAgentRunner(llmConfig) : undefined;
       console.log(chalk.cyan(`Starting HTTP server on port ${port}`));
       console.log(chalk.gray(`  pipelines: ${pipelinesDir}`));
       console.log(chalk.gray(`  runs: ${runsDir}`));
       console.log(chalk.gray(`  maxConcurrency: ${maxConcurrency}`));
       if (opts.authToken) console.log(chalk.gray("  auth: Bearer token required"));
+      if (agentRunner) console.log(chalk.gray("  agent: LLM runner (standalone)"));
       const { close } = await startServer({
         pipelinesDir,
         runsDir,
         httpPort: port,
         maxConcurrency,
         ...(opts.authToken && { authToken: opts.authToken }),
+        ...(agentRunner && { agentRunner }),
       });
       process.on("SIGINT", () => close().then(() => process.exit(0)));
       process.on("SIGTERM", () => close().then(() => process.exit(0)));

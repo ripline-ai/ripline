@@ -26,12 +26,17 @@ export async function executeAgent(
   agentRunner: AgentRunner
 ): Promise<NodeResult> {
   const agentId = node.agentId ?? "default";
-  const prompt = interpolateTemplate(node.prompt, {
+  let prompt = interpolateTemplate(node.prompt, {
     inputs: context.inputs,
     ...context.inputs,
     ...context.artifacts,
     env: context.env,
   });
+
+  if (node.contracts?.output && typeof node.contracts.output === "object") {
+    const schemaBlock = `\n\nRespond with a single JSON object only (no markdown, code fences, or explanation). Your response must conform to this schema:\n\`\`\`json\n${JSON.stringify(node.contracts.output, null, 2)}\n\`\`\``;
+    prompt = prompt + schemaBlock;
+  }
 
   const resetSession = node.resetSession ?? true;
   const result = await agentRunner({

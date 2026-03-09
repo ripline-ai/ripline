@@ -158,6 +158,10 @@ Install and configure the Ripline pipeline plugin for OpenClaw.
 4. Demo (no real agent): ripline run --demo — runs Hello World with a stub agent and writes to dist/demo-artifact.json.
 ```
 
+### Running agent nodes without OpenClaw
+
+You can run pipelines with real agent nodes locally using Ollama, OpenAI, or Anthropic—no OpenClaw required. Set `RIPLINE_AGENT_PROVIDER` and `RIPLINE_AGENT_MODEL` (and `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for those providers), or use a config file (`.ripline/agent.json` or `ripline.config.json` with an `agent` section). CLI flags work too: `ripline run --agent-provider ollama --agent-model llama3.2`. See [Agent integration](docs/agent-integration.md) for details.
+
 ---
 
 ## Automation (cron, CI, npx)
