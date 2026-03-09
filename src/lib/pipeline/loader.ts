@@ -7,6 +7,31 @@ import type { PipelineDefinition } from "../../types.js";
 
 const cache = new Map<string, { definition: PipelineDefinition; mtimeMs: number }>();
 
+const PIPELINE_EXTENSIONS = [".yaml", ".yml", ".json"] as const;
+
+/**
+ * Resolve a pipeline file by ID (filename without extension) from a directory.
+ * Looks for id.yaml, id.yml, id.json in that order. Returns the first existing file path.
+ * @throws Error including the directory searched when not found
+ */
+export function resolvePipelineFile(id: string, pipelineDir: string): string {
+  const safeId = id.replace(/[/\\]/g, "");
+  if (safeId !== id || !safeId) {
+    throw new Error(`Invalid pipeline ID: ${id}`);
+  }
+  const dir = path.resolve(pipelineDir);
+  for (const ext of PIPELINE_EXTENSIONS) {
+    const filePath = path.join(dir, safeId + ext);
+    try {
+      const stat = fs.statSync(filePath);
+      if (stat.isFile()) return filePath;
+    } catch {
+      // continue
+    }
+  }
+  throw new Error(`Pipeline not found: "${id}" (searched in ${dir})`);
+}
+
 function formatZodIssues(issues: ZodIssue[]): string {
   return issues
     .map((issue) => {

@@ -72,13 +72,13 @@ edges:
 
 ```bash
 npm run build
-node dist/cli/run.js -p pipelines/examples/hello-world.yaml -i samples/hello-world-inputs.json
+ripline run --pipeline pipelines/examples/hello-world.yaml --input samples/hello-world-inputs.json
 ```
 
-With the package installed, you can omit `-p` when using the default examples directory; the CLI defaults to `pipelines/examples/hello-world.yaml`:
+Or run by **pipeline ID** from your pipeline directory with a **profile** for default inputs (see [Pipelines and profiles](docs/pipelines-and-profiles.md)):
 
 ```bash
-ripline run -i samples/hello-world-inputs.json
+ripline run hello_world --profile myapp --input '{"task": "add login"}'
 ```
 
 Outputs are written to `.ripline/runs/<runId>/run.json` and, if you pass `-o <path>`, to that file.

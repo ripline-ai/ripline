@@ -1,5 +1,17 @@
 import type { JSONSchema7 } from "json-schema";
 
+export type RiplineProfile = {
+  name: string;
+  description?: string;
+  inputs: Record<string, unknown>;
+};
+
+export type RiplineUserConfig = {
+  pipelineDir?: string;
+  profileDir?: string;
+  defaultProfile?: string;
+};
+
 export type PipelinePluginConfig = {
   pipelinesDir: string;
   maxConcurrency?: number;

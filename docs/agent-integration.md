@@ -71,6 +71,7 @@ When running **standalone** (not inside OpenClaw), you can configure the **Claud
 **`cwd` injection**
 
 - Each node can set **`cwd`** (optional). It supports template interpolation (e.g. `{{ run.inputs.repoPath }}`). The runner resolves it and validates: the path must be an existing directory and must not contain `..`. Use this to run different nodes in different project roots (e.g. one node per repo).
+- When using **profiles**, you can supply paths via profile inputs and reference them in `cwd`, e.g. `cwd: "{{ run.inputs.projectRoot }}"`. See [Pipelines and profiles](pipelines-and-profiles.md).
 
 **Configuration**
 
