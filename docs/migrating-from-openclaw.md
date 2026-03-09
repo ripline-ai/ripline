@@ -74,6 +74,10 @@ OpenClaw pipelines may set **`agentId`** (e.g. `vector`, `nova`, `writer`, `main
 
 So: keep `agentId` in the YAML for compatibility; outside OpenClaw it effectively acts as a label. Put any persona- or model-specific behavior in the pipeline definition (e.g. prompt text, node structure).
 
+## Bypass permissions and isolation
+
+If you use Ripline’s **bypass permissions** mode (see [Agent integration](agent-integration.md#bypass-permissions-mode-advanced)), note that it does **not** provide the same isolation as OpenClaw’s built-in sandboxing. Use a container or VM when you need isolated execution with bypass enabled.
+
 ## What stays compatible
 
 - **Pipeline YAML format** — same node types, edges, contracts, and structure.

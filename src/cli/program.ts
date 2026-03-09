@@ -217,7 +217,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
           if (llmConfig) agentRunner = createLlmAgentRunner(llmConfig);
         }
         if (!claudeCodeRunner) {
-          const claudeCodeConfig = resolveClaudeCodeConfig({ cwd });
+          const claudeCodeConfig = resolveClaudeCodeConfig({ cwd, homedir });
           if (claudeCodeConfig) claudeCodeRunner = createClaudeCodeRunner(claudeCodeConfig);
         }
       }
@@ -430,7 +430,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         hasAgentOverrides ? { cwd: process.cwd(), overrides: agentOverrides } : { cwd: process.cwd() }
       );
       const agentRunner = llmConfig ? createLlmAgentRunner(llmConfig) : undefined;
-      const claudeCodeConfig = resolveClaudeCodeConfig({ cwd: process.cwd() });
+      const claudeCodeConfig = resolveClaudeCodeConfig({ cwd: process.cwd(), homedir: os.homedir() });
       const claudeCodeRunner = claudeCodeConfig ? createClaudeCodeRunner(claudeCodeConfig) : undefined;
       console.log(chalk.cyan(`Starting HTTP server on port ${port}`));
       console.log(chalk.gray(`  pipelines: ${pipelinesDir}`));

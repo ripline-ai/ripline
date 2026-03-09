@@ -10,6 +10,8 @@ export type RiplineUserConfig = {
   pipelineDir?: string;
   profileDir?: string;
   defaultProfile?: string;
+  /** Only from ~/.ripline/config.json; never from pipeline/profile/input. */
+  claudeCode?: { allowDangerouslySkipPermissions?: boolean };
 };
 
 export type PipelinePluginConfig = {

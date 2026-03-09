@@ -102,6 +102,23 @@ describe("loadUserConfig", () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  it("reads claudeCode.allowDangerouslySkipPermissions when true", () => {
+    const tmp = path.join(os.tmpdir(), "ripline-config-test-" + Date.now());
+    const configDir = path.join(tmp, ".ripline");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({ claudeCode: { allowDangerouslySkipPermissions: true } }),
+      "utf-8"
+    );
+    try {
+      const config = loadUserConfig(tmp);
+      expect(config.claudeCode?.allowDangerouslySkipPermissions).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolvePipelineDir", () => {

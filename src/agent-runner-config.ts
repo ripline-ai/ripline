@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import type { LlmAgentRunnerConfig } from "./llm-agent-runner.js";
 import type { ClaudeCodeRunnerConfig } from "./claude-code-runner.js";
+import { loadUserConfig } from "./config.js";
 
 const ENV_PROVIDER = "RIPLINE_AGENT_PROVIDER";
 const ENV_MODEL = "RIPLINE_AGENT_MODEL";
@@ -150,6 +152,7 @@ const ENV_CLAUDE_CODE_MODE = "RIPLINE_CLAUDE_CODE_MODE";
 const ENV_CLAUDE_CODE_CWD = "RIPLINE_CLAUDE_CODE_CWD";
 const ENV_CLAUDE_CODE_MAX_TURNS = "RIPLINE_CLAUDE_CODE_MAX_TURNS";
 const ENV_CLAUDE_CODE_TIMEOUT = "RIPLINE_CLAUDE_CODE_TIMEOUT";
+const ENV_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS = "RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS";
 
 function parseClaudeCodeMode(value: string): ClaudeCodeRunnerConfig["mode"] | null {
   const lower = value.toLowerCase();
@@ -193,6 +196,9 @@ export function resolveClaudeCodeConfigFromEnv(
   const config: ClaudeCodeRunnerConfig = { mode };
   const cwd = getEnv(env, ENV_CLAUDE_CODE_CWD);
   if (cwd) config.cwd = cwd;
+  if (getEnv(env, ENV_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS) === "true") {
+    config.allowDangerouslySkipPermissions = true;
+  }
   const maxTurnsRaw = getEnv(env, ENV_CLAUDE_CODE_MAX_TURNS);
   if (maxTurnsRaw) {
     const n = parseInt(maxTurnsRaw, 10);
@@ -238,16 +244,22 @@ export function loadClaudeCodeConfigFromFile(cwd: string): ClaudeCodeRunnerConfi
 }
 
 /**
- * Resolve Claude Code config: env + config file. Used by CLI and server when standalone.
+ * Resolve Claude Code config: env + config file + user config (bypass flag only from env or ~/.ripline/config.json).
  */
 export function resolveClaudeCodeConfig(options?: {
   cwd?: string;
   env?: Record<string, string>;
+  homedir?: string;
 }): ClaudeCodeRunnerConfig | null {
   const cwd = options?.cwd ?? process.cwd();
   const fromEnv = resolveClaudeCodeConfigFromEnv(options?.env);
   const fromFile = loadClaudeCodeConfigFromFile(cwd);
   const base = fromEnv ?? fromFile ?? null;
   if (!base) return null;
-  return base;
+  const home = options?.homedir ?? os.homedir();
+  const userConfig = loadUserConfig(home);
+  const merged: ClaudeCodeRunnerConfig = { ...base };
+  merged.allowDangerouslySkipPermissions =
+    base.allowDangerouslySkipPermissions === true || userConfig.claudeCode?.allowDangerouslySkipPermissions === true;
+  return merged;
 }

@@ -9,6 +9,21 @@ const DEFAULT_TIMEOUT_SECONDS = 120;
 const DEFAULT_MAX_TURNS_EXECUTE = 10;
 const DEFAULT_MAX_TURNS_PLAN = 1;
 
+/** Default execute-mode tool whitelist when permissionMode is dontAsk. Overridable via config.allowedTools. */
+const DEFAULT_EXECUTE_ALLOWED_TOOLS = [
+  "Read",
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "Glob",
+  "Grep",
+  "LS",
+  "Bash(git log *)",
+  "Bash(git diff *)",
+  "Bash(find *)",
+  "Bash(cat *)",
+];
+
 export interface ClaudeCodeRunnerConfig {
   mode: "plan" | "execute";
   cwd?: string;
@@ -17,6 +32,8 @@ export interface ClaudeCodeRunnerConfig {
   maxTurns?: number;
   timeoutSeconds?: number;
   outputFormat?: "text" | "json";
+  /** Opt-in bypass; only from user config or env, never from pipeline/profile. */
+  allowDangerouslySkipPermissions?: boolean;
 }
 
 function validateCwd(cwd: string): string {
@@ -43,6 +60,43 @@ function applyMaxTurnsCeiling(mode: "plan" | "execute", maxTurns: number): numbe
   return Math.min(maxTurns, ceiling);
 }
 
+type ExecuteOptionsResult = {
+  permissionMode: "dontAsk" | "bypassPermissions";
+  allowedTools?: string[];
+  disallowedTools: string[];
+  maxTurns: number;
+  bypassActive: boolean;
+};
+
+function buildExecuteOptions(
+  config: ClaudeCodeRunnerConfig,
+  resolvedCwd: string,
+  cwdExplicit: boolean,
+  maxTurns: number
+): ExecuteOptionsResult {
+  const bypassEligible =
+    config.allowDangerouslySkipPermissions === true &&
+    config.mode === "execute" &&
+    !!resolvedCwd &&
+    cwdExplicit;
+
+  if (bypassEligible) {
+    return {
+      permissionMode: "bypassPermissions",
+      disallowedTools: [...(config.disallowedTools ?? [])],
+      maxTurns,
+      bypassActive: true,
+    };
+  }
+  return {
+    permissionMode: "dontAsk",
+    allowedTools: config.allowedTools ?? DEFAULT_EXECUTE_ALLOWED_TOOLS,
+    disallowedTools: config.disallowedTools ?? [],
+    maxTurns,
+    bypassActive: false,
+  };
+}
+
 /**
  * Create an AgentRunner that invokes the Claude Code (Agent) SDK.
  * Use for nodes with runner: claude-code; supports plan (read-only) and execute modes.
@@ -60,6 +114,7 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
     const mode = params.mode ?? defaultMode;
     const rawCwd = params.cwd ?? defaultCwd ?? process.cwd();
     const cwd = validateCwd(rawCwd);
+    const cwdExplicit = params.cwd !== undefined || defaultCwd !== undefined;
 
     const maxTurns = applyMaxTurnsCeiling(mode, config.maxTurns ?? defaultMaxTurns);
     const timeoutMs =
@@ -89,32 +144,45 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
         ];
       }
 
-      const allowedTools =
-        mode === "plan"
-          ? config.allowedTools ?? [
-              "Read",
-              "Glob",
-              "Grep",
-              "LS",
-              "Bash(git log *)",
-              "Bash(git diff *)",
-              "Bash(find *)",
-              "Bash(cat *)",
-            ]
-          : config.allowedTools;
-      const disallowedTools =
-        mode === "plan"
-          ? [...(config.disallowedTools ?? []), "Write", "Edit", "MultiEdit"]
-          : config.disallowedTools;
+      let permissionMode: string;
+      let allowedTools: string[] | undefined;
+      let disallowedTools: string[];
+      let bypassActive = false;
+
+      if (mode === "plan") {
+        permissionMode = "plan";
+        allowedTools =
+          config.allowedTools ??
+          ["Read", "Glob", "Grep", "LS", "Bash(git log *)", "Bash(git diff *)", "Bash(find *)", "Bash(cat *)"];
+        disallowedTools = [...(config.disallowedTools ?? []), "Write", "Edit", "MultiEdit"];
+      } else {
+        const effectiveConfig = { ...config, mode: "execute" as const };
+        const execOpts = buildExecuteOptions(effectiveConfig, cwd, cwdExplicit, maxTurns);
+        permissionMode = execOpts.permissionMode;
+        allowedTools = execOpts.allowedTools;
+        disallowedTools = execOpts.disallowedTools;
+        bypassActive = execOpts.bypassActive;
+        if (config.allowDangerouslySkipPermissions === true && !bypassActive) {
+          const reason = !cwdExplicit ? "cwd not explicitly set (set cwd in config or params for bypass)" : "cwd invalid or missing";
+          process.stderr.write(
+            `⚠  Bypass not activated: ${reason}. Using default execute mode (dontAsk + allowedTools).\n`
+          );
+        }
+      }
+
+      if (bypassActive) {
+        process.stderr.write(
+          `⚠  Claude Code running with dangerously-skip-permissions enabled.\n   cwd: ${cwd}\n   Ensure this environment is isolated (container or VM) before proceeding.\n`
+        );
+      }
 
       const options: Record<string, unknown> = {
         cwd,
-        permissionMode: mode === "plan" ? "plan" : "acceptEdits",
-        allowDangerouslySkipPermissions: true,
+        permissionMode,
         maxTurns,
         abortController: controller,
-        ...(allowedTools !== undefined && { allowedTools }),
-        ...(disallowedTools !== undefined && disallowedTools.length > 0 && { disallowedTools }),
+        ...(allowedTools !== undefined && allowedTools.length > 0 && { allowedTools }),
+        ...(disallowedTools.length > 0 && { disallowedTools }),
         ...(Object.keys(hooks).length > 0 && { hooks }),
       };
 

@@ -105,6 +105,23 @@ edges:
 
 Ensure `run.inputs.repoPath` is set (e.g. from an input node or upstream artifact) and that Claude Code config (env or file) is present when running standalone.
 
+### Bypass permissions mode (advanced)
+
+By default, execute mode uses `permissionMode: "dontAsk"` with an explicit **allowedTools** whitelist and **disallowedTools** denylist. For fully autonomous headless execution in an isolated environment (e.g. a container or VM, or CI/CD), you can opt in to **bypass permissions** mode. In this mode the SDK does not prompt for tool approval and **allowedTools** is not enforced by the SDK (a known SDK behavior); **disallowedTools** is still applied as a last-resort constraint.
+
+**When it’s appropriate:** Only in isolated environments where the host is already scoped (container, VM, dedicated CI runner). Do **not** use bypass on a shared or personal machine.
+
+**How to enable (user-level only; not configurable from pipeline YAML or profiles):**
+
+- **User config:** In `~/.ripline/config.json`, set `"claudeCode": { "allowDangerouslySkipPermissions": true }`.
+- **Environment:** Set `RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS=true` (useful in CI/CD).
+
+**Activation rules:** Bypass is used only when **all** of the following are true: the flag is enabled (config or env), the node **mode** is `"execute"`, and **cwd** is explicitly set (in config or node params) and resolves to an existing directory. Otherwise the runner falls back to default execute mode (`dontAsk` + allowedTools) and logs why bypass was not activated.
+
+**What does not change:** Plan mode is never affected. `cwd` validation, `maxTurns` ceiling, timeout, and the PreToolUse hook behavior are unchanged. A **warning** is always printed to stderr when bypass is active; it cannot be suppressed.
+
+**Reference:** Claude Code’s own documentation for `--dangerously-skip-permissions` (or equivalent) describes the same capability at the CLI level.
+
 ## Context isolation (sessions)
 
 To avoid **context bleed** between agent nodes, the plugin uses OpenClaw’s native session model:

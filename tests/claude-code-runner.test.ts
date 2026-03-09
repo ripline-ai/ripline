@@ -124,7 +124,9 @@ describe("createClaudeCodeRunner", () => {
 
       expect(result.text).toBe("Execute reply");
       expect(result.tokenUsage).toEqual({ input: 20, output: 8 });
-      expect(vi.mocked(query).mock.calls[0][0].options?.permissionMode).toBe("acceptEdits");
+      expect(vi.mocked(query).mock.calls[0][0].options?.permissionMode).toBe("dontAsk");
+      expect(vi.mocked(query).mock.calls[0][0].options?.allowedTools).toBeDefined();
+      expect(Array.isArray(vi.mocked(query).mock.calls[0][0].options?.allowedTools)).toBe(true);
     });
 
     it("does not add PreToolUse deny hook", async () => {
@@ -242,7 +244,8 @@ describe("createClaudeCodeRunner", () => {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
     vi.mocked(query).mockImplementation(
       createMockQuery(async function* (opts) {
-        const signal = opts.options?.abortController as AbortSignal | undefined;
+        const controller = opts.options?.abortController as AbortController | undefined;
+        const signal = controller?.signal;
         if (signal) {
           await new Promise<void>((_, reject) => {
             if (signal.aborted) {
@@ -266,5 +269,144 @@ describe("createClaudeCodeRunner", () => {
     await expect(
       runner({ agentId: "default", prompt: "Hi", timeoutSeconds: 1 })
     ).rejects.toThrow(/timed out/);
+  });
+
+  describe("bypass mode", () => {
+    it("12. bypass activates when allowDangerouslySkipPermissions, mode execute, and valid explicit cwd are set", async () => {
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      vi.mocked(query).mockImplementation(
+        createMockQuery(async function* () {
+          yield { type: "result", subtype: "success", result: "ok", usage: {} };
+        })
+      );
+      const runner = createClaudeCodeRunner({
+        mode: "execute",
+        cwd: tmpDir,
+        allowDangerouslySkipPermissions: true,
+      });
+      await runner({ agentId: "default", prompt: "Hi" });
+      const opts = vi.mocked(query).mock.calls[0][0].options;
+      expect(opts?.permissionMode).toBe("bypassPermissions");
+      expect(opts?.allowedTools).toBeUndefined();
+    });
+
+    it("13. bypass does not activate when mode is plan even if allowDangerouslySkipPermissions is true", async () => {
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      vi.mocked(query).mockImplementation(
+        createMockQuery(async function* () {
+          yield { type: "result", subtype: "success", result: "ok", usage: {} };
+        })
+      );
+      const runner = createClaudeCodeRunner({
+        mode: "plan",
+        cwd: tmpDir,
+        allowDangerouslySkipPermissions: true,
+      });
+      await runner({ agentId: "default", prompt: "Hi" });
+      expect(vi.mocked(query).mock.calls[0][0].options?.permissionMode).toBe("plan");
+    });
+
+    it("14. bypass does not activate when cwd is not explicitly set even if allowDangerouslySkipPermissions is true", async () => {
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      vi.mocked(query).mockImplementation(
+        createMockQuery(async function* () {
+          yield { type: "result", subtype: "success", result: "ok", usage: {} };
+        })
+      );
+      const runner = createClaudeCodeRunner({
+        mode: "execute",
+        allowDangerouslySkipPermissions: true,
+      });
+      await runner({ agentId: "default", prompt: "Hi" });
+      expect(vi.mocked(query).mock.calls[0][0].options?.permissionMode).toBe("dontAsk");
+    });
+
+    it("15. warning log is emitted before SDK invocation when bypass is active", async () => {
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      vi.mocked(query).mockImplementation(
+        createMockQuery(async function* () {
+          yield { type: "result", subtype: "success", result: "ok", usage: {} };
+        })
+      );
+      const runner = createClaudeCodeRunner({
+        mode: "execute",
+        cwd: tmpDir,
+        allowDangerouslySkipPermissions: true,
+      });
+      await runner({ agentId: "default", prompt: "Hi" });
+      const bypassWarning = stderrSpy.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("dangerously-skip-permissions enabled")
+      );
+      expect(bypassWarning).toBeDefined();
+      stderrSpy.mockRestore();
+    });
+
+    it("16. warning log is not emitted in normal execute mode", async () => {
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      vi.mocked(query).mockImplementation(
+        createMockQuery(async function* () {
+          yield { type: "result", subtype: "success", result: "ok", usage: {} };
+        })
+      );
+      const runner = createClaudeCodeRunner({ mode: "execute", cwd: tmpDir });
+      await runner({ agentId: "default", prompt: "Hi" });
+      const bypassWarning = stderrSpy.mock.calls.find(
+        (call) => typeof call[0] === "string" && call[0].includes("dangerously-skip-permissions enabled")
+      );
+      expect(bypassWarning).toBeUndefined();
+      stderrSpy.mockRestore();
+    });
+
+    it("17. disallowedTools is passed through in bypass mode", async () => {
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      vi.mocked(query).mockImplementation(
+        createMockQuery(async function* () {
+          yield { type: "result", subtype: "success", result: "ok", usage: {} };
+        })
+      );
+      const runner = createClaudeCodeRunner({
+        mode: "execute",
+        cwd: tmpDir,
+        allowDangerouslySkipPermissions: true,
+        disallowedTools: ["CustomTool"],
+      });
+      await runner({ agentId: "default", prompt: "Hi" });
+      expect(vi.mocked(query).mock.calls[0][0].options?.disallowedTools).toEqual(["CustomTool"]);
+    });
+
+    it("18. allowedTools is not passed to SDK in bypass mode", async () => {
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      vi.mocked(query).mockImplementation(
+        createMockQuery(async function* () {
+          yield { type: "result", subtype: "success", result: "ok", usage: {} };
+        })
+      );
+      const runner = createClaudeCodeRunner({
+        mode: "execute",
+        cwd: tmpDir,
+        allowDangerouslySkipPermissions: true,
+        allowedTools: ["Read", "Write"],
+      });
+      await runner({ agentId: "default", prompt: "Hi" });
+      expect(vi.mocked(query).mock.calls[0][0].options?.allowedTools).toBeUndefined();
+    });
+
+    it("19. PreToolUse hook is not added in execute/bypass mode (hook still runs when SDK adds it)", async () => {
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      vi.mocked(query).mockImplementation(
+        createMockQuery(async function* (opts) {
+          expect(opts.options?.hooks?.PreToolUse).toBeUndefined();
+          yield { type: "result", subtype: "success", result: "ok", usage: {} };
+        })
+      );
+      const runner = createClaudeCodeRunner({
+        mode: "execute",
+        cwd: tmpDir,
+        allowDangerouslySkipPermissions: true,
+      });
+      await runner({ agentId: "default", prompt: "Hi" });
+    });
   });
 });
