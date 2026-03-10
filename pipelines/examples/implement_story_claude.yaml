@@ -1,0 +1,33 @@
+# Implement Story (Claude Code)
+# Runs standalone: uses runner: claude-code and cwd from run inputs (e.g. profile).
+# Invoked by spec_then_build_queue_claude when spawning implementation tasks.
+# Provide projectRoot via profile or --input so the agent runs in the right repo.
+id: implement_story_claude
+name: Implement Story (Claude Code)
+entry: [task_in]
+nodes:
+  - id: task_in
+    type: input
+
+  - id: implement
+    type: agent
+    runner: claude-code
+    mode: execute
+    cwd: "{{ run.inputs.projectRoot }}"
+    timeoutSeconds: 600
+    prompt: |
+      Implement the following development story in the project at the current working directory. Write the necessary code changes, then commit your work with a descriptive commit message referencing the story ID.
+
+      Story ID: {{task.id}}
+      Title: {{task.title}}
+
+      Details:
+      {{task.detail}}
+
+  - id: result
+    type: output
+    source: implement
+
+edges:
+  - { from: { node: task_in },   to: { node: implement } }
+  - { from: { node: implement }, to: { node: result } }

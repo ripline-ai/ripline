@@ -1,0 +1,161 @@
+# Write Tech Script (OpenClaw)
+# Runs inside OpenClaw: uses default agent runner and hardcoded scripts directory.
+# Input: idea (video concept/title), duration_minutes (target length).
+id: write_tech_script_openclaw
+name: Write Tech Script (OpenClaw)
+entry: [intake]
+nodes:
+  - id: intake
+    type: input
+    description: "idea: the video concept/title. duration_minutes: target length in minutes."
+
+  - id: tech_brief
+    type: agent
+    mode: execute
+    prompt: |
+      You are the technical expert briefing a scriptwriter for a YouTube video about:
+
+      Topic: {{idea}}
+
+      Write a thorough technical brief covering:
+      1. Core concepts and how they actually work (no fluff, real detail)
+      2. Key terminology the script should use correctly
+      3. Common misconceptions to avoid or address
+      4. Interesting technical nuances or surprising facts worth including
+      5. Any recent developments, benchmarks, or notable examples
+      6. What a technically literate audience would expect to learn
+
+      Be dense and accurate. The writer will use this as their source of truth.
+      Do NOT write a script — write a technical briefing document only.
+
+  - id: write
+    type: agent
+    mode: execute
+    timeoutSeconds: 300
+    prompt: |
+      Write a complete YouTube script package for Craig's AI tech channel.
+
+      Video idea: {{idea}}
+      Target length: {{duration_minutes}} minutes
+
+      A YouTube script at average speaking pace runs roughly 130-150 words per minute.
+      So for {{duration_minutes}} minutes, target approximately {{duration_minutes}} * 140 words.
+
+      Use the following technical brief from our CTO (Vector) as your source of truth.
+      All technical claims must be grounded in this brief:
+
+      --- TECHNICAL BRIEF ---
+      {{tech_brief.text}}
+      --- END BRIEF ---
+
+      ## Deliver all four of these:
+
+      ### 1. THUMBNAIL CONCEPT
+      One high-CTR thumbnail idea. Include:
+      - Visual composition (what's shown, layout)
+      - Text overlay (short, punchy — max 4 words)
+      - Emotional trigger (curiosity, shock, FOMO, etc.)
+      - Color/contrast notes
+      Think MrBeast meets tech. Bold. Clear. Clickable.
+
+      ### 2. TITLE OPTIONS
+      3 title variants optimized for CTR. Mix of curiosity, clarity, and search intent.
+
+      ### 3. HOOK (first 30 seconds — standalone section)
+      The most important part. This is what keeps people from clicking away.
+      - Open with a provocative statement, surprising fact, or compelling question — NOT "hey guys welcome back"
+      - Must directly pay off the thumbnail's promise
+      - Should create an itch the viewer needs scratched
+      - Ground it in a real technical detail from the brief — make it feel credible and surprising
+
+      ### 4. FULL SCRIPT
+      - HOOK (same as above, integrated)
+      - BODY (main content with [SECTION: Title] markers)
+      - OUTRO (CTA, subscribe, tease next video)
+      Include [speaker notes] for pacing, emphasis, b-roll, on-screen text.
+      Make technical content accessible without dumbing it down. Respect the audience's intelligence.
+      Sound natural when spoken. Short sentences. Punchy. No essay voice.
+
+  - id: fact_check
+    type: agent
+    mode: execute
+    timeoutSeconds: 300
+    prompt: |
+      Fact-check the following YouTube script against the technical brief provided.
+
+      --- TECHNICAL BRIEF ---
+      {{tech_brief.text}}
+      --- END BRIEF ---
+
+      --- SCRIPT TO FACT-CHECK ---
+      {{write.text}}
+      --- END SCRIPT ---
+
+      Review for:
+      1. Technical inaccuracies or oversimplifications that cross the line into wrong
+      2. Missing important caveats that could mislead viewers
+      3. Incorrect terminology
+      4. Claims not supported by the brief
+
+      For each issue found, output:
+      - [ISSUE] Quote the problematic line
+      - [PROBLEM] What's wrong
+      - [FIX] Suggested correction
+
+      If the script is technically sound, output: "FACT-CHECK PASSED — No material issues found."
+
+      Then output the corrected final script with all issues resolved.
+      Mark your corrections with <!-- CORRECTED --> inline comments so they're visible.
+
+  - id: save
+    type: agent
+    mode: execute
+    timeoutSeconds: 300
+    cwd: /home/openclaw/obsidian/Scripts
+    prompt: |
+      Save the following fact-checked script to disk.
+
+      Write the file to a markdown file in the current directory.
+      Filename: use the idea title below, replacing any colons or special characters with a dash, with a .md extension.
+      Idea title: {{idea}}
+
+      The file content must use this exact markdown format:
+      ---
+      title: "{{idea}}"
+      duration: {{duration_minutes}} minutes
+      type: tech
+      createdAt: <current ISO timestamp>
+      status: draft
+      fact-checked: true
+      ---
+
+      ## 🎨 Thumbnail Concept
+      <thumbnail section from the script below>
+
+      ## 📝 Title Options
+      <title options from the script below>
+
+      ## ⚡ Hook
+      <hook section from the script below>
+
+      ## 🔬 Fact-Check Notes
+      <any corrections flagged, or "FACT-CHECK PASSED" if clean>
+
+      ## 🎬 Full Script
+      <corrected full script>
+
+      Source content to format and save:
+      {{fact_check.text}}
+
+      After saving the file, output a one-line summary: title, word count, any fact-check issues corrected.
+
+  - id: result
+    type: output
+    source: save
+
+edges:
+  - { from: { node: intake },     to: { node: tech_brief } }
+  - { from: { node: tech_brief }, to: { node: write } }
+  - { from: { node: write },      to: { node: fact_check } }
+  - { from: { node: fact_check }, to: { node: save } }
+  - { from: { node: save },       to: { node: result } }

@@ -3,11 +3,11 @@ import path from "node:path";
 import type { AgentResult, AgentRunner } from "./pipeline/executors/agent.js";
 
 const PLAN_MODE_DENY_TOOLS = ["Write", "Edit", "MultiEdit"];
-const MAX_TURNS_CEILING_EXECUTE = 20;
-const MAX_TURNS_CEILING_PLAN = 3;
-const DEFAULT_TIMEOUT_SECONDS = 120;
-const DEFAULT_MAX_TURNS_EXECUTE = 10;
-const DEFAULT_MAX_TURNS_PLAN = 1;
+const MAX_TURNS_CEILING_EXECUTE = 200;
+const MAX_TURNS_CEILING_PLAN = 10;
+const DEFAULT_TIMEOUT_SECONDS = 300;
+const DEFAULT_MAX_TURNS_EXECUTE = 200;
+const DEFAULT_MAX_TURNS_PLAN = 3;
 
 /** Default execute-mode tool whitelist when permissionMode is dontAsk. Overridable via config.allowedTools. */
 const DEFAULT_EXECUTE_ALLOWED_TOOLS = [
@@ -18,6 +18,7 @@ const DEFAULT_EXECUTE_ALLOWED_TOOLS = [
   "Glob",
   "Grep",
   "LS",
+  "Bash(git *)",
   "Bash(git log *)",
   "Bash(git diff *)",
   "Bash(find *)",
@@ -127,16 +128,28 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
     const maxTurns = applyMaxTurnsCeiling(mode, config.maxTurns ?? defaultMaxTurnsForCall);
     const timeoutMs =
       (params.timeoutSeconds ?? defaultTimeout) * 1000;
+    const logErr = (msg: string): void => {
+      if (params.log) params.log.log("error", msg);
+      else console.error(msg);
+    };
+    if (process.env.RIPLINE_LOG_CONFIG === "1") {
+      logErr(
+        `[claude-code-runner] maxTurns=${maxTurns} timeoutMs=${timeoutMs} mode=${mode} cwd=${cwd}`
+      );
+    }
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+    const savedClaudeCode = process.env.CLAUDECODE;
+    delete process.env.CLAUDECODE;
     try {
-      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      try {
+        const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
-      const planModeDenyTools = new Set(PLAN_MODE_DENY_TOOLS);
-      const hooks: Record<string, Array<(input: unknown) => unknown>> = {};
-      if (mode === "plan") {
-        hooks.PreToolUse = [
+        const planModeDenyTools = new Set(PLAN_MODE_DENY_TOOLS);
+        const hooks: Record<string, Array<(input: unknown) => unknown>> = {};
+        if (mode === "plan") {
+          hooks.PreToolUse = [
           (input: unknown) => {
             const hookInput = input as { tool_name?: string };
             const toolName = hookInput?.tool_name;
@@ -149,120 +162,135 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
             }
             return undefined;
           },
-        ];
-      }
-
-      let permissionMode: string;
-      let allowedTools: string[] | undefined;
-      let disallowedTools: string[];
-      let bypassActive = false;
-
-      if (mode === "plan") {
-        permissionMode = "plan";
-        allowedTools =
-          config.allowedTools ??
-          ["Read", "Glob", "Grep", "LS", "Bash(git log *)", "Bash(git diff *)", "Bash(find *)", "Bash(cat *)"];
-        disallowedTools = [...(config.disallowedTools ?? []), "Write", "Edit", "MultiEdit"];
-      } else {
-        const nodeRequestsBypass = params.dangerouslySkipPermissions === true;
-        const effectiveConfig = { ...config, mode: "execute" as const };
-        const execOpts = buildExecuteOptions(effectiveConfig, cwd, cwdExplicit, maxTurns, nodeRequestsBypass);
-        permissionMode = execOpts.permissionMode;
-        allowedTools = execOpts.allowedTools;
-        disallowedTools = execOpts.disallowedTools;
-        bypassActive = execOpts.bypassActive;
-        if (config.allowDangerouslySkipPermissions === true && !bypassActive) {
-          const reason = !nodeRequestsBypass
-            ? "node does not set dangerouslySkipPermissions: true"
-            : !cwdExplicit
-              ? "cwd not explicitly set (set cwd in config or params for bypass)"
-              : "cwd invalid or missing";
-          process.stderr.write(
-            `⚠  Bypass not activated: ${reason}. Using default execute mode (dontAsk + allowedTools).\n`
-          );
+          ];
         }
-      }
 
-      if (bypassActive) {
-        process.stderr.write(
-          `⚠  Claude Code running with dangerously-skip-permissions enabled.\n   cwd: ${cwd}\n   Ensure this environment is isolated (container or VM) before proceeding.\n`
-        );
-      }
+        let permissionMode: string;
+        let allowedTools: string[] | undefined;
+        let disallowedTools: string[];
+        let bypassActive = false;
 
-      const options: Record<string, unknown> = {
-        cwd,
-        permissionMode,
-        maxTurns,
-        abortController: controller,
-        ...(allowedTools !== undefined && allowedTools.length > 0 && { allowedTools }),
-        ...(disallowedTools.length > 0 && { disallowedTools }),
-        ...(Object.keys(hooks).length > 0 && { hooks }),
-        ...(model !== undefined && { model }),
-      };
-
-      const q = query({
-        prompt: params.prompt,
-        options,
-      });
-
-      let resultText: string | undefined;
-      let usage: { input?: number; output?: number } | undefined;
-
-      for await (const message of q) {
-        const m = message as { type?: string; subtype?: string; result?: string; usage?: unknown };
-        if (m.type === "result") {
-          clearTimeout(timeoutId);
-          if (m.subtype === "success" && typeof m.result === "string") {
-            resultText = m.result;
-            const u = m.usage as
-              | { input_tokens?: number; output_tokens?: number }
-              | { input?: number; output?: number }
-              | undefined;
-            if (u && typeof u === "object") {
-              const inputTokens =
-                typeof (u as { input_tokens?: number }).input_tokens === "number"
-                  ? (u as { input_tokens: number }).input_tokens
-                  : (u as { input?: number }).input;
-              const outputTokens =
-                typeof (u as { output_tokens?: number }).output_tokens === "number"
-                  ? (u as { output_tokens: number }).output_tokens
-                  : (u as { output?: number }).output;
-              if (typeof inputTokens === "number" || typeof outputTokens === "number") {
-                usage = {};
-                if (typeof inputTokens === "number") usage.input = inputTokens;
-                if (typeof outputTokens === "number") usage.output = outputTokens;
-              }
-            }
-          } else if (m.subtype !== "success") {
-            const errMsg =
-              (m as { errors?: string[] }).errors?.join("; ") ?? "Claude Code query did not succeed";
-            throw new Error(`Claude Code runner: ${errMsg}`);
+        if (mode === "plan") {
+          permissionMode = "plan";
+          allowedTools =
+            config.allowedTools ??
+            ["Read", "Glob", "Grep", "LS", "Bash(git log *)", "Bash(git diff *)", "Bash(find *)", "Bash(cat *)"];
+          disallowedTools = [...(config.disallowedTools ?? []), "Write", "Edit", "MultiEdit"];
+        } else {
+          const nodeRequestsBypass = params.dangerouslySkipPermissions === true;
+          const effectiveConfig = { ...config, mode: "execute" as const };
+          const execOpts = buildExecuteOptions(effectiveConfig, cwd, cwdExplicit, maxTurns, nodeRequestsBypass);
+          permissionMode = execOpts.permissionMode;
+          allowedTools = execOpts.allowedTools;
+          disallowedTools = execOpts.disallowedTools;
+          bypassActive = execOpts.bypassActive;
+          if (config.allowDangerouslySkipPermissions === true && !bypassActive) {
+            const reason = !nodeRequestsBypass
+              ? "node does not set dangerouslySkipPermissions: true"
+              : !cwdExplicit
+                ? "cwd not explicitly set (set cwd in config or params for bypass)"
+                : "cwd invalid or missing";
+            process.stderr.write(
+              `⚠  Bypass not activated: ${reason}. Using default execute mode (dontAsk + allowedTools).\n`
+            );
           }
-          break;
         }
-      }
 
-      q.close?.();
-
-      if (resultText === undefined) {
-        throw new Error("Claude Code runner: no result message received");
-      }
-
-      if (outputFormat === "json") {
-        try {
-          JSON.parse(resultText);
-        } catch {
-          throw new Error(
-            `Claude Code runner: outputFormat is "json" but response was not valid JSON: ${resultText.slice(0, 200)}`
+        if (bypassActive) {
+          process.stderr.write(
+            `⚠  Claude Code running with dangerously-skip-permissions enabled.\n   cwd: ${cwd}\n   Ensure this environment is isolated (container or VM) before proceeding.\n`
           );
         }
-      }
 
-      const agentResult: AgentResult = { text: resultText };
-      if (usage && (usage.input !== undefined || usage.output !== undefined)) {
-        agentResult.tokenUsage = usage;
+        const options: Record<string, unknown> = {
+          cwd,
+          permissionMode,
+          maxTurns,
+          abortController: controller,
+          ...(allowedTools !== undefined && allowedTools.length > 0 && { allowedTools }),
+          ...(disallowedTools.length > 0 && { disallowedTools }),
+          ...(Object.keys(hooks).length > 0 && { hooks }),
+          ...(model !== undefined && { model }),
+        };
+
+        const q = query({
+          prompt: params.prompt,
+          options,
+        });
+
+        let resultText: string | undefined;
+        let usage: { input?: number; output?: number } | undefined;
+
+        for await (const message of q) {
+          const m = message as { type?: string; subtype?: string; result?: string; usage?: unknown; errors?: string[] };
+          logErr(
+            `[claude-code-runner] message: type=${m.type ?? "n/a"} subtype=${m.subtype ?? "n/a"}`
+          );
+          if (m.type === "result") {
+            clearTimeout(timeoutId);
+            logErr(
+              `[claude-code-runner] result message: ${JSON.stringify(m, null, 2).slice(0, 2000)}`
+            );
+            if (m.subtype === "success" && typeof m.result === "string") {
+              resultText = m.result;
+              const u = m.usage as
+                | { input_tokens?: number; output_tokens?: number }
+                | { input?: number; output?: number }
+                | undefined;
+              if (u && typeof u === "object") {
+                const inputTokens =
+                  typeof (u as { input_tokens?: number }).input_tokens === "number"
+                    ? (u as { input_tokens: number }).input_tokens
+                    : (u as { input?: number }).input;
+                const outputTokens =
+                  typeof (u as { output_tokens?: number }).output_tokens === "number"
+                    ? (u as { output_tokens: number }).output_tokens
+                    : (u as { output?: number }).output;
+                if (typeof inputTokens === "number" || typeof outputTokens === "number") {
+                  usage = {};
+                  if (typeof inputTokens === "number") usage.input = inputTokens;
+                  if (typeof outputTokens === "number") usage.output = outputTokens;
+                }
+              }
+            } else if (m.subtype !== "success") {
+              const errors = (m as { errors?: string[] }).errors;
+              const errDetail = [
+                `subtype=${m.subtype ?? "unknown"}`,
+                `errors=${JSON.stringify(errors ?? [])}`,
+                `result=${typeof m.result === "string" ? m.result.slice(0, 500) : String(m.result ?? "")}`,
+              ].join(", ");
+              logErr(`[claude-code-runner] FAILED: ${errDetail}`);
+              throw new Error(`Claude Code runner: ${errDetail}`);
+            }
+            break;
+          }
+        }
+
+        q.close?.();
+
+        if (resultText === undefined) {
+          throw new Error("Claude Code runner: no result message received");
+        }
+
+        if (outputFormat === "json") {
+          try {
+            JSON.parse(resultText);
+          } catch {
+            throw new Error(
+              `Claude Code runner: outputFormat is "json" but response was not valid JSON: ${resultText.slice(0, 200)}`
+            );
+          }
+        }
+
+        const agentResult: AgentResult = { text: resultText };
+        if (usage && (usage.input !== undefined || usage.output !== undefined)) {
+          agentResult.tokenUsage = usage;
+        }
+        return agentResult;
+      } finally {
+        if (savedClaudeCode !== undefined) process.env.CLAUDECODE = savedClaudeCode;
+        else delete process.env.CLAUDECODE;
       }
-      return agentResult;
     } catch (err) {
       clearTimeout(timeoutId);
       if (err instanceof Error) {

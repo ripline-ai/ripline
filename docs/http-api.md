@@ -169,6 +169,42 @@ curl -X POST http://localhost:4001/runs/550e8400-e29b-41d4-a716-446655440000/ret
 - `409` — run is not in `errored` or `paused` state
 - `400` — `fromNode` does not exist in the pipeline
 
+### Get run logs
+
+```http
+GET /runs/:runId/logs
+```
+
+Returns the log output for a run. Logs are written to `<runsDir>/<runId>/log.txt` during execution (Claude Code runner messages, node progress, etc.). By default the response is plain text. Use `?format=json` to get `{ "lines": string[] }`.
+
+**Example (plain text):**
+```bash
+curl http://localhost:4001/runs/550e8400-e29b-41d4-a716-446655440000/logs
+```
+
+**Example (JSON lines):**
+```bash
+curl "http://localhost:4001/runs/550e8400-e29b-41d4-a716-446655440000/logs?format=json"
+```
+
+**Responses:**
+- `200` — Log content (plain or JSON)
+- `404` — Run not found or no logs yet for this run
+
+### Stream run logs (SSE)
+
+```http
+GET /runs/:runId/logs/stream
+Accept: text/event-stream
+```
+
+Server-Sent Events stream of new log lines. The server polls the run log file and sends new content as it is written, until the run is `completed` or `errored`. Each event is `data: {"lines":"<new chunk>"}\n\n`.
+
+**Example:**
+```bash
+curl -N http://localhost:4001/runs/550e8400-e29b-41d4-a716-446655440000/logs/stream
+```
+
 ## Plugin config
 
 In `openclaw.plugin.json` (or the host config), you can set:
@@ -181,6 +217,6 @@ In `openclaw.plugin.json` (or the host config), you can set:
 | `httpPort` | Port for the HTTP server when started by the plugin (default: `4001`). |
 | `authToken` | Optional bearer token; if set, all requests must send `Authorization: Bearer <token>`. |
 
-**Run artifacts and cleanup:** All run-store traffic (create, load, save, list) uses `runsDir`. Runs are not auto-deleted; for long-lived or high-volume use, run a cleanup/rotation job (e.g. prune by run age or status using the run JSON files).
+**Run artifacts and cleanup:** All run-store traffic (create, load, save, list) uses `runsDir`. Each run directory contains `run.json` (state) and optionally `log.txt` (run-scoped logs). Runs are not auto-deleted; for long-lived or high-volume use, run a cleanup/rotation job (e.g. prune by run age or status using the run JSON files).
 
 To start the server programmatically, use the plugin’s `createApp(config)` or `startServer(config)` (see package exports).

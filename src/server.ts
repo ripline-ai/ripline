@@ -1,4 +1,5 @@
 import path from "node:path";
+import { promises as fs } from "node:fs";
 import Fastify, {
   type FastifyInstance,
   type FastifyRequest,
@@ -11,6 +12,7 @@ import { PipelineRegistry } from "./registry.js";
 import { PipelineRunStore } from "./run-store.js";
 import { createRunQueue } from "./run-queue.js";
 import { createScheduler } from "./scheduler.js";
+import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
 
@@ -102,10 +104,12 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           const runId = await queue.enqueue(request.params.id, inputs);
           return reply.status(202).send({ runId });
         }
+        const runLog = createLogger({ sink: createRunScopedFileSink(runsDir) });
         const runner = new DeterministicRunner(entry.definition, {
           store,
           runsDir,
           quiet: true,
+          log: runLog,
           agentRunner,
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
         });
@@ -188,10 +192,12 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           return reply.status(404).send({ error: "Not Found", message: `Pipeline ${record.pipelineId} not found` });
         }
 
+        const retryLog = createLogger({ sink: createRunScopedFileSink(runsDir) });
         const tempRunner = new DeterministicRunner(entry.definition, {
           store,
           runsDir,
           quiet: true,
+          log: retryLog,
           agentRunner,
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
         });
@@ -245,10 +251,12 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
 
         if (!scheduler) {
           // No scheduler — run inline in background using resumeRunId path
+          const resumeLog = createLogger({ sink: createRunScopedFileSink(runsDir) });
           const inlineRunner = new DeterministicRunner(entry.definition, {
             store,
             runsDir,
             quiet: true,
+            log: resumeLog,
             agentRunner,
             ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
           });
@@ -332,6 +340,108 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       }, SSE_POLL_MS);
       request.raw.on("close", () => clearInterval(interval));
       send(record);
+    },
+  });
+
+  /** GET /runs/:runId/logs - run log file (plain text or JSON lines) */
+  fastify.get<{ Params: { runId: string }; Querystring: { format?: string } }>(
+    "/runs/:runId/logs",
+    {
+      preHandler: requireAuth,
+      handler: async (request, reply) => {
+        let record: PipelineRunRecord | null;
+        try {
+          record = await loadRunWithRetry(request.params.runId);
+        } catch (err) {
+          return reply.status(500).send({
+            error: "Internal Server Error",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+        if (!record) {
+          return reply.status(404).send({ error: "Not Found", message: `Run ${request.params.runId} not found` });
+        }
+        const logPath = path.join(runsDir, request.params.runId, LOG_FILE_NAME);
+        try {
+          const content = await fs.readFile(logPath, "utf8");
+          const format = (request.query as { format?: string }).format;
+          if (format === "json") {
+            const lines = content.split("\n").filter((line) => line.length > 0);
+            return reply.send({ lines });
+          }
+          return reply.type("text/plain").send(content);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+            return reply.status(404).send({
+              error: "Not Found",
+              message: `No logs yet for run ${request.params.runId}`,
+            });
+          }
+          return reply.status(500).send({
+            error: "Internal Server Error",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      },
+    }
+  );
+
+  /** GET /runs/:runId/logs/stream - SSE stream of new log lines (polls log file) */
+  fastify.get<{ Params: { runId: string } }>("/runs/:runId/logs/stream", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      let record: PipelineRunRecord | null;
+      try {
+        record = await loadRunWithRetry(request.params.runId);
+      } catch (err) {
+        return reply.status(500).send({
+          error: "Internal Server Error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (!record) {
+        return reply.status(404).send({ error: "Not Found", message: `Run ${request.params.runId} not found` });
+      }
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      const logPath = path.join(runsDir, request.params.runId, LOG_FILE_NAME);
+      let lastSize = 0;
+      const LOG_POLL_MS = 500;
+      const interval = setInterval(async () => {
+        try {
+          const stat = await fs.stat(logPath);
+          if (stat.size > lastSize) {
+            const f = await fs.open(logPath, "r");
+            const buf = Buffer.alloc(stat.size - lastSize);
+            await f.read(buf, 0, buf.length, lastSize);
+            f.close();
+            lastSize = stat.size;
+            const chunk = buf.toString("utf8");
+            if (chunk.length > 0) {
+              reply.raw.write(`data: ${JSON.stringify({ lines: chunk })}\n\n`);
+            }
+          }
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") {
+            clearInterval(interval);
+            reply.raw.end();
+          }
+        }
+        try {
+          const current = await loadRunWithRetry(request.params.runId);
+          if (current?.status === "completed" || current?.status === "errored") {
+            clearInterval(interval);
+            reply.raw.end();
+          }
+        } catch {
+          clearInterval(interval);
+          reply.raw.end();
+        }
+      }, LOG_POLL_MS);
+      request.raw.on("close", () => clearInterval(interval));
     },
   });
 

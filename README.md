@@ -85,6 +85,24 @@ Outputs are written to `.ripline/runs/<runId>/run.json` and, if you pass `-o <pa
 
 ---
 
+## Logging
+
+When using the **Claude Code runner** (`runner: claude-code`), the runner logs to stderr (and to `<runsDir>/<runId>/log.txt` when running a stored run):
+
+- **Stream messages** — Each Claude Agent SDK message is logged with `type` and `subtype` so you can see turns (system/init → assistant → user → …) in real time.
+- **Result dump** — On `type=result`, the full message is logged (truncated to 2000 chars).
+- **Failure detail** — On non-success (e.g. `error_max_turns`), the runner logs `subtype`, `errors`, and a result snippet before throwing.
+- **Config at startup** — Set **`RIPLINE_LOG_CONFIG=1`** to log `maxTurns`, `timeoutMs`, `mode`, and `cwd` once per invocation.
+
+**Viewing logs:**
+
+- **CLI:** `ripline logs <runId>` prints the run’s log file; `ripline logs <runId> --follow` polls and streams new lines until the run completes. Use `--api-url http://localhost:4001` to fetch from the HTTP server instead of the local runs dir.
+- **HTTP API:** `GET /runs/:runId/logs` returns log content (plain text or `?format=json`); `GET /runs/:runId/logs/stream` streams new lines via SSE. See [HTTP API](docs/http-api.md#get-run-logs).
+
+Run-scoped logs are written to `<runsDir>/<runId>/log.txt` whenever a run is executed with a file-based run store (e.g. scheduler, server, or CLI with default runs dir).
+
+---
+
 ## Quickstart
 
 1. **Clone and install**
@@ -225,7 +243,7 @@ The repo includes [.github/workflows/ripline-demo.yml](.github/workflows/ripline
 
 **Advanced example: product-engineering loop**
 
-Ripline can coordinate a multi-stage product flow: area-owner signals → breakdown → design spec → engineering plan → implementation queue. Each agent sees only the slice relevant to its step. See the YAML in [pipelines/examples/ripline-area-owner.yaml](pipelines/examples/ripline-area-owner.yaml) and [docs/templates/ripline-area-owner.md](docs/templates/ripline-area-owner.md).
+Ripline can coordinate a multi-stage product flow: area-owner signals → breakdown → design spec → engineering plan → implementation queue. Each agent sees only the slice relevant to its step. See the YAML in [pipelines/examples/ripline-area-owner.yaml](pipelines/examples/ripline-area-owner.yaml) and [docs/templates/ripline-area-owner.md](docs/templates/ripline-area-owner.md). For simpler copy-paste examples (Implement Story, Spec→Build→Queue, Write Tech Script) in both OpenClaw and Claude Code variants, see [pipelines/examples/](pipelines/examples/README.md) and [docs/pipelines/example-pipelines.md](docs/pipelines/example-pipelines.md).
 
 ---
 

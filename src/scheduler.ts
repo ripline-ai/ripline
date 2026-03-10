@@ -1,6 +1,9 @@
+import path from "node:path";
 import type { RunStore } from "./run-store.js";
 import type { RunQueue } from "./run-queue.js";
 import type { PipelineRegistryEntry } from "./types.js";
+import { createLogger } from "./log.js";
+import { createRunScopedFileSink } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
 
@@ -59,10 +62,20 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
           await store.failRun(record, `Pipeline not found: ${record.pipelineId}`);
           continue;
         }
+        const storeWithRunDir = store as { runDir?: (id: string) => string };
+        const runsDir =
+          typeof storeWithRunDir.runDir === "function"
+            ? path.dirname(storeWithRunDir.runDir(record.id))
+            : undefined;
+        const log =
+          runsDir !== undefined
+            ? createLogger({ sink: createRunScopedFileSink(runsDir) })
+            : undefined;
         const runner = new DeterministicRunner(entry.definition, {
           store,
           queue,
           quiet: true,
+          ...(log !== undefined && { log }),
           ...(agentRunner && { agentRunner }),
           ...(claudeCodeRunner && { claudeCodeRunner }),
         });
@@ -85,10 +98,19 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
             if (allCompleted) {
               const parentEntry = await registry.get(parent.pipelineId);
               if (parentEntry) {
+                const parentRunsDir =
+                  typeof storeWithRunDir.runDir === "function"
+                    ? path.dirname(storeWithRunDir.runDir(parent.id))
+                    : undefined;
+                const parentLog =
+                  parentRunsDir !== undefined
+                    ? createLogger({ sink: createRunScopedFileSink(parentRunsDir) })
+                    : undefined;
                 const parentRunner = new DeterministicRunner(parentEntry.definition, {
                   store,
                   queue,
                   quiet: true,
+                  ...(parentLog !== undefined && { log: parentLog }),
                   ...(agentRunner && { agentRunner }),
                   ...(claudeCodeRunner && { claudeCodeRunner }),
                 });
