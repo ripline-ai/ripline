@@ -20,7 +20,7 @@
     "check": "tsc --noEmit",
     "clean": "rm -rf dist",
     "test": "vitest run",
-    "demo": "npm run build && node dist/cli/run.js --demo",
+    "demo": "npm run build && node dist/cli/run.js run --demo",
     "demo:area-owner": "npx tsx scripts/run-area-owner-demo.ts",
     "cron:area-owner": "npx tsx scripts/run-area-owner-cron.ts"
   },
