@@ -173,7 +173,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         status === "pending" || status === "running" || status === "completed" || status === "errored" || status === "paused"
           ? (status as "pending" | "running" | "completed" | "errored" | "paused")
           : undefined;
-      let runs = await store.list({ status: statusOption });
+      let runs = await store.list(statusOption !== undefined ? { status: statusOption } : {});
       if (pipelineId !== undefined && pipelineId !== "") {
         runs = runs.filter((r) => r.pipelineId === pipelineId);
       }
