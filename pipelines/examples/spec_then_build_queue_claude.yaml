@@ -46,9 +46,13 @@ nodes:
     tasksSource: parse
     mode: per-item
 
+  - id: collect
+    type: collect_children
+    description: "Gather child run results (and partial failures) for downstream verification"
+
   - id: result
     type: output
-    source: spawn
+    source: collect
 
 edges:
   - { from: { node: intake },    to: { node: spec } }
@@ -56,4 +60,5 @@ edges:
   - { from: { node: decompose }, to: { node: queue } }
   - { from: { node: queue },     to: { node: parse } }
   - { from: { node: parse },     to: { node: spawn } }
-  - { from: { node: spawn },     to: { node: result } }
+  - { from: { node: spawn },     to: { node: collect } }
+  - { from: { node: collect },   to: { node: result } }

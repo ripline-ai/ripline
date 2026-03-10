@@ -364,6 +364,40 @@ Queues one or more child pipeline runs for asynchronous processing. Used for fan
 
 ---
 
+### `collect_children`
+
+Loads the current run's child run records (from a prior `enqueue` node) from the store and writes an artifact with per-child status, outputs, and error. Used immediately after the parent is resumed so downstream nodes (e.g. a verification agent) can see all child results and handle partial failures.
+
+The parent run is resumed by the scheduler when **all** children are in a terminal state (`completed` or `errored`). This node runs in the parent run after resume and aggregates those results.
+
+```yaml
+- id: collect
+  type: collect_children
+```
+
+**Convention:** Giving this node `id: collect` is recommended so downstream prompts can reliably reference `artifacts.collect.childResults` and `artifacts.collect.summary` without per-pipeline naming.
+
+#### Artifact shape
+
+The node writes an artifact (under its own `id`) with:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `childResults` | array | One entry per child run. Each entry has `id`, `taskId` (if per-item enqueue), `status` (`"completed"` \| `"errored"`), and when applicable `outputs` (completed) or `error` (errored). |
+| `summary` | object | `{ completed: number, errored: number, total: number }` for quick sanity checks in prompts. |
+
+Failed child runs appear with `status: "errored"` and `error` set, so the next node can decide whether to proceed or flag.
+
+#### When to use
+
+Place `collect_children` as the first node after the `enqueue` node in the graph. Connect it to your verification or aggregation node (e.g. an agent that runs build/tests and reasons over `artifacts.collect.childResults` and `artifacts.collect.summary`).
+
+#### Requirements
+
+Requires `runId` and `store` in executor context (i.e. the run must be a stored run, as when using the queue/scheduler). If the run has no `childRunIds`, the node writes an empty `childResults` array and zero counts in `summary` instead of failing.
+
+---
+
 ### `checkpoint`
 
 Pauses the run for manual inspection or external approval. The run status becomes `paused`; execution resumes via `ripline run --resume <runId>` or the HTTP retry endpoint.

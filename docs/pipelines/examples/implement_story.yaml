@@ -1,0 +1,33 @@
+# Implement Story (child pipeline)
+# Invoked per-task by spec_then_build_queue. Uses Haiku for fast, focused implementation.
+# Input: task (object with id, title, detail). Set projectRoot via profile or run inputs.
+id: implement_story
+name: Implement Story
+entry: [task_in]
+nodes:
+  - id: task_in
+    type: input
+
+  - id: implement
+    type: agent
+    runner: claude-code
+    mode: execute
+    model: claude-haiku-4-5
+    cwd: "{{ run.inputs.projectRoot }}"
+    timeoutSeconds: 600
+    prompt: |
+      Implement the following development story in the project at the current working directory. Write the necessary code changes, then commit your work with a descriptive commit message referencing the story ID. Do not run type-checking or tests — just write the code and commit.
+
+      Story ID: {{task.id}}
+      Title: {{task.title}}
+
+      Details:
+      {{task.detail}}
+
+  - id: result
+    type: output
+    source: implement
+
+edges:
+  - { from: { node: task_in },   to: { node: implement } }
+  - { from: { node: implement }, to: { node: result } }
