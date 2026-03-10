@@ -143,7 +143,7 @@ ripline serve --port 8080 --pipelines-dir ./my-pipelines
 ripline serve --agent-provider openai --agent-model gpt-4o-mini
 ```
 
-See [HTTP API reference](http-api.md) for the available endpoints.
+See [HTTP API reference](http-api) for the available endpoints.
 
 ---
 
@@ -229,7 +229,7 @@ The following environment variables are read by the CLI and affect its behavior.
 | `RIPLINE_CLAUDE_CODE_CWD` | Default working directory for the Claude Code runner. |
 | `RIPLINE_CLAUDE_CODE_MAX_TURNS` | Maximum turns for Claude Code sessions. |
 | `RIPLINE_CLAUDE_CODE_TIMEOUT` | Timeout in seconds for Claude Code sessions. |
-| `RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS` | Set to `true` to enable bypass permissions mode globally (see [Agent integration](agent-integration.md#bypass-permissions-mode-advanced)). |
+| `RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS` | Set to `true` to enable bypass permissions mode globally (see [Agent integration](agent-integration#bypass-permissions-mode-advanced)). |
 | `RIPLINE_INPUTS` | Path to a JSON inputs file (used by helper scripts, e.g. cron). |
 | `RIPLINE_OUT` | Output path for run artifacts (used by helper scripts). |
 

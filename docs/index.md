@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: "Ripline"
-  text: "Graph-native pipeline engine"
-  tagline: "Describe multi-agent workflows as typed DAGs. Run them, trace every step, and reroute in real time."
+  text: "Run multi-step workflows with agents and scripts"
+  tagline: "Define your steps in YAML, run them, and see every step. When something fails or you need to change the flow, pick up from where it stopped or edit and rerun—no starting over."
   actions:
     - theme: brand
       text: Get Started
@@ -15,21 +15,21 @@ hero:
 
 features:
   - icon: 🔗
-    title: Graph DSL
-    details: Declare multi-agent workflows as typed DAGs in YAML or JSON. Loops, sub-pipelines, fan-out, and conditional edges built in.
+    title: Workflows as a graph
+    details: Each step is a node—agent prompts, scripts, API calls, approvals. Connect them in YAML or JSON with branches, loops, and conditions.
   - icon: ⚡
-    title: Hot Reload
-    details: Edit a pipeline YAML file and the next run picks up the change automatically — no restarts, no redeploys.
+    title: Edit and go
+    details: Change a pipeline file and the next run uses the new version. No redeploy or restart.
   - icon: 🤖
-    title: Agent-First
-    details: OpenClaw, Ollama, OpenAI, Anthropic, and Claude Code are all first-class runners. Mix and match per node.
+    title: Any agent you use
+    details: OpenClaw, Ollama, OpenAI, Anthropic, Claude Code. Choose the runner per step and mix them in one pipeline.
   - icon: 🔍
-    title: Fully Traceable
-    details: Every run stores a complete log — nodes, payloads, durations, retries. Resume any failed run from the exact node that errored.
+    title: See what ran
+    details: Every run is logged—which node ran, what went in and out, how long it took. Resume from the exact step that failed.
   - icon: 🔌
-    title: Open Surface
-    details: CLI for local testing, HTTP API for automation and dashboards, and a plugin hook for OpenClaw. Use what fits.
+    title: CLI, API, or plugin
+    details: Run from the terminal, call the HTTP API from a dashboard or cron, or plug into OpenClaw. Same pipelines everywhere.
   - icon: 📋
-    title: Type-Checked Contracts
-    details: Per-node JSON Schema contracts are validated at runtime. No silent data mismatches between nodes.
+    title: Schemas per step
+    details: Define what each step expects and produces. Ripline checks it at runtime so steps don’t get the wrong data.
 ---

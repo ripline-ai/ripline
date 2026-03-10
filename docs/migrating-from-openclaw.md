@@ -76,7 +76,7 @@ So: keep `agentId` in the YAML for compatibility; outside OpenClaw it effectivel
 
 ## Bypass permissions and isolation
 
-If you use Ripline’s **bypass permissions** mode (see [Agent integration](agent-integration.md#bypass-permissions-mode-advanced)), note that it does **not** provide the same isolation as OpenClaw’s built-in sandboxing. Use a container or VM when you need isolated execution with bypass enabled.
+If you use Ripline’s **bypass permissions** mode (see [Agent integration](agent-integration#bypass-permissions-mode-advanced)), note that it does **not** provide the same isolation as OpenClaw’s built-in sandboxing. Use a container or VM when you need isolated execution with bypass enabled.
 
 ## What stays compatible
 

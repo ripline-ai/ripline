@@ -1,0 +1,108 @@
+/* Hero-only: fixed video so it stays put while the page scrolls over it */
+.hero-video-wrap {
+  position: absolute;
+  inset: 0;
+  min-height: 100vh;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.hero-video-wrap .hero-bg-video {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+
+/* Translucent overlay so text stays readable (Abyss #031326 from brand) */
+.hero-video-wrap .hero-video-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(3, 19, 38, 0.65);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Keep all home content (hero text, features, extra sections) above the fixed video/overlay */
+.VPHome {
+  position: relative;
+  z-index: 1;
+}
+
+/* Hero container: relative so the absolute video wrap is contained */
+.VPHome .VPHero {
+  position: relative;
+  background: transparent;
+}
+
+.VPHome .VPHero .container {
+  position: relative;
+  z-index: 1;
+}
+
+/* Slight text shadow for extra legibility over the pipes */
+.VPHome .VPHero .name,
+.VPHome .VPHero .text,
+.VPHome .VPHero .tagline,
+.VPHome .VPHero .actions {
+  text-shadow: 0 0 20px rgba(0, 0, 0, 0.4);
+}
+
+/* Content band below hero: one surface (brand Abyss) */
+.VPHome .VPFeatures,
+.VPHome .home-extra {
+  --ripline-abyss: #031326;
+  --ripline-rip: #0B5AA3;
+  --ripline-seafoam: #2DD2C8;
+  --ripline-mist: #B8CAD6;
+}
+
+.VPHome .VPFeatures {
+  padding: 4rem 24px 2rem;
+  background: var(--ripline-abyss);
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Feature cards on home: dark band so they match the content below */
+.VPHome .VPFeatures .container,
+.VPHome .VPFeatures [class*="container"] {
+  max-width: 1152px;
+  margin: 0 auto;
+}
+
+.VPHome .VPFeatures a,
+.VPHome .VPFeatures h2,
+.VPHome .VPFeatures p {
+  color: var(--ripline-mist) !important;
+}
+
+.VPHome .VPFeatures h2 {
+  color: #fff !important;
+  font-weight: 600;
+}
+
+.VPHome .VPFeatures .vp-doc a:hover {
+  color: var(--ripline-seafoam) !important;
+}
+
+/* Feature item cards: subtle border on dark */
+.VPHome .VPFeatures [class*="item"],
+.VPHome .VPFeatures [class*="Item"] {
+  background: rgba(11, 90, 163, 0.08) !important;
+  border: 1px solid rgba(184, 202, 214, 0.15) !important;
+  border-radius: 10px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.VPHome .VPFeatures [class*="item"]:hover,
+.VPHome .VPFeatures [class*="Item"]:hover {
+  border-color: rgba(45, 210, 200, 0.35) !important;
+  background: rgba(45, 210, 200, 0.06) !important;
+}
