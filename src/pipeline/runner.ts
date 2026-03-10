@@ -301,9 +301,9 @@ export class DeterministicRunner extends EventEmitter {
         try {
           const executorContext = this.getExecutorContext(node, context, record);
           const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner } = {};
-            if (this.runnerOptions.agentRunner !== undefined) execOptions.agentRunner = this.runnerOptions.agentRunner;
-            if (this.runnerOptions.claudeCodeRunner !== undefined) execOptions.claudeCodeRunner = this.runnerOptions.claudeCodeRunner;
-            nodeResult = await executeNode(
+          if (this.runnerOptions.agentRunner !== undefined) execOptions.agentRunner = this.runnerOptions.agentRunner;
+          if (this.runnerOptions.claudeCodeRunner !== undefined) execOptions.claudeCodeRunner = this.runnerOptions.claudeCodeRunner;
+          nodeResult = await executeNode(
               node,
               executorContext,
               Object.keys(execOptions).length > 0 ? execOptions : undefined
