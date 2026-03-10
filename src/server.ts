@@ -7,7 +7,7 @@ import Fastify, {
 } from "fastify";
 import cors from "@fastify/cors";
 import type { PipelinePluginConfig } from "./types.js";
-import type { PipelineRunRecord, PipelineRunStatus } from "./types.js";
+import type { PipelineRunRecord } from "./types.js";
 import { PipelineRegistry } from "./registry.js";
 import { PipelineRunStore } from "./run-store.js";
 import { createRunQueue } from "./run-queue.js";
@@ -73,42 +73,6 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       await reply.status(401).send({ error: "Unauthorized", message: "Missing or invalid Authorization" });
     }
   }
-
-  /** GET /runs - list runs, optional ?pipelineId= and ?status= filters */
-  fastify.get<{ Querystring: { pipelineId?: string; status?: string; limit?: string } }>(
-    "/runs",
-    {
-      preHandler: requireAuth,
-      handler: async (request, reply) => {
-        const { pipelineId, status, limit } = request.query as {
-          pipelineId?: string;
-          status?: string;
-          limit?: string;
-        };
-        let runs = await store.list(
-          status ? { status: status as PipelineRunStatus } : undefined
-        );
-        if (pipelineId) {
-          runs = runs.filter((r) => r.pipelineId === pipelineId);
-        }
-        if (limit) {
-          const n = parseInt(limit, 10);
-          if (!isNaN(n) && n > 0) runs = runs.slice(0, n);
-        }
-        const summaries = runs.map((r) => ({
-          id: r.id,
-          pipelineId: r.pipelineId,
-          status: r.status,
-          startedAt: r.startedAt,
-          updatedAt: r.updatedAt,
-          ...(r.parentRunId !== undefined && { parentRunId: r.parentRunId }),
-          ...(r.taskId !== undefined && { taskId: r.taskId }),
-          ...(r.error !== undefined && { error: r.error }),
-        }));
-        return reply.send({ runs: summaries });
-      },
-    }
-  );
 
   /** GET /pipelines/:id - single pipeline definition */
   fastify.get<{ Params: { id: string } }>("/pipelines/:id", {
