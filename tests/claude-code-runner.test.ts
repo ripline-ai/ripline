@@ -176,6 +176,21 @@ describe("createClaudeCodeRunner", () => {
     ).rejects.toThrow(/must not contain/);
   });
 
+  it("accepts cwd whose path has .. in a segment name (e.g. my..dir)", async () => {
+    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    vi.mocked(query).mockImplementation(
+      createMockQuery(async function* () {
+        yield { type: "result", subtype: "success", result: "ok", usage: {} };
+      })
+    );
+    const dirWithDots = path.join(tmpDir, "my..dir");
+    await fs.promises.mkdir(dirWithDots, { recursive: true });
+    const runner = createClaudeCodeRunner({ mode: "execute", cwd: tmpDir });
+    await expect(
+      runner({ agentId: "default", prompt: "Hi", cwd: dirWithDots })
+    ).resolves.toBeDefined();
+  });
+
   it("outputFormat json parses valid JSON response", async () => {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
     vi.mocked(query).mockImplementation(
@@ -238,6 +253,20 @@ describe("createClaudeCodeRunner", () => {
     });
     await runner({ agentId: "default", prompt: "Hi" });
     expect(vi.mocked(query).mock.calls[0][0].options?.maxTurns).toBe(20);
+  });
+
+  it("maxTurns default is derived from effective mode (params.mode overrides config.mode)", async () => {
+    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    vi.mocked(query).mockImplementation(
+      createMockQuery(async function* (opts) {
+        yield { type: "result", subtype: "success", result: "ok", usage: {} };
+      })
+    );
+    // Config is execute (default maxTurns would be 10); call overrides to plan.
+    const runner = createClaudeCodeRunner({ mode: "execute", cwd: tmpDir });
+    await runner({ agentId: "default", prompt: "Hi", mode: "plan" });
+    // Effective mode is plan, so default maxTurns should be 1 (DEFAULT_MAX_TURNS_PLAN), not 3.
+    expect(vi.mocked(query).mock.calls[0][0].options?.maxTurns).toBe(1);
   });
 
   it("timeout triggers AbortController and rejects with timeout error", async () => {

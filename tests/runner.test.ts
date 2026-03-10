@@ -336,7 +336,7 @@ describe("DeterministicRunner", () => {
       const store = new MemoryRunStore();
       const runner = new DeterministicRunner(def, { store });
 
-      await expect(runner.run({ inputs: {} })).rejects.toThrow(/Output contract validation failed|b/);
+      await expect(runner.run({ inputs: {} })).rejects.toThrow(/Output contract validation failed for node "b"/);
       const runs = await store.list({});
       const failedRun = runs.find((r) => r.pipelineId === "contract-invalid" && r.status === "errored");
       expect(failedRun?.status).toBe("errored");

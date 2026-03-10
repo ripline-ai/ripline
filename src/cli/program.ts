@@ -384,7 +384,9 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       }
       const editor = process.env.EDITOR ?? process.env.VISUAL;
       if (editor) {
-        spawn(editor, [filePath], { stdio: "inherit" });
+        // Use shell so EDITOR values with args (e.g. "code --wait", "vim -p") work
+        const cmd = `${editor} ${JSON.stringify(filePath)}`;
+        spawn(cmd, { stdio: "inherit", shell: true });
       } else {
         console.log(chalk.gray("No $EDITOR set. Profile created at: " + filePath));
       }

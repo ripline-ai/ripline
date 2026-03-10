@@ -37,8 +37,11 @@ export interface ClaudeCodeRunnerConfig {
 }
 
 function validateCwd(cwd: string): string {
-  if (cwd.includes("..")) {
-    throw new Error(`Claude Code runner: cwd must not contain ".." (got: ${cwd})`);
+  const segments = cwd.split(path.sep).filter(Boolean);
+  if (segments.some((seg) => seg === "..")) {
+    throw new Error(
+      `Claude Code runner: cwd must not contain parent directory reference ".." (got: ${cwd})`
+    );
   }
   const resolved = path.resolve(cwd);
   try {
@@ -106,9 +109,6 @@ function buildExecuteOptions(
 export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRunner {
   const defaultMode = config.mode;
   const defaultCwd = config.cwd;
-  const defaultMaxTurns =
-    config.maxTurns ??
-    (defaultMode === "plan" ? DEFAULT_MAX_TURNS_PLAN : DEFAULT_MAX_TURNS_EXECUTE);
   const defaultTimeout = config.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
   const outputFormat = config.outputFormat ?? "text";
 
@@ -118,7 +118,9 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
     const cwd = validateCwd(rawCwd);
     const cwdExplicit = params.cwd !== undefined || defaultCwd !== undefined;
 
-    const maxTurns = applyMaxTurnsCeiling(mode, config.maxTurns ?? defaultMaxTurns);
+    const defaultMaxTurnsForCall =
+      mode === "plan" ? DEFAULT_MAX_TURNS_PLAN : DEFAULT_MAX_TURNS_EXECUTE;
+    const maxTurns = applyMaxTurnsCeiling(mode, config.maxTurns ?? defaultMaxTurnsForCall);
     const timeoutMs =
       (params.timeoutSeconds ?? defaultTimeout) * 1000;
     const controller = new AbortController();
