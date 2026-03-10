@@ -71,7 +71,7 @@ When running **standalone** (not inside OpenClaw), you can configure the **Claud
 **`cwd` injection**
 
 - Each node can set **`cwd`** (optional). It supports template interpolation (e.g. `{{ run.inputs.repoPath }}`). The runner resolves it and validates: the path must be an existing directory and must not contain `..`. Use this to run different nodes in different project roots (e.g. one node per repo).
-- When using **profiles**, you can supply paths via profile inputs and reference them in `cwd`, e.g. `cwd: "{{ run.inputs.projectRoot }}"`. See [Pipelines and profiles](pipelines-and-profiles.md).
+- When using **profiles**, you can supply paths via profile inputs and reference them in `cwd`, e.g. `cwd: "{{ run.inputs.projectRoot }}"`. See [Pipelines and profiles](pipelines-and-profiles).
 
 **Configuration**
 
@@ -128,7 +128,7 @@ The Claude Code runner writes diagnostic logs to stderr (and, when running a sto
 3. **Rich error detail on failure** — On non-success (e.g. `error_max_turns`), the runner logs `subtype`, `errors`, and a result snippet, then throws with that detail.
 4. **Config at startup** — Set **`RIPLINE_LOG_CONFIG=1`** to log the effective config once per invocation: `maxTurns`, `timeoutMs`, `mode`, `cwd`. Omit or leave unset to keep startup quiet.
 
-To view logs for a run: use **`ripline logs <runId>`** (or **`ripline logs <runId> --follow`** to stream), or **`GET /runs/:runId/logs`** / **`GET /runs/:runId/logs/stream`** via the HTTP API. See [Logging](https://github.com/craigjmidwinter/ripline/blob/main/README.md#logging) and [HTTP API – run logs](http-api.md#get-run-logs).
+To view logs for a run: use **`ripline logs <runId>`** (or **`ripline logs <runId> --follow`** to stream), or **`GET /runs/:runId/logs`** / **`GET /runs/:runId/logs/stream`** via the HTTP API. See [Logging](https://github.com/craigjmidwinter/ripline/blob/main/README.md#logging) and [HTTP API – run logs](http-api#get-run-logs).
 
 **Activation rules:** Bypass is used only when **all** of the following are true: the global flag is enabled (config or env), the **node** sets `dangerouslySkipPermissions: true`, the node **mode** is `"execute"`, and **cwd** is explicitly set (in config or node params) and resolves to an existing directory. Otherwise the runner falls back to default execute mode and logs why bypass was not activated.
 

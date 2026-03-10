@@ -8,5 +8,5 @@
 
 | Module | Description |
 | ------ | ------ |
-| [index](index-1.md) | - |
-| [types](types.md) | - |
+| [index](index-1) | - |
+| [types](types) | - |

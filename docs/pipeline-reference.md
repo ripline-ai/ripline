@@ -215,11 +215,11 @@ Calls an agent runner (OpenClaw, LLM, or Claude Code) with a prompt and returns 
 | `runner` | `"claude-code"` | — | Route this node to the Claude Code runner. If `claudeCodeRunner` is not configured, the run fails with a clear error. |
 | `mode` | `"plan"` \| `"execute"` | — | Claude Code runner only. `"plan"` = read-only (PreToolUse hook denies writes). `"execute"` = full access (default). |
 | `cwd` | string | — | Claude Code runner only. Working directory; supports `{{ }}` interpolation. Must resolve to an existing directory. Must not contain `..`. |
-| `dangerouslySkipPermissions` | boolean | — | Claude Code runner only. When `true` and global bypass is enabled, the node runs with `--dangerously-skip-permissions`. Omit or `false` = use `dontAsk` mode. See [Agent integration](agent-integration.md#bypass-permissions-mode-advanced). |
+| `dangerouslySkipPermissions` | boolean | — | Claude Code runner only. When `true` and global bypass is enabled, the node runs with `--dangerously-skip-permissions`. Omit or `false` = use `dontAsk` mode. See [Agent integration](agent-integration#bypass-permissions-mode-advanced). |
 
 **Output:** `{ text: string, tokenUsage?: { input: number, output: number } }` stored as the node's artifact.
 
-See [Agent integration](agent-integration.md) for full runner selection rules and configuration.
+See [Agent integration](agent-integration) for full runner selection rules and configuration.
 
 ---
 

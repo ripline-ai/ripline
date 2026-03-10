@@ -11,7 +11,7 @@ Route a feature request (e.g., "Mission Control nav overhaul") through the exact
 
 ## How mission-control pipelines call agents
 
-When the pipeline plugin runs inside OpenClaw, every **agent** node delegates to the platform via `openclaw agent --json` (see [Agent integration](agent-integration.md)). So design runs, builder runs, and any agent step use the configured models, tools, and sandbox. For local dev without OpenClaw, the HTTP server and CLI use a stub runner unless overridden.
+When the pipeline plugin runs inside OpenClaw, every **agent** node delegates to the platform via `openclaw agent --json` (see [Agent integration](agent-integration)). So design runs, builder runs, and any agent step use the configured models, tools, and sandbox. For local dev without OpenClaw, the HTTP server and CLI use a stub runner unless overridden.
 
 ## Automation Hooks
 - **Pipeline DSL node types** we will need:

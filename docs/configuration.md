@@ -38,7 +38,7 @@ Optional. Applied globally for the current user.
 | `pipelineDir` | string | `~/.ripline/pipelines` | Default directory to search for pipeline YAML/JSON files. Supports `~` expansion. |
 | `profileDir` | string | `~/.ripline/profiles` | Default directory to search for profile YAML files. Supports `~` expansion. |
 | `defaultProfile` | string \| null | `null` | Profile name applied to every run unless `--profile` or `--no-profile` is passed. |
-| `claudeCode.allowDangerouslySkipPermissions` | boolean | `false` | **User-level gate** for the bypass permissions feature in the Claude Code runner. Must be `true` here (or via the env var) for any node with `dangerouslySkipPermissions: true` to use bypass mode. See [Agent integration](agent-integration.md#bypass-permissions-mode-advanced). |
+| `claudeCode.allowDangerouslySkipPermissions` | boolean | `false` | **User-level gate** for the bypass permissions feature in the Claude Code runner. Must be `true` here (or via the env var) for any node with `dangerouslySkipPermissions: true` to use bypass mode. See [Agent integration](agent-integration#bypass-permissions-mode-advanced). |
 
 ---
 

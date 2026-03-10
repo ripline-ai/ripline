@@ -13,7 +13,7 @@ The `pipelines/examples/` directory includes **three pipeline patterns**, each i
 - **OpenClaw** variants are intended to run **inside an OpenClaw host**. They use the default agent runner (no `runner: claude-code`) and may use hardcoded paths (e.g. `/home/openclaw/wintermute`, `/home/openclaw/obsidian/Scripts`). Use these when Ripline is loaded as a plugin in OpenClaw.
 - **Claude Code** variants run **standalone** (e.g. `ripline run` or `ripline serve`). They set `runner: claude-code` on agent nodes and use **parameterized paths** via `run.inputs` (e.g. `cwd: "{{ run.inputs.projectRoot }}"`). Supply those inputs with a [profile](../pipelines-and-profiles) or `--input`.
 
-See [Migrating pipelines from OpenClaw](../migrating-from-openclaw.md) for how to move from hardcoded paths to profile-driven inputs.
+See [Migrating pipelines from OpenClaw](../migrating-from-openclaw) for how to move from hardcoded paths to profile-driven inputs.
 
 ---
 

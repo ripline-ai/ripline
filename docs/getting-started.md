@@ -62,10 +62,10 @@ Outputs are written to `.ripline/runs/<runId>/run.json` and, if you pass `-o <pa
 
 | Topic | Guide |
 |-------|-------|
-| Learn the pipeline YAML format | [Pipeline Reference](/pipeline-reference) |
-| Explore all CLI commands and flags | [CLI Reference](/cli-reference) |
-| Set up config files and env vars | [Configuration](/configuration) |
-| Connect an AI model or agent runner | [Agent Integration](/agent-integration) |
-| Set up profiles for different projects | [Pipelines & Profiles](/pipelines-and-profiles) |
-| Run pipelines on a schedule | [Automation & Cron](/automation-cron) |
-| Trigger and inspect runs over HTTP | [HTTP API](/http-api) |
+| Learn the pipeline YAML format | [Pipeline Reference](pipeline-reference) |
+| Explore all CLI commands and flags | [CLI Reference](cli-reference) |
+| Set up config files and env vars | [Configuration](configuration) |
+| Connect an AI model or agent runner | [Agent Integration](agent-integration) |
+| Set up profiles for different projects | [Pipelines & Profiles](pipelines-and-profiles) |
+| Run pipelines on a schedule | [Automation & Cron](automation-cron) |
+| Trigger and inspect runs over HTTP | [HTTP API](http-api) |

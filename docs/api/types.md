@@ -1,8 +1,8 @@
-[**Ripline API Reference v0.1.0**](index.md)
+[**Ripline API Reference v0.1.0**](index)
 
 ***
 
-[Ripline API Reference](index.md) / types
+[Ripline API Reference](index) / types
 
 # types
 
