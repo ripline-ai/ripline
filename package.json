@@ -22,7 +22,12 @@
     "test": "vitest run",
     "demo": "npm run build && node dist/cli/run.js run --demo",
     "demo:area-owner": "npx tsx scripts/run-area-owner-demo.ts",
-    "cron:area-owner": "npx tsx scripts/run-area-owner-cron.ts"
+    "cron:area-owner": "npx tsx scripts/run-area-owner-cron.ts",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
+    "docs:api": "typedoc",
+    "docs:build:all": "npm run docs:api && npm run docs:build"
   },
   "keywords": [
     "openclaw",
@@ -50,7 +55,10 @@
   "devDependencies": {
     "@types/json-schema": "^7.0.15",
     "@types/node": "^22.19.15",
+    "typedoc": "^0.28.17",
+    "typedoc-plugin-markdown": "^4.10.0",
     "typescript": "^5.7.3",
+    "vitepress": "^1.6.4",
     "vitest": "^4.0.18"
   },
   "openclaw": {

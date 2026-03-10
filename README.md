@@ -229,6 +229,21 @@ Ripline can coordinate a multi-stage product flow: area-owner signals → breakd
 
 ---
 
+## Documentation
+
+| Guide | Contents |
+| --- | --- |
+| [Pipeline reference](docs/pipeline-reference.md) | All node types, fields, edges, contracts, and template syntax |
+| [CLI reference](docs/cli-reference.md) | All commands, flags, and environment variables |
+| [Configuration reference](docs/configuration.md) | All config files, env vars, plugin config, and precedence rules |
+| [HTTP API](docs/http-api.md) | REST endpoints for triggering and inspecting runs |
+| [Pipelines and profiles](docs/pipelines-and-profiles.md) | Pipeline directory, profile system, and user config |
+| [Agent integration](docs/agent-integration.md) | OpenClaw, LLM, and Claude Code runner configuration |
+| [Automation and cron](docs/automation-cron.md) | Cron jobs, CI, and messaging integrations |
+| [Migrating from OpenClaw](docs/migrating-from-openclaw.md) | Parameterising hardcoded paths and profiles |
+
+---
+
 ## Developing pipelines
 
 | Workflow | What to do |
