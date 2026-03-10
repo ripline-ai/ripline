@@ -85,10 +85,12 @@ export function createLogger(options: CreateLoggerOptions = {}): Logger {
       log(level, message, meta, defaultRunId, defaultNodeId);
     },
     child(context: LoggerContext): Logger {
+      const runId = context.runId ?? defaultRunId;
+      const nodeId = context.nodeId ?? defaultNodeId;
       return createLogger({
         ...options,
-        runId: context.runId ?? defaultRunId,
-        nodeId: context.nodeId ?? defaultNodeId,
+        ...(runId !== undefined && { runId }),
+        ...(nodeId !== undefined && { nodeId }),
       });
     },
   };
