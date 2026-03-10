@@ -150,6 +150,7 @@ export function resolveStandaloneLlmAgentConfig(options?: {
 
 const ENV_CLAUDE_CODE_MODE = "RIPLINE_CLAUDE_CODE_MODE";
 const ENV_CLAUDE_CODE_CWD = "RIPLINE_CLAUDE_CODE_CWD";
+const ENV_CLAUDE_CODE_MODEL = "RIPLINE_CLAUDE_CODE_MODEL";
 const ENV_CLAUDE_CODE_MAX_TURNS = "RIPLINE_CLAUDE_CODE_MAX_TURNS";
 const ENV_CLAUDE_CODE_TIMEOUT = "RIPLINE_CLAUDE_CODE_TIMEOUT";
 const ENV_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS = "RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS";
@@ -175,6 +176,7 @@ export function normalizeClaudeCodeConfigFromPlugin(raw: unknown): ClaudeCodeRun
 
   const config: ClaudeCodeRunnerConfig = { mode };
   if (typeof b.cwd === "string" && b.cwd.trim()) config.cwd = b.cwd.trim();
+  if (typeof b.model === "string" && b.model.trim()) config.model = b.model.trim();
   if (Array.isArray(b.allowedTools)) config.allowedTools = b.allowedTools.filter((t): t is string => typeof t === "string");
   if (Array.isArray(b.disallowedTools)) config.disallowedTools = b.disallowedTools.filter((t): t is string => typeof t === "string");
   if (typeof b.maxTurns === "number" && b.maxTurns > 0) config.maxTurns = b.maxTurns;
@@ -196,6 +198,8 @@ export function resolveClaudeCodeConfigFromEnv(
   const config: ClaudeCodeRunnerConfig = { mode };
   const cwd = getEnv(env, ENV_CLAUDE_CODE_CWD);
   if (cwd) config.cwd = cwd;
+  const model = getEnv(env, ENV_CLAUDE_CODE_MODEL);
+  if (model) config.model = model;
   if (getEnv(env, ENV_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS) === "true") {
     config.allowDangerouslySkipPermissions = true;
   }

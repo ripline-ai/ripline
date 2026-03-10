@@ -27,6 +27,8 @@ const DEFAULT_EXECUTE_ALLOWED_TOOLS = [
 export interface ClaudeCodeRunnerConfig {
   mode: "plan" | "execute";
   cwd?: string;
+  /** Default model for nodes that do not set model (e.g. claude-sonnet-4-6). */
+  model?: string;
   allowedTools?: string[];
   disallowedTools?: string[];
   maxTurns?: number;
@@ -117,6 +119,8 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
     const rawCwd = params.cwd ?? defaultCwd ?? process.cwd();
     const cwd = validateCwd(rawCwd);
     const cwdExplicit = params.cwd !== undefined || defaultCwd !== undefined;
+    const modelRaw = params.model ?? config.model;
+    const model = typeof modelRaw === "string" && modelRaw.trim() !== "" ? modelRaw.trim() : undefined;
 
     const defaultMaxTurnsForCall =
       mode === "plan" ? DEFAULT_MAX_TURNS_PLAN : DEFAULT_MAX_TURNS_EXECUTE;
@@ -193,6 +197,7 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
         ...(allowedTools !== undefined && allowedTools.length > 0 && { allowedTools }),
         ...(disallowedTools.length > 0 && { disallowedTools }),
         ...(Object.keys(hooks).length > 0 && { hooks }),
+        ...(model !== undefined && { model }),
       };
 
       const q = query({

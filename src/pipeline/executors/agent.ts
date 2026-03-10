@@ -24,6 +24,8 @@ export type AgentRunner = (params: {
   cwd?: string;
   /** When runner is claude-code: allow bypass for this node when global bypass is enabled. Omit/false = dontAsk. */
   dangerouslySkipPermissions?: boolean;
+  /** When runner is claude-code: model to use (e.g. claude-sonnet-4-6). Omit to use config or CLI default. */
+  model?: string;
 }) => Promise<AgentResult>;
 
 const interpolationContext = (context: ExecutorContext) => ({
@@ -64,6 +66,7 @@ export async function executeAgent(
     ...(node.mode !== undefined && { mode: node.mode }),
     ...(resolvedCwd !== undefined && { cwd: resolvedCwd }),
     ...(node.dangerouslySkipPermissions !== undefined && { dangerouslySkipPermissions: node.dangerouslySkipPermissions }),
+    ...(node.model !== undefined && node.model.trim() !== "" && { model: node.model.trim() }),
   });
 
   const value = {

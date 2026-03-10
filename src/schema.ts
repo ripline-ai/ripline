@@ -57,6 +57,8 @@ const agentNode = baseNode.extend({
   mode: z.enum(["plan", "execute"]).optional(),
   cwd: z.string().optional(),
   dangerouslySkipPermissions: z.boolean().optional(),
+  /** When runner is claude-code: model to use (e.g. claude-sonnet-4-6). Omit to use config or CLI default. */
+  model: z.string().min(1).optional(),
 });
 
 const runPipelineNode = baseNode.extend({

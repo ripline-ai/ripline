@@ -75,8 +75,8 @@ When running **standalone** (not inside OpenClaw), you can configure the **Claud
 
 **Configuration**
 
-- **Environment:** `RIPLINE_CLAUDE_CODE_MODE` (plan | execute), `RIPLINE_CLAUDE_CODE_CWD`, `RIPLINE_CLAUDE_CODE_MAX_TURNS`, `RIPLINE_CLAUDE_CODE_TIMEOUT` (seconds).
-- **Config file:** In `.ripline/agent.json` or `ripline.config.json`, use a top-level **`claudeCode`** key: `{ "claudeCode": { "mode": "execute", "cwd": "/path/to/project", "maxTurns": 10, "timeoutSeconds": 120 } }`.
+- **Environment:** `RIPLINE_CLAUDE_CODE_MODE` (plan | execute), `RIPLINE_CLAUDE_CODE_CWD`, `RIPLINE_CLAUDE_CODE_MODEL` (default model, e.g. `claude-sonnet-4-6`), `RIPLINE_CLAUDE_CODE_MAX_TURNS`, `RIPLINE_CLAUDE_CODE_TIMEOUT` (seconds).
+- **Config file:** In `.ripline/agent.json` or `ripline.config.json`, use a top-level **`claudeCode`** key: `{ "claudeCode": { "mode": "execute", "cwd": "/path/to/project", "model": "claude-sonnet-4-6", "maxTurns": 10, "timeoutSeconds": 120 } }`. The optional **`model`** sets the default for all Claude Code nodes; per-node **`model`** overrides it.
 - **Plugin config:** When the plugin runs without OpenClaw, you can set `pluginConfig.claudeCode` with the same shape.
 
 **Important:** When the pipeline runs **inside OpenClaw**, `claudeCodeRunner` is **not** set. Agent nodes with `runner: "claude-code"` will fail with “claude-code runner required”. Use the default runner (OpenClaw) for those environments.
@@ -164,5 +164,6 @@ Any non-zero exit code or invalid JSON is surfaced as an error; the run record i
 - **`sessionId`** (optional, on node): Reserved for future use (e.g. explicit “use this session” override). Run-level session is set by the runner; nodes with `resetSession: false` receive it via execution context.
 - **`runner`** (optional): Set to `"claude-code"` to use the Claude Code runner for this node when configured; otherwise the default runner (OpenClaw > LLM > stub) is used.
 - **`mode`** (optional, when `runner: "claude-code"`): `"plan"` (read-only) or `"execute"` (default). Ignored for other runners.
+- **`model`** (optional, when `runner: "claude-code"`): Model to use for this node (e.g. `claude-sonnet-4-6`, `claude-opus-4-6`). Overrides the default from config or CLI. Omit to use the default.
 - **`cwd`** (optional, when `runner: "claude-code"`): Working directory for the Claude Code run; supports template interpolation (e.g. `{{ run.inputs.repoPath }}`). Must be an existing directory and must not contain `..`. Ignored for other runners.
 - **`dangerouslySkipPermissions`** (optional, when `runner: "claude-code"`): Set to `true` to allow bypass permissions for this node when global bypass is enabled (`~/.ripline/config.json` or `RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS=true`). Omit or `false` = use default execute mode (`dontAsk` + allowedTools) for this node. Safer to enable only on specific nodes that need full autonomy.
