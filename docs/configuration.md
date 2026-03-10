@@ -139,7 +139,7 @@ When Ripline is loaded as an OpenClaw plugin, these fields are set in the host's
 
 ```jsonc
 {
-  "id": "pipeline-orchestrator",
+  "id": "ripline",
   "from": "./path/to/ripline/openclaw.plugin.json",
   "config": {
     "pipelinesDir": "./pipelines",        // required

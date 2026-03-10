@@ -108,7 +108,7 @@ Run-scoped logs are written to `<runsDir>/<runId>/log.txt` whenever a run is exe
 1. **Clone and install**
 
    ```bash
-   git clone https://github.com/craigjmidwinter/openclaw-pipeline-plugin ripline
+   git clone https://github.com/craigjmidwinter/ripline
    cd ripline
    npm install
    ```
@@ -138,7 +138,7 @@ Run-scoped logs are written to `<runsDir>/<runId>/log.txt` whenever a run is exe
 
    ```jsonc
    {
-     "id": "pipeline-orchestrator",
+     "id": "ripline",
      "from": "./path/to/ripline/openclaw.plugin.json",
      "config": {
        "pipelinesDir": "./pipelines",
@@ -162,7 +162,7 @@ Use the following prompt so an assistant (OpenClaw or Claude Code) can install a
 ```
 Install and configure the Ripline pipeline plugin for OpenClaw.
 
-1. Install: npm install @vector/openclaw-pipeline-plugin (or add the plugin from the repo path if not published).
+1. Install: npm install ripline (or add the plugin from the repo path if not published).
 
 2. Config: Ensure the plugin is loaded with at least:
    - pipelinesDir: path to a directory containing pipeline YAML/JSON (e.g. "./pipelines")
@@ -190,7 +190,7 @@ Run Ripline from cron, CI, or any automation without cloning the repo.
 ### npx
 
 ```bash
-npx @vector/openclaw-pipeline-plugin run -p pipelines/examples/hello-world.yaml -i samples/hello-world-inputs.json
+npx ripline run -p pipelines/examples/hello-world.yaml -i samples/hello-world-inputs.json
 ```
 
 If the package is installed globally or as a dependency, the `ripline` bin is available:
@@ -204,13 +204,13 @@ ripline run -p <path> [-i <inputs>] [-o <out>]
 For the optional area-owner workflow and backlog summary:
 
 ```bash
-npx @vector/openclaw-pipeline-plugin run -p pipelines/templates/ripline-area-owner.yaml -i samples/ripline-area-owner-inputs.json
+npx ripline run -p pipelines/templates/ripline-area-owner.yaml -i samples/ripline-area-owner-inputs.json
 ```
 
 Daily cron example (area-owner, email summary):
 
 ```bash
-0 13 * * * cd /path/to/openclaw-pipeline-plugin && npm run build && node bin/ripline.js run -p pipelines/templates/ripline-area-owner.yaml -i samples/ripline-area-owner-inputs.json -o dist/backlog-cron.json 2>&1 | mail -s "Ripline backlog" you@example.com
+0 13 * * * cd /path/to/ripline && npm run build && node bin/ripline.js run -p pipelines/templates/ripline-area-owner.yaml -i samples/ripline-area-owner-inputs.json -o dist/backlog-cron.json 2>&1 | mail -s "Ripline backlog" you@example.com
 ```
 
 Or use the helper script:

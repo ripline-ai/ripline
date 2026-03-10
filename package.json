@@ -1,7 +1,9 @@
 {
-  "name": "@vector/openclaw-pipeline-plugin",
+  "name": "ripline",
   "version": "0.1.0",
-  "description": "Pipeline orchestration plugin for OpenClaw with graph DSL, loops, recursion, and agent delegation",
+  "description": "Ripline: graph-native pipeline engine with graph DSL, loops, recursion, and agent delegation",
+  "repository": "https://github.com/craigjmidwinter/ripline",
+  "homepage": "https://craigjmidwinter.github.io/ripline/",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -30,10 +32,11 @@
     "docs:build:all": "npm run docs:api && npm run docs:build"
   },
   "keywords": [
-    "openclaw",
+    "ripline",
     "pipeline",
     "workflow",
     "agent",
+    "openclaw",
     "plugin"
   ],
   "author": "Craig Midwinter",
