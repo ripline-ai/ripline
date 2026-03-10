@@ -6,6 +6,9 @@ export default defineConfig({
   description:
     "Graph-native pipeline engine for orchestrating multi-agent workflows.",
 
+  // Set base to match the GitHub Pages subdirectory path
+  base: "/ripline/",
+
   // Escape {{ }} in inline code so Vue doesn't treat it as a template expression
   markdown: {
     config: (md: MarkdownIt) => {
