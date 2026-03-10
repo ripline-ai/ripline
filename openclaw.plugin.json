@@ -1,7 +1,7 @@
 {
-  "id": "pipeline-orchestrator",
-  "name": "Pipeline Orchestrator",
-  "description": "Graph-based workflow engine and tools for OpenClaw",
+  "id": "ripline",
+  "name": "Ripline",
+  "description": "Ripline: graph-based pipeline engine for OpenClaw",
   "version": "0.1.0",
   "configSchema": {
     "type": "object",

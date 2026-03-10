@@ -200,11 +200,11 @@ Defined in: [index.ts:82](https://github.com/craigjmidwinter/ripline/blob/4cab02
 
 ##### id
 
-> **id**: `string` = `"pipeline-orchestrator"`
+> **id**: `string` = `"ripline"`
 
 ##### name
 
-> **name**: `string` = `"Pipeline Orchestrator"`
+> **name**: `string` = `"Ripline"`
 
 ##### register()
 

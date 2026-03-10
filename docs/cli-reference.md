@@ -12,9 +12,9 @@ npm install
 npm run build
 
 # Global / npx (when published)
-npm install -g @vector/openclaw-pipeline-plugin
+npm install -g ripline
 # or without installing:
-npx @vector/openclaw-pipeline-plugin <command>
+npx ripline <command>
 ```
 
 After building, the `ripline` binary is available via `bin/ripline.js` or, if installed globally, as the `ripline` command.

@@ -6,13 +6,13 @@ Run the area-owner pipeline on a schedule and send the backlog summary by email 
 
 ```bash
 # Run pipeline and email backlog summary
-0 13 * * * cd /path/to/openclaw-pipeline-plugin && npm run build && node bin/ripline.js run -p pipelines/templates/ripline-area-owner.yaml -i samples/ripline-area-owner-inputs.json -o dist/backlog-cron.json 2>&1 | mail -s "Ripline backlog" you@example.com
+0 13 * * * cd /path/to/ripline && npm run build && node bin/ripline.js run -p pipelines/templates/ripline-area-owner.yaml -i samples/ripline-area-owner-inputs.json -o dist/backlog-cron.json 2>&1 | mail -s "Ripline backlog" you@example.com
 ```
 
 Or use the dedicated cron script (prints summary to stdout):
 
 ```bash
-0 13 * * * cd /path/to/openclaw-pipeline-plugin && npx tsx scripts/run-area-owner-cron.ts 2>&1 | mail -s "Ripline backlog" you@example.com
+0 13 * * * cd /path/to/ripline && npx tsx scripts/run-area-owner-cron.ts 2>&1 | mail -s "Ripline backlog" you@example.com
 ```
 
 ## AgentMail
