@@ -162,6 +162,25 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     }
   }
 
+  /** GET /runs - list runs, optionally filtered by pipelineId and status */
+  fastify.get<{
+    Querystring: { pipelineId?: string; status?: string };
+  }>("/runs", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const { pipelineId, status } = request.query;
+      const statusOption =
+        status === "pending" || status === "running" || status === "completed" || status === "errored" || status === "paused"
+          ? (status as "pending" | "running" | "completed" | "errored" | "paused")
+          : undefined;
+      let runs = await store.list({ status: statusOption });
+      if (pipelineId !== undefined && pipelineId !== "") {
+        runs = runs.filter((r) => r.pipelineId === pipelineId);
+      }
+      return reply.send({ runs });
+    },
+  });
+
   /** POST /runs/:runId/retry - requeue an errored/paused run from a given node (or the first errored node) */
   fastify.post<{ Params: { runId: string }; Body: { fromNode?: string } }>(
     "/runs/:runId/retry",

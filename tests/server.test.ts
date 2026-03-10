@@ -124,6 +124,101 @@ describe("HTTP server", () => {
     });
   });
 
+  describe("GET /runs", () => {
+    it("returns 200 with empty runs array when no runs exist", async () => {
+      const res = await app.inject({ method: "GET", url: "/runs" });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { runs: unknown[] };
+      expect(Array.isArray(body.runs)).toBe(true);
+      expect(body.runs).toHaveLength(0);
+    });
+
+    it("returns runs after POST /pipelines/:id/run", async () => {
+      const runRes = await app.inject({
+        method: "POST",
+        url: "/pipelines/ripline-area-owner/run",
+        payload: {},
+      });
+      expect(runRes.statusCode).toBe(202);
+      const { runId } = runRes.json() as { runId: string };
+
+      const listRes = await app.inject({ method: "GET", url: "/runs" });
+      expect(listRes.statusCode).toBe(200);
+      const body = listRes.json() as { runs: { id: string; pipelineId: string; status: string }[] };
+      expect(body.runs.length).toBeGreaterThanOrEqual(1);
+      const run = body.runs.find((r) => r.id === runId);
+      expect(run).toBeDefined();
+      expect(run!.pipelineId).toBe("ripline-area-owner");
+      expect(run!.status).toBeDefined();
+    });
+
+    it("filters by pipelineId when query param is provided", async () => {
+      const runRes = await app.inject({
+        method: "POST",
+        url: "/pipelines/ripline-area-owner/run",
+        payload: {},
+      });
+      expect(runRes.statusCode).toBe(202);
+      const { runId } = runRes.json() as { runId: string };
+
+      const matchingRes = await app.inject({
+        method: "GET",
+        url: "/runs?pipelineId=ripline-area-owner",
+      });
+      expect(matchingRes.statusCode).toBe(200);
+      const matchingBody = matchingRes.json() as { runs: { id: string; pipelineId: string }[] };
+      expect(matchingBody.runs.every((r) => r.pipelineId === "ripline-area-owner")).toBe(true);
+      expect(matchingBody.runs.some((r) => r.id === runId)).toBe(true);
+
+      const noMatchRes = await app.inject({
+        method: "GET",
+        url: "/runs?pipelineId=nonexistent-pipeline",
+      });
+      expect(noMatchRes.statusCode).toBe(200);
+      const noMatchBody = noMatchRes.json() as { runs: unknown[] };
+      expect(noMatchBody.runs.filter((r: { pipelineId: string }) => r.pipelineId === "ripline-area-owner")).toHaveLength(0);
+    });
+
+    it("filters by status when query param is provided", async () => {
+      const runRes = await app.inject({
+        method: "POST",
+        url: "/pipelines/ripline-area-owner/run",
+        payload: {},
+      });
+      expect(runRes.statusCode).toBe(202);
+
+      const pendingRes = await app.inject({ method: "GET", url: "/runs?status=pending" });
+      expect(pendingRes.statusCode).toBe(200);
+      const pendingBody = pendingRes.json() as { runs: { status: string }[] };
+      expect(pendingBody.runs.every((r) => r.status === "pending")).toBe(true);
+
+      const runningRes = await app.inject({ method: "GET", url: "/runs?status=running" });
+      expect(runningRes.statusCode).toBe(200);
+      const runningBody = runningRes.json() as { runs: { status: string }[] };
+      expect(runningBody.runs.every((r) => r.status === "running")).toBe(true);
+    });
+
+    it("returns 401 when authToken is set and Authorization header is missing", async () => {
+      await app.close();
+      app = await createApp({ ...config, authToken: "secret" });
+      const res = await app.inject({ method: "GET", url: "/runs" });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it("returns 200 when authToken is set and Bearer token is valid", async () => {
+      await app.close();
+      app = await createApp({ ...config, authToken: "secret" });
+      const res = await app.inject({
+        method: "GET",
+        url: "/runs",
+        headers: { authorization: "Bearer secret" },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { runs: unknown[] };
+      expect(Array.isArray(body.runs)).toBe(true);
+    });
+  });
+
   describe("GET /runs/:runId", () => {
     it("returns run record with node-by-node status", async () => {
       const runRes = await app.inject({

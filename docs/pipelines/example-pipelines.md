@@ -35,14 +35,15 @@ ripline run implement_story_claude --input '{"projectRoot":"/path/to/repo","task
 
 ## 2. Spec → Build → Queue
 
-**Purpose:** Turn a high-level feature idea into a spec, decompose it into implementation stories, then **enqueue** each story as a separate run of the Implement Story pipeline.
+**Purpose:** Turn a high-level feature idea into a spec, decompose it into implementation stories, **enqueue** each story as a separate run of the Implement Story pipeline, then **collect** results and **verify** (build, tests, sense-check) once all are done.
 
 - **Input:** `task` (string) — e.g. "Add a settings page with theme toggle and notification preferences."
-- **Flow:** intake → spec (agent) → decompose (agent) → queue (agent, outputs JSON) → parse (transform) → spawn (enqueue) → result.
-- **Spawn:** The enqueue node creates one run of `implement_story_openclaw` or `implement_story_claude` per parsed task. Ensure that pipeline is available in your pipeline dir.
+- **Flow:** intake → spec (agent) → decompose (agent) → queue (agent, outputs JSON) → parse (transform) → spawn (enqueue) → **collect** (collect_children) → **verify** (agent) → result.
+- **Model split (optional):** Use Sonnet for spec, decompose, queue, and verify (reasoning); use Haiku for the per-story implement step (speed). The doc examples in `docs/pipelines/examples/` illustrate this.
+- **Spawn:** The enqueue node creates one run of `implement_story_openclaw` or `implement_story_claude` per parsed task. The parent run pauses until all children are terminal (completed or errored). The **collect_children** node then aggregates child run results (including partial failures) so the **verify** step can run build/tests and reason over outcomes.
 
 **OpenClaw:** All agent nodes use the default runner; spawn targets `implement_story_openclaw`.  
-**Claude:** All agent nodes use `runner: claude-code`; spawn targets `implement_story_claude`. Use a profile to set `projectRoot` so spawned runs have the correct working directory.
+**Claude:** All agent nodes use `runner: claude-code`; spawn targets `implement_story_claude`. Use a profile to set `projectRoot` so spawned runs and the verify step have the correct working directory.
 
 **Run:**
 

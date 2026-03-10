@@ -522,7 +522,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
 
   program
     .command("serve")
-    .description("Start the HTTP API server (GET /pipelines, POST /pipelines/:id/run, GET /runs/:runId, GET /runs/:runId/stream, GET /runs/:runId/logs, GET /metrics)")
+    .description("Start the HTTP API server (GET /pipelines, POST /pipelines/:id/run, GET /runs, GET /runs/:runId, GET /runs/:runId/stream, GET /runs/:runId/logs, GET /metrics)")
     .option("--port <number>", "Port (default: 4001)", "4001")
     .option("--pipelines-dir <path>", "Pipelines directory", defaultPipelinesDir)
     .option("--runs-dir <path>", "Run state directory (or set RIPLINE_RUNS_DIR)", defaultRunsDir)
