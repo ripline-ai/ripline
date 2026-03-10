@@ -272,7 +272,7 @@ describe("createClaudeCodeRunner", () => {
   });
 
   describe("bypass mode", () => {
-    it("12. bypass activates when allowDangerouslySkipPermissions, mode execute, and valid explicit cwd are set", async () => {
+    it("12. bypass activates when global allow, node dangerouslySkipPermissions, mode execute, and valid explicit cwd are set", async () => {
       const { query } = await import("@anthropic-ai/claude-agent-sdk");
       vi.mocked(query).mockImplementation(
         createMockQuery(async function* () {
@@ -284,7 +284,7 @@ describe("createClaudeCodeRunner", () => {
         cwd: tmpDir,
         allowDangerouslySkipPermissions: true,
       });
-      await runner({ agentId: "default", prompt: "Hi" });
+      await runner({ agentId: "default", prompt: "Hi", dangerouslySkipPermissions: true });
       const opts = vi.mocked(query).mock.calls[0][0].options;
       expect(opts?.permissionMode).toBe("bypassPermissions");
       expect(opts?.allowedTools).toBeUndefined();
@@ -306,7 +306,7 @@ describe("createClaudeCodeRunner", () => {
       expect(vi.mocked(query).mock.calls[0][0].options?.permissionMode).toBe("plan");
     });
 
-    it("14. bypass does not activate when cwd is not explicitly set even if allowDangerouslySkipPermissions is true", async () => {
+    it("14. bypass does not activate when cwd is not explicitly set even if global allow and node request bypass", async () => {
       const { query } = await import("@anthropic-ai/claude-agent-sdk");
       vi.mocked(query).mockImplementation(
         createMockQuery(async function* () {
@@ -315,6 +315,22 @@ describe("createClaudeCodeRunner", () => {
       );
       const runner = createClaudeCodeRunner({
         mode: "execute",
+        allowDangerouslySkipPermissions: true,
+      });
+      await runner({ agentId: "default", prompt: "Hi", dangerouslySkipPermissions: true });
+      expect(vi.mocked(query).mock.calls[0][0].options?.permissionMode).toBe("dontAsk");
+    });
+
+    it("14b. bypass does not activate when global allow but node does not set dangerouslySkipPermissions", async () => {
+      const { query } = await import("@anthropic-ai/claude-agent-sdk");
+      vi.mocked(query).mockImplementation(
+        createMockQuery(async function* () {
+          yield { type: "result", subtype: "success", result: "ok", usage: {} };
+        })
+      );
+      const runner = createClaudeCodeRunner({
+        mode: "execute",
+        cwd: tmpDir,
         allowDangerouslySkipPermissions: true,
       });
       await runner({ agentId: "default", prompt: "Hi" });
@@ -334,7 +350,7 @@ describe("createClaudeCodeRunner", () => {
         cwd: tmpDir,
         allowDangerouslySkipPermissions: true,
       });
-      await runner({ agentId: "default", prompt: "Hi" });
+      await runner({ agentId: "default", prompt: "Hi", dangerouslySkipPermissions: true });
       const bypassWarning = stderrSpy.mock.calls.find(
         (call) => typeof call[0] === "string" && call[0].includes("dangerously-skip-permissions enabled")
       );
@@ -372,7 +388,7 @@ describe("createClaudeCodeRunner", () => {
         allowDangerouslySkipPermissions: true,
         disallowedTools: ["CustomTool"],
       });
-      await runner({ agentId: "default", prompt: "Hi" });
+      await runner({ agentId: "default", prompt: "Hi", dangerouslySkipPermissions: true });
       expect(vi.mocked(query).mock.calls[0][0].options?.disallowedTools).toEqual(["CustomTool"]);
     });
 
@@ -389,7 +405,7 @@ describe("createClaudeCodeRunner", () => {
         allowDangerouslySkipPermissions: true,
         allowedTools: ["Read", "Write"],
       });
-      await runner({ agentId: "default", prompt: "Hi" });
+      await runner({ agentId: "default", prompt: "Hi", dangerouslySkipPermissions: true });
       expect(vi.mocked(query).mock.calls[0][0].options?.allowedTools).toBeUndefined();
     });
 
@@ -406,7 +422,7 @@ describe("createClaudeCodeRunner", () => {
         cwd: tmpDir,
         allowDangerouslySkipPermissions: true,
       });
-      await runner({ agentId: "default", prompt: "Hi" });
+      await runner({ agentId: "default", prompt: "Hi", dangerouslySkipPermissions: true });
     });
   });
 });

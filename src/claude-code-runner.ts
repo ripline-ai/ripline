@@ -72,10 +72,12 @@ function buildExecuteOptions(
   config: ClaudeCodeRunnerConfig,
   resolvedCwd: string,
   cwdExplicit: boolean,
-  maxTurns: number
+  maxTurns: number,
+  nodeRequestsBypass: boolean
 ): ExecuteOptionsResult {
   const bypassEligible =
     config.allowDangerouslySkipPermissions === true &&
+    nodeRequestsBypass === true &&
     config.mode === "execute" &&
     !!resolvedCwd &&
     cwdExplicit;
@@ -156,14 +158,19 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
           ["Read", "Glob", "Grep", "LS", "Bash(git log *)", "Bash(git diff *)", "Bash(find *)", "Bash(cat *)"];
         disallowedTools = [...(config.disallowedTools ?? []), "Write", "Edit", "MultiEdit"];
       } else {
+        const nodeRequestsBypass = params.dangerouslySkipPermissions === true;
         const effectiveConfig = { ...config, mode: "execute" as const };
-        const execOpts = buildExecuteOptions(effectiveConfig, cwd, cwdExplicit, maxTurns);
+        const execOpts = buildExecuteOptions(effectiveConfig, cwd, cwdExplicit, maxTurns, nodeRequestsBypass);
         permissionMode = execOpts.permissionMode;
         allowedTools = execOpts.allowedTools;
         disallowedTools = execOpts.disallowedTools;
         bypassActive = execOpts.bypassActive;
         if (config.allowDangerouslySkipPermissions === true && !bypassActive) {
-          const reason = !cwdExplicit ? "cwd not explicitly set (set cwd in config or params for bypass)" : "cwd invalid or missing";
+          const reason = !nodeRequestsBypass
+            ? "node does not set dangerouslySkipPermissions: true"
+            : !cwdExplicit
+              ? "cwd not explicitly set (set cwd in config or params for bypass)"
+              : "cwd invalid or missing";
           process.stderr.write(
             `⚠  Bypass not activated: ${reason}. Using default execute mode (dontAsk + allowedTools).\n`
           );

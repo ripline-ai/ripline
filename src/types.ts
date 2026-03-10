@@ -77,6 +77,8 @@ export type AgentNode = NodeBase & {
   mode?: "plan" | "execute";
   /** Working directory for Claude Code (supports template interpolation). */
   cwd?: string;
+  /** When runner is claude-code and global bypass is allowed: set true to use bypass for this node only. Omit or false = dontAsk for this node. Safer to enable per-node than globally. */
+  dangerouslySkipPermissions?: boolean;
 };
 
 export type RunPipelineNode = NodeBase & {

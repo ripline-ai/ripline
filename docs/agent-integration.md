@@ -97,6 +97,7 @@ nodes:
     runner: claude-code
     mode: execute
     cwd: "{{ run.inputs.repoPath }}"
+    dangerouslySkipPermissions: true   # only when global bypass is enabled; use for isolated envs
     prompt: "Implement the spec from the previous step. Output a summary to stdout."
 edges:
   - from: { node: spec }
@@ -116,7 +117,9 @@ By default, execute mode uses `permissionMode: "dontAsk"` with an explicit **all
 - **User config:** In `~/.ripline/config.json`, set `"claudeCode": { "allowDangerouslySkipPermissions": true }`.
 - **Environment:** Set `RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS=true` (useful in CI/CD).
 
-**Activation rules:** Bypass is used only when **all** of the following are true: the flag is enabled (config or env), the node **mode** is `"execute"`, and **cwd** is explicitly set (in config or node params) and resolves to an existing directory. Otherwise the runner falls back to default execute mode (`dontAsk` + allowedTools) and logs why bypass was not activated.
+**Per-node opt-in (recommended):** For safety, bypass runs only for nodes that explicitly set **`dangerouslySkipPermissions: true`** in the pipeline YAML. Even with global bypass enabled, nodes that omit this property use default execute mode (`dontAsk` + allowedTools). This limits blast radius: only the nodes you mark get full autonomy.
+
+**Activation rules:** Bypass is used only when **all** of the following are true: the global flag is enabled (config or env), the **node** sets `dangerouslySkipPermissions: true`, the node **mode** is `"execute"`, and **cwd** is explicitly set (in config or node params) and resolves to an existing directory. Otherwise the runner falls back to default execute mode and logs why bypass was not activated.
 
 **What does not change:** Plan mode is never affected. `cwd` validation, `maxTurns` ceiling, timeout, and the PreToolUse hook behavior are unchanged. A **warning** is always printed to stderr when bypass is active; it cannot be suppressed.
 
@@ -162,3 +165,4 @@ Any non-zero exit code or invalid JSON is surfaced as an error; the run record i
 - **`runner`** (optional): Set to `"claude-code"` to use the Claude Code runner for this node when configured; otherwise the default runner (OpenClaw > LLM > stub) is used.
 - **`mode`** (optional, when `runner: "claude-code"`): `"plan"` (read-only) or `"execute"` (default). Ignored for other runners.
 - **`cwd`** (optional, when `runner: "claude-code"`): Working directory for the Claude Code run; supports template interpolation (e.g. `{{ run.inputs.repoPath }}`). Must be an existing directory and must not contain `..`. Ignored for other runners.
+- **`dangerouslySkipPermissions`** (optional, when `runner: "claude-code"`): Set to `true` to allow bypass permissions for this node when global bypass is enabled (`~/.ripline/config.json` or `RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS=true`). Omit or `false` = use default execute mode (`dontAsk` + allowedTools) for this node. Safer to enable only on specific nodes that need full autonomy.
