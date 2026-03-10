@@ -37,6 +37,30 @@
         "type": "string",
         "default": ".ripline/runs",
         "description": "Directory for run artifacts (run state, run.json per run). Relative paths resolve from the workspace. Default: .ripline/runs"
+      },
+      "agentRunner": {
+        "type": "object",
+        "description": "When set and not running inside OpenClaw, agent nodes use this LLM (Ollama, OpenAI, or Anthropic) instead of the stub. Ignored when OpenClaw runtime is present.",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": ["ollama", "openai", "anthropic"],
+            "description": "LLM provider"
+          },
+          "model": {
+            "type": "string",
+            "description": "Model name (e.g. llama3.2, gpt-4o-mini, claude-3-5-sonnet-20241022)"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "API key for OpenAI or Anthropic (optional for Ollama). Can also be set via OPENAI_API_KEY or ANTHROPIC_API_KEY env."
+          },
+          "baseURL": {
+            "type": "string",
+            "description": "Optional base URL (e.g. custom Ollama or OpenAI-compatible endpoint)"
+          }
+        },
+        "required": ["provider", "model"]
       }
     },
     "required": ["pipelinesDir"]
@@ -47,6 +71,7 @@
     "maxConcurrency": { "label": "Max concurrent runs" },
     "httpPath": { "label": "HTTP base path" },
     "httpPort": { "label": "HTTP port" },
-    "authToken": { "label": "API auth token (optional)" }
+    "authToken": { "label": "API auth token (optional)" },
+    "agentRunner": { "label": "Standalone agent (when not using OpenClaw)" }
   }
 }

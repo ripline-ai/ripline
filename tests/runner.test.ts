@@ -272,6 +272,77 @@ describe("DeterministicRunner", () => {
       expect(record.steps[1].status).toBe("paused");
     });
 
+    it("completes when transform node output conforms to contracts.output", async () => {
+      const outputSchema = {
+        type: "object" as const,
+        required: ["count"],
+        properties: { count: { type: "number" } },
+      };
+      const def: PipelineDefinition = {
+        id: "contract-valid",
+        entry: ["a"],
+        nodes: [
+          { id: "a", type: "input" },
+          {
+            id: "b",
+            type: "transform",
+            expression: "{ count: inputs.n + 1 }",
+            assigns: "b",
+            contracts: { output: outputSchema },
+          },
+          { id: "c", type: "output", path: "out", source: "b" },
+        ],
+        edges: [
+          { from: { node: "a" }, to: { node: "b" } },
+          { from: { node: "b" }, to: { node: "c" } },
+        ],
+      };
+      const { MemoryRunStore } = await import("../src/run-store-memory.js");
+      const store = new MemoryRunStore();
+      const runner = new DeterministicRunner(def, { store });
+
+      const record = await runner.run({ inputs: { n: 10 } });
+
+      expect(record.status).toBe("completed");
+      expect(record.outputs?.out).toEqual({ count: 11 });
+    });
+
+    it("fails run when transform node output does not conform to contracts.output", async () => {
+      const outputSchema = {
+        type: "object" as const,
+        required: ["count"],
+        properties: { count: { type: "number" } },
+      };
+      const def: PipelineDefinition = {
+        id: "contract-invalid",
+        entry: ["a"],
+        nodes: [
+          { id: "a", type: "input" },
+          {
+            id: "b",
+            type: "transform",
+            expression: "{ count: \"not-a-number\" }",
+            assigns: "b",
+            contracts: { output: outputSchema },
+          },
+          { id: "c", type: "output", path: "out", source: "b" },
+        ],
+        edges: [
+          { from: { node: "a" }, to: { node: "b" } },
+          { from: { node: "b" }, to: { node: "c" } },
+        ],
+      };
+      const { MemoryRunStore } = await import("../src/run-store-memory.js");
+      const store = new MemoryRunStore();
+      const runner = new DeterministicRunner(def, { store });
+
+      await expect(runner.run({ inputs: {} })).rejects.toThrow(/Output contract validation failed for node "b"/);
+      const runs = await store.list({});
+      const failedRun = runs.find((r) => r.pipelineId === "contract-invalid" && r.status === "errored");
+      expect(failedRun?.status).toBe("errored");
+      expect(failedRun?.error).toMatch(/contract|schema|valid|count/i);
+    });
+
     it("enqueue node creates child runs and pauses parent until children complete", async () => {
       const parentDef: PipelineDefinition = {
         id: "parent-with-enqueue",

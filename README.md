@@ -26,6 +26,7 @@ In short: turn messy cross-team workflows into a graph you can see, change, and 
 - In-memory run store with resumable IDs and JSON payload snapshots
 - CLI runner for local testing plus plugin hook for OpenClaw
 - HTTP surface (default `/pipelines`) for boards, metrics, and visualizations
+- **Per-node agent runners:** optional `runner: claude-code` with **plan** (read-only) or **execute** mode and configurable `cwd`; see [Using Claude Code as a runner](docs/agent-integration.md#using-claude-code-as-a-runner)
 
 ---
 
@@ -71,13 +72,13 @@ edges:
 
 ```bash
 npm run build
-node dist/cli/run.js -p pipelines/examples/hello-world.yaml -i samples/hello-world-inputs.json
+ripline run --pipeline pipelines/examples/hello-world.yaml --input samples/hello-world-inputs.json
 ```
 
-With the package installed, you can omit `-p` when using the default examples directory; the CLI defaults to `pipelines/examples/hello-world.yaml`:
+Or run by **pipeline ID** from your pipeline directory with a **profile** for default inputs (see [Pipelines and profiles](docs/pipelines-and-profiles.md)):
 
 ```bash
-ripline run -i samples/hello-world-inputs.json
+ripline run hello_world --profile myapp --input '{"task": "add login"}'
 ```
 
 Outputs are written to `.ripline/runs/<runId>/run.json` and, if you pass `-o <path>`, to that file.
@@ -157,6 +158,10 @@ Install and configure the Ripline pipeline plugin for OpenClaw.
 
 4. Demo (no real agent): ripline run --demo — runs Hello World with a stub agent and writes to dist/demo-artifact.json.
 ```
+
+### Running agent nodes without OpenClaw
+
+You can run pipelines with real agent nodes locally using Ollama, OpenAI, or Anthropic—no OpenClaw required. Set `RIPLINE_AGENT_PROVIDER` and `RIPLINE_AGENT_MODEL` (and `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for those providers), or use a config file (`.ripline/agent.json` or `ripline.config.json` with an `agent` section). CLI flags work too: `ripline run --agent-provider ollama --agent-model llama3.2`. See [Agent integration](docs/agent-integration.md) for details.
 
 ---
 

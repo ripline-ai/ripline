@@ -7,15 +7,13 @@ import {
 describe("createOpenClawAgentRunner", () => {
   it("builds openclaw agent --json with agentId and prompt, parses JSON to AgentResult", async () => {
     let capturedCmd: string[] = [];
-    let capturedStdin: string | undefined;
     const api: OpenClawPluginApi = {
       runtime: {
         system: {
-          runCommandWithTimeout: async (cmd, stdin, timeoutMs) => {
+          runCommandWithTimeout: async (cmd) => {
             capturedCmd = cmd;
-            capturedStdin = stdin;
             return {
-              exitCode: 0,
+              code: 0,
               stdout: JSON.stringify({
                 text: "Hello from agent",
                 tokenUsage: { input: 10, output: 5 },
@@ -38,12 +36,13 @@ describe("createOpenClawAgentRunner", () => {
     expect(capturedCmd).toContain("--json");
     expect(capturedCmd).toContain("--agent");
     expect(capturedCmd).toContain("vector");
-    expect(capturedCmd).toContain("--session");
-    const sessionIdx = capturedCmd.indexOf("--session");
+    expect(capturedCmd).toContain("--session-id");
+    const sessionIdx = capturedCmd.indexOf("--session-id");
     expect(sessionIdx).toBeGreaterThanOrEqual(0);
     const sessionValue = capturedCmd[sessionIdx + 1];
     expect(sessionValue).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
-    expect(capturedStdin).toBe("Summarize this.");
+    expect(capturedCmd).toContain("--message");
+    expect(capturedCmd).toContain("Summarize this.");
     expect(result.text).toBe("Hello from agent");
     expect(result.tokenUsage).toEqual({ input: 10, output: 5 });
   });
@@ -56,7 +55,7 @@ describe("createOpenClawAgentRunner", () => {
           runCommandWithTimeout: async (cmd) => {
             capturedCmd = cmd;
             return {
-              exitCode: 0,
+              code: 0,
               stdout: JSON.stringify({ text: "ok" }),
               stderr: "",
             };
@@ -84,7 +83,7 @@ describe("createOpenClawAgentRunner", () => {
       runtime: {
         system: {
           runCommandWithTimeout: async () => ({
-            exitCode: 1,
+            code: 1,
             stdout: "",
             stderr: "Agent session failed: timeout",
           }),
@@ -103,7 +102,7 @@ describe("createOpenClawAgentRunner", () => {
       runtime: {
         system: {
           runCommandWithTimeout: async () => ({
-            exitCode: 0,
+            code: 0,
             stdout: "not json",
             stderr: "",
           }),
@@ -125,7 +124,7 @@ describe("createOpenClawAgentRunner", () => {
           runCommandWithTimeout: async (cmd) => {
             capturedCmd = cmd;
             return {
-              exitCode: 0,
+              code: 0,
               stdout: JSON.stringify({ text: "ok" }),
               stderr: "",
             };
@@ -137,8 +136,8 @@ describe("createOpenClawAgentRunner", () => {
     const runner = createOpenClawAgentRunner(api);
     await runner({ agentId: "default", prompt: "Hi" });
 
-    expect(capturedCmd).toContain("--session");
-    const sessionIdx = capturedCmd.indexOf("--session");
+    expect(capturedCmd).toContain("--session-id");
+    const sessionIdx = capturedCmd.indexOf("--session-id");
     const sessionValue = capturedCmd[sessionIdx + 1];
     expect(sessionValue).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   });
@@ -151,7 +150,7 @@ describe("createOpenClawAgentRunner", () => {
           runCommandWithTimeout: async (cmd) => {
             capturedCmd = cmd;
             return {
-              exitCode: 0,
+              code: 0,
               stdout: JSON.stringify({ text: "ok" }),
               stderr: "",
             };
@@ -168,8 +167,8 @@ describe("createOpenClawAgentRunner", () => {
       sessionId: "shared-run-session-xyz",
     });
 
-    expect(capturedCmd).toContain("--session");
-    const sessionIdx = capturedCmd.indexOf("--session");
+    expect(capturedCmd).toContain("--session-id");
+    const sessionIdx = capturedCmd.indexOf("--session-id");
     expect(capturedCmd[sessionIdx + 1]).toBe("shared-run-session-xyz");
   });
 
@@ -181,7 +180,7 @@ describe("createOpenClawAgentRunner", () => {
           runCommandWithTimeout: async (cmd) => {
             capturedCmd = cmd;
             return {
-              exitCode: 0,
+              code: 0,
               stdout: JSON.stringify({ text: "ok" }),
               stderr: "",
             };
@@ -197,8 +196,8 @@ describe("createOpenClawAgentRunner", () => {
       resetSession: false,
     });
 
-    expect(capturedCmd).toContain("--session");
-    const sessionIdx = capturedCmd.indexOf("--session");
+    expect(capturedCmd).toContain("--session-id");
+    const sessionIdx = capturedCmd.indexOf("--session-id");
     const sessionValue = capturedCmd[sessionIdx + 1];
     expect(sessionValue).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   });
@@ -208,7 +207,7 @@ describe("createOpenClawAgentRunner", () => {
       runtime: {
         system: {
           runCommandWithTimeout: async () => ({
-            exitCode: 0,
+            code: 0,
             stdout: JSON.stringify({ text: "Only text" }),
             stderr: "",
           }),

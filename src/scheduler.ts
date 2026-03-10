@@ -10,6 +10,7 @@ export type SchedulerConfig = {
   registry: { get(id: string): Promise<PipelineRegistryEntry | null> };
   maxConcurrency: number;
   agentRunner?: AgentRunner;
+  claudeCodeRunner?: AgentRunner;
   /** Poll interval when queue is empty (ms). */
   pollIntervalMs?: number;
 };
@@ -34,6 +35,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
     registry,
     maxConcurrency,
     agentRunner,
+    claudeCodeRunner,
     pollIntervalMs = 500,
   } = config;
 
@@ -62,6 +64,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
           queue,
           quiet: true,
           ...(agentRunner && { agentRunner }),
+          ...(claudeCodeRunner && { claudeCodeRunner }),
         });
         await runner.run(
           record.cursor !== undefined
@@ -87,6 +90,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                   queue,
                   quiet: true,
                   ...(agentRunner && { agentRunner }),
+                  ...(claudeCodeRunner && { claudeCodeRunner }),
                 });
                 try {
                   await parentRunner.run({ resumeRunId: parent.id });

@@ -20,7 +20,7 @@
     "check": "tsc --noEmit",
     "clean": "rm -rf dist",
     "test": "vitest run",
-    "demo": "npm run build && node dist/cli/run.js --demo",
+    "demo": "npm run build && node dist/cli/run.js run --demo",
     "demo:area-owner": "npx tsx scripts/run-area-owner-demo.ts",
     "cron:area-owner": "npx tsx scripts/run-area-owner-cron.ts"
   },
@@ -34,6 +34,7 @@
   "author": "Craig Midwinter",
   "license": "MIT",
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.71",
     "@fastify/cors": "^11.2.0",
     "@sinclair/typebox": "^0.34.48",
     "ajv": "^8.18.0",
@@ -44,7 +45,7 @@
     "mnemonist": "^0.40.3",
     "uuid": "^11.0.3",
     "yaml": "^2.7.0",
-    "zod": "^3.23.8"
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/json-schema": "^7.0.15",

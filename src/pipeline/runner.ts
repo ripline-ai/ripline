@@ -11,6 +11,7 @@ import type {
 import type { RunStore } from "../run-store.js";
 import { PipelineRunStore } from "../run-store.js";
 import type { RunQueue } from "../run-queue.js";
+import { validateOutputContract } from "../lib/contract-validate.js";
 import { executeNode } from "./executors/index.js";
 import type { AgentRunner } from "./executors/index.js";
 
@@ -39,8 +40,10 @@ export type RunnerOptions = {
   verbose?: boolean;
   /** When true, do not log node.started/completed/errored to console (caller handles logging). */
   quiet?: boolean;
-  /** Required for agent nodes (e.g. OpenClaw sessions_spawn). */
+  /** Required for agent nodes unless node uses runner: claude-code (then claudeCodeRunner required). */
   agentRunner?: AgentRunner;
+  /** For agent nodes with runner: claude-code. Not set when running inside OpenClaw. */
+  claudeCodeRunner?: AgentRunner;
   /** If set, write final outputs to this path as JSON. */
   outPath?: string;
 };
@@ -297,13 +300,22 @@ export class DeterministicRunner extends EventEmitter {
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           const executorContext = this.getExecutorContext(node, context, record);
+          const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner } = {};
+          if (this.runnerOptions.agentRunner !== undefined) execOptions.agentRunner = this.runnerOptions.agentRunner;
+          if (this.runnerOptions.claudeCodeRunner !== undefined) execOptions.claudeCodeRunner = this.runnerOptions.claudeCodeRunner;
           nodeResult = await executeNode(
-            node,
-            executorContext,
-            this.runnerOptions.agentRunner !== undefined
-              ? { agentRunner: this.runnerOptions.agentRunner }
-              : undefined
-          );
+              node,
+              executorContext,
+              Object.keys(execOptions).length > 0 ? execOptions : undefined
+            );
+          if (nodeResult && node.contracts?.output) {
+            validateOutputContract(
+              node.id,
+              node.type,
+              node.contracts.output,
+              nodeResult.value
+            );
+          }
           lastErr = undefined;
           break;
         } catch (err) {

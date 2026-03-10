@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs";
 import { normalizeConfig } from "../src/index.js";
+import {
+  loadUserConfig,
+  resolvePipelineDir,
+  resolveProfileDir,
+} from "../src/config.js";
 
 describe("normalizeConfig", () => {
   const cwd = process.cwd();
@@ -59,5 +65,175 @@ describe("normalizeConfig", () => {
     expect(config.httpPath).toBe("/api");
     expect(config.maxConcurrency).toBe(2);
     expect(config.authToken).toBe("secret");
+  });
+});
+
+describe("loadUserConfig", () => {
+  it("returns empty object when ~/.ripline/config.json is missing", () => {
+    const tmp = path.join(os.tmpdir(), "ripline-config-test-" + Date.now());
+    fs.mkdirSync(tmp, { recursive: true });
+    try {
+      const config = loadUserConfig(tmp);
+      expect(config).toEqual({});
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reads and parses valid config file", () => {
+    const tmp = path.join(os.tmpdir(), "ripline-config-test-" + Date.now());
+    const configDir = path.join(tmp, ".ripline");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({
+        pipelineDir: "~/custom/pipelines",
+        profileDir: "/absolute/profiles",
+        defaultProfile: "myapp",
+      }),
+      "utf-8"
+    );
+    try {
+      const config = loadUserConfig(tmp);
+      expect(config.pipelineDir).toBe(path.join(tmp, "custom", "pipelines"));
+      expect(config.profileDir).toBe("/absolute/profiles");
+      expect(config.defaultProfile).toBe("myapp");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("reads claudeCode.allowDangerouslySkipPermissions when true", () => {
+    const tmp = path.join(os.tmpdir(), "ripline-config-test-" + Date.now());
+    const configDir = path.join(tmp, ".ripline");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({ claudeCode: { allowDangerouslySkipPermissions: true } }),
+      "utf-8"
+    );
+    try {
+      const config = loadUserConfig(tmp);
+      expect(config.claudeCode?.allowDangerouslySkipPermissions).toBe(true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolvePipelineDir", () => {
+  it("uses flag when provided", () => {
+    const tmp = path.join(os.tmpdir(), "ripline-pipeline-dir-" + Date.now());
+    fs.mkdirSync(tmp, { recursive: true });
+    try {
+      const result = resolvePipelineDir({
+        flag: tmp,
+        cwd: process.cwd(),
+        homedir: os.tmpdir(),
+      });
+      expect(result).toBe(path.resolve(tmp));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("uses user config pipelineDir when no flag", () => {
+    const home = path.join(os.tmpdir(), "ripline-pipeline-home-" + Date.now());
+    const configDir = path.join(home, ".ripline");
+    fs.mkdirSync(configDir, { recursive: true });
+    const customDir = path.join(home, "pipelines");
+    fs.mkdirSync(customDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({ pipelineDir: customDir }),
+      "utf-8"
+    );
+    const emptyCwd = path.join(os.tmpdir(), "ripline-empty-cwd-" + Date.now());
+    fs.mkdirSync(emptyCwd, { recursive: true });
+    try {
+      const result = resolvePipelineDir({
+        cwd: emptyCwd,
+        homedir: home,
+      });
+      expect(result).toBe(path.resolve(customDir));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(emptyCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("uses cwd ripline.config.json when present and no flag / no user config pipelineDir", () => {
+    const cwd = path.join(os.tmpdir(), "ripline-cwd-config-" + Date.now());
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.writeFileSync(
+      path.join(cwd, "ripline.config.json"),
+      JSON.stringify({ pipelineDir: "./local-pipelines" }),
+      "utf-8"
+    );
+    const home = path.join(os.tmpdir(), "ripline-cwd-home-" + Date.now());
+    fs.mkdirSync(path.join(home, ".ripline"), { recursive: true });
+    try {
+      const result = resolvePipelineDir({
+        cwd,
+        homedir: home,
+      });
+      expect(result).toBe(path.resolve(cwd, "local-pipelines"));
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to default ~/.ripline/pipelines when no flag, no user config, no cwd config", () => {
+    const home = path.join(os.tmpdir(), "ripline-default-dir-" + Date.now());
+    fs.mkdirSync(home, { recursive: true });
+    try {
+      const result = resolvePipelineDir({ cwd: process.cwd(), homedir: home });
+      expect(result).toBe(path.join(home, ".ripline", "pipelines"));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("resolveProfileDir", () => {
+  it("uses flag when provided", () => {
+    const tmp = path.join(os.tmpdir(), "ripline-profile-flag-" + Date.now());
+    fs.mkdirSync(tmp, { recursive: true });
+    try {
+      const result = resolveProfileDir({ flag: tmp, homedir: os.tmpdir() });
+      expect(result).toBe(path.resolve(tmp));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("uses user config profileDir when no flag", () => {
+    const home = path.join(os.tmpdir(), "ripline-profile-home-" + Date.now());
+    const configDir = path.join(home, ".ripline");
+    fs.mkdirSync(configDir, { recursive: true });
+    const customDir = path.join(home, "profiles");
+    fs.writeFileSync(
+      path.join(configDir, "config.json"),
+      JSON.stringify({ profileDir: customDir }),
+      "utf-8"
+    );
+    try {
+      const result = resolveProfileDir({ homedir: home });
+      expect(result).toBe(path.resolve(customDir));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to default ~/.ripline/profiles when no flag and no user config", () => {
+    const home = path.join(os.tmpdir(), "ripline-profile-default-" + Date.now());
+    fs.mkdirSync(home, { recursive: true });
+    try {
+      const result = resolveProfileDir({ homedir: home });
+      expect(result).toBe(path.join(home, ".ripline", "profiles"));
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });

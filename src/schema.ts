@@ -5,13 +5,13 @@ import type {
   PipelineNode,
 } from "./types.js";
 
-const jsonSchema = z.record(z.any());
+const jsonSchema = z.record(z.string(), z.any());
 
 const baseNode = z.object({
   id: z.string().min(1),
   name: z.string().optional(),
   description: z.string().optional(),
-  metadata: z.record(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
   contracts: z
     .object({
       input: jsonSchema.optional(),
@@ -53,12 +53,16 @@ const agentNode = baseNode.extend({
   deliver: z.boolean().optional(),
   thinking: z.enum(["off", "minimal", "low", "medium", "high"]).optional(),
   timeoutSeconds: z.number().int().positive().optional(),
+  runner: z.literal("claude-code").optional(),
+  mode: z.enum(["plan", "execute"]).optional(),
+  cwd: z.string().optional(),
+  dangerouslySkipPermissions: z.boolean().optional(),
 });
 
 const runPipelineNode = baseNode.extend({
   type: z.literal("run_pipeline"),
   pipelineId: z.string().min(1),
-  inputMapping: z.record(z.string()).optional(),
+  inputMapping: z.record(z.string(), z.string()).optional(),
   mode: z.enum(["child", "inline"]).optional(),
 });
 
@@ -155,7 +159,7 @@ export const pipelineDefinitionSchema = z
       })
       .optional(),
     tags: z.array(z.string()).optional(),
-    metadata: z.record(z.any()).optional(),
+    metadata: z.record(z.string(), z.any()).optional(),
   })
   .superRefine((value, ctx) => {
     const nodeIds = new Set<string>();

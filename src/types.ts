@@ -1,5 +1,19 @@
 import type { JSONSchema7 } from "json-schema";
 
+export type RiplineProfile = {
+  name: string;
+  description?: string;
+  inputs: Record<string, unknown>;
+};
+
+export type RiplineUserConfig = {
+  pipelineDir?: string;
+  profileDir?: string;
+  defaultProfile?: string;
+  /** Only from ~/.ripline/config.json; never from pipeline/profile/input. */
+  claudeCode?: { allowDangerouslySkipPermissions?: boolean };
+};
+
 export type PipelinePluginConfig = {
   pipelinesDir: string;
   maxConcurrency?: number;
@@ -57,6 +71,14 @@ export type AgentNode = NodeBase & {
   deliver?: boolean;
   thinking?: "off" | "minimal" | "low" | "medium" | "high";
   timeoutSeconds?: number;
+  /** Opt-in to Claude Code runner for this node. When set, claudeCodeRunner must be provided in runner options. */
+  runner?: "claude-code";
+  /** For runner: claude-code — "plan" = read-only; "execute" = full access. Default when runner is claude-code: "execute". */
+  mode?: "plan" | "execute";
+  /** Working directory for Claude Code (supports template interpolation). */
+  cwd?: string;
+  /** When runner is claude-code and global bypass is allowed: set true to use bypass for this node only. Omit or false = dontAsk for this node. Safer to enable per-node than globally. */
+  dangerouslySkipPermissions?: boolean;
 };
 
 export type RunPipelineNode = NodeBase & {
