@@ -139,6 +139,10 @@ export type EnqueueNode = NodeBase & {
   mode?: "batch" | "per-item";
 };
 
+export type CollectChildrenNode = NodeBase & {
+  type: "collect_children";
+};
+
 export type PipelineNode =
   | LiteralNode
   | InputNode
@@ -148,7 +152,8 @@ export type PipelineNode =
   | LoopNode
   | CheckpointNode
   | OutputNode
-  | EnqueueNode;
+  | EnqueueNode
+  | CollectChildrenNode;
 
 export type PipelineEdge = {
   id?: string;

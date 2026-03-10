@@ -80,8 +80,8 @@ function hasOpenClawRuntime(api: PluginApi): api is PluginApi & OpenClawPluginAp
 }
 
 export default {
-  id: "pipeline-orchestrator",
-  name: "Pipeline Orchestrator",
+  id: "ripline",
+  name: "Ripline",
   description: "Ripline pipeline engine + CLI",
   register(api: PluginApi) {
     const cfg = normalizeConfig(api.pluginConfig);
@@ -113,7 +113,7 @@ export default {
     );
 
     api.registerService({
-      id: "pipeline-orchestrator.http",
+      id: "ripline.http",
       start: async () => {
         const options: StartServerOptions = {
           pipelinesDir: cfg.pipelinesDir,

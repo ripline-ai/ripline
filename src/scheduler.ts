@@ -88,14 +88,15 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
         durations.push(Date.now() - startMs);
 
         const completedRecord = await store.load(record.id);
-        if (completedRecord?.parentRunId && completedRecord.status === "completed") {
-          const parent = await store.load(completedRecord.parentRunId);
+        const childFinished = completedRecord?.parentRunId && (completedRecord.status === "completed" || completedRecord.status === "errored");
+        if (childFinished) {
+          const parent = await store.load(completedRecord!.parentRunId!);
           if (parent?.status === "paused" && parent.childRunIds?.length) {
             const children = await Promise.all(
               parent.childRunIds.map((id) => store.load(id))
             );
-            const allCompleted = children.every((r) => r?.status === "completed");
-            if (allCompleted) {
+            const allTerminal = children.every((r) => r?.status === "completed" || r?.status === "errored");
+            if (allTerminal) {
               const parentEntry = await registry.get(parent.pipelineId);
               if (parentEntry) {
                 const parentRunsDir =
@@ -128,6 +129,44 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
         const msg = err instanceof Error ? err.message : String(err);
         const loaded = await store.load(record.id);
         if (loaded) await store.failRun(loaded, msg);
+        const failedRecord = await store.load(record.id);
+        if (failedRecord?.parentRunId && failedRecord.status === "errored") {
+          const parent = await store.load(failedRecord.parentRunId);
+          if (parent?.status === "paused" && parent.childRunIds?.length) {
+            const children = await Promise.all(
+              parent.childRunIds.map((id) => store.load(id))
+            );
+            const allTerminal = children.every((r) => r?.status === "completed" || r?.status === "errored");
+            if (allTerminal) {
+              const storeWithRunDir = store as { runDir?: (id: string) => string };
+              const parentEntry = await registry.get(parent.pipelineId);
+              if (parentEntry) {
+                const parentRunsDir =
+                  typeof storeWithRunDir.runDir === "function"
+                    ? path.dirname(storeWithRunDir.runDir(parent.id))
+                    : undefined;
+                const parentLog =
+                  parentRunsDir !== undefined
+                    ? createLogger({ sink: createRunScopedFileSink(parentRunsDir) })
+                    : undefined;
+                const parentRunner = new DeterministicRunner(parentEntry.definition, {
+                  store,
+                  queue,
+                  quiet: true,
+                  ...(parentLog !== undefined && { log: parentLog }),
+                  ...(agentRunner && { agentRunner }),
+                  ...(claudeCodeRunner && { claudeCodeRunner }),
+                });
+                try {
+                  await parentRunner.run({ resumeRunId: parent.id });
+                } catch (resumeErr) {
+                  const resumeMsg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr);
+                  if (!resumeMsg.includes("not resumable")) throw resumeErr;
+                }
+              }
+            }
+          }
+        }
       } finally {
         activeWorkers--;
       }

@@ -168,4 +168,89 @@ describe("Scheduler", () => {
     const children = await Promise.all((parentRecord!.childRunIds ?? []).map((id) => store.load(id)));
     expect(children.every((r) => r?.status === "completed")).toBe(true);
   });
+
+  it("resumes parent run when all child runs are terminal (one completed, one errored)", async () => {
+    const childDef: PipelineDefinition = {
+      id: "child-may-fail",
+      entry: ["a"],
+      nodes: [
+        { id: "a", type: "input" },
+        {
+          id: "b",
+          type: "transform",
+          expression: "(function(){ var t = (artifacts.a && artifacts.a.task) ? artifacts.a.task : {}; if (t.id === \"t2\") throw new Error(\"intentional fail\"); return t.id; })()",
+          assigns: "out",
+        },
+        { id: "c", type: "output", path: "out", source: "b" },
+      ],
+      edges: [
+        { from: { node: "a" }, to: { node: "b" } },
+        { from: { node: "b" }, to: { node: "c" } },
+      ],
+    };
+    const parentDef: PipelineDefinition = {
+      id: "parent-partial-fail",
+      entry: ["tasks"],
+      nodes: [
+        {
+          id: "tasks",
+          type: "transform",
+          expression: "[{ id: 't1', title: 'One' }, { id: 't2', title: 'Two' }]",
+          assigns: "tasks",
+        },
+        {
+          id: "enq",
+          type: "enqueue",
+          pipelineId: "child-may-fail",
+          tasksSource: "tasks",
+          mode: "per-item",
+        },
+        { id: "after", type: "output", path: "done", source: "enq" },
+      ],
+      edges: [
+        { from: { node: "tasks" }, to: { node: "enq" } },
+        { from: { node: "enq" }, to: { node: "after" } },
+      ],
+    };
+    const registry = {
+      get: async (id: string) => {
+        if (id === "minimal") return { definition: minimalDef, mtimeMs: 0, path: "" };
+        if (id === "child-may-fail") return { definition: childDef, mtimeMs: 0, path: "" };
+        if (id === "parent-partial-fail") return { definition: parentDef, mtimeMs: 0, path: "" };
+        return null;
+      },
+    };
+
+    const store = new MemoryRunStore();
+    const queue = createRunQueue(store);
+    const scheduler = createScheduler({
+      store,
+      queue,
+      registry,
+      maxConcurrency: 2,
+      agentRunner: noopAgent,
+    });
+
+    const parentRunId = await queue.enqueue("parent-partial-fail", {});
+    scheduler.start();
+
+    const deadline = Date.now() + 5000;
+    let parentRecord = await store.load(parentRunId);
+    while (parentRecord?.status !== "completed" && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 30));
+      parentRecord = await store.load(parentRunId);
+    }
+
+    scheduler.stop();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(parentRecord?.status).toBe("completed");
+    expect(parentRecord?.childRunIds).toHaveLength(2);
+    const children = await Promise.all((parentRecord!.childRunIds ?? []).map((id) => store.load(id)));
+    const completed = children.filter((r) => r?.status === "completed");
+    const errored = children.filter((r) => r?.status === "errored");
+    expect(completed).toHaveLength(1);
+    expect(errored).toHaveLength(1);
+    expect(errored[0]?.error).toContain("intentional fail");
+  });
 });

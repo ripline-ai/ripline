@@ -124,6 +124,10 @@ const enqueueNode = baseNode.extend({
   mode: z.enum(["batch", "per-item"]).optional(),
 });
 
+const collectChildrenNode = baseNode.extend({
+  type: z.literal("collect_children"),
+});
+
 const nodeSchema = z.lazy(() =>
   z.discriminatedUnion("type", [
     literalNode,
@@ -135,6 +139,7 @@ const nodeSchema = z.lazy(() =>
     checkpointNode,
     outputNode,
     enqueueNode,
+    collectChildrenNode,
   ])
 ) as z.ZodType<PipelineNode>;
 
