@@ -101,6 +101,37 @@ edges:
     expect(def1).toBe(def2);
   });
 
+  it("loads pipeline with agent node that has model (claude-code)", () => {
+    const dir = path.join(process.cwd(), "tests", "fixtures");
+    fs.mkdirSync(dir, { recursive: true });
+    const agentModelPath = path.join(dir, "agent-model-pipeline.yaml");
+    const yaml = `
+id: agent-model-pipeline
+name: Agent with model
+entry: [a]
+nodes:
+  - id: a
+    type: agent
+    prompt: "Hello"
+    runner: claude-code
+    model: claude-sonnet-4-6
+edges:
+  - from: { node: a }
+    to: { node: a }
+`;
+    fs.writeFileSync(agentModelPath, yaml.trim());
+    try {
+      const def = loadPipelineDefinition(agentModelPath);
+      expect(def.id).toBe("agent-model-pipeline");
+      const agentNode = def.nodes.find((n) => n.id === "a");
+      expect(agentNode?.type).toBe("agent");
+      expect(agentNode).toHaveProperty("runner", "claude-code");
+      expect(agentNode).toHaveProperty("model", "claude-sonnet-4-6");
+    } finally {
+      fs.unlinkSync(agentModelPath);
+    }
+  });
+
   it("loads template ripline-area-owner.yaml with metadata and node contracts", () => {
     const templatePath = path.join(process.cwd(), "pipelines", "templates", "ripline-area-owner.yaml");
     const def = loadPipelineDefinition(templatePath);

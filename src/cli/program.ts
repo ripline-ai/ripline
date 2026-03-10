@@ -11,6 +11,7 @@ import { loadInputs, parseEnvPairs } from "./helpers.js";
 import { startServer } from "../server.js";
 import { PipelineRunStore } from "../run-store.js";
 import { createRunQueue } from "../run-queue.js";
+import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "../log.js";
 import { createLlmAgentRunner, type LlmAgentRunnerConfig } from "../llm-agent-runner.js";
 import { createClaudeCodeRunner } from "../claude-code-runner.js";
 import {
@@ -228,6 +229,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         runsDir,
         verbose,
         quiet: true,
+        log: createLogger({ sink: createRunScopedFileSink(runsDir) }),
         ...(outPath !== undefined && { outPath }),
         ...(agentRunner !== undefined && { agentRunner }),
         ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
@@ -407,8 +409,120 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
     });
 
   program
+    .command("logs <runId>")
+    .description("Print logs for a run (from local runs dir or --api-url). Use --follow to stream new lines until run completes.")
+    .option("--runs-dir <path>", "Run state directory (or set RIPLINE_RUNS_DIR)", defaultRunsDir)
+    .option("--follow", "Poll and print new log lines until run is completed or errored (or Ctrl+C)")
+    .option("--api-url <url>", "If set, fetch logs from HTTP API (e.g. http://localhost:4001) instead of local runs dir")
+    .action(async (runId: string, opts) => {
+      const runsDirRaw = opts.runsDir ?? process.env.RIPLINE_RUNS_DIR ?? defaultRunsDir;
+      const runsDir = path.isAbsolute(runsDirRaw) ? path.resolve(runsDirRaw) : path.join(process.cwd(), runsDirRaw);
+      const apiUrl = opts.apiUrl?.trim();
+      const follow = opts.follow === true;
+
+      const logPath = path.join(runsDir, runId, LOG_FILE_NAME);
+      const runJsonPath = path.join(runsDir, runId, "run.json");
+      const fs = await import("node:fs/promises");
+
+      async function readLocalLogs(): Promise<string> {
+        try {
+          return await fs.readFile(logPath, "utf8");
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException)?.code === "ENOENT") {
+            return "";
+          }
+          throw e;
+        }
+      }
+
+      async function isRunTerminal(): Promise<boolean> {
+        try {
+          const data = await fs.readFile(runJsonPath, "utf8");
+          const record = JSON.parse(data) as { status?: string };
+          return record.status === "completed" || record.status === "errored";
+        } catch {
+          return false;
+        }
+      }
+
+      if (apiUrl) {
+        const base = apiUrl.replace(/\/$/, "");
+        const authHeader = process.env.RIPLINE_AUTH_TOKEN
+          ? { Authorization: `Bearer ${process.env.RIPLINE_AUTH_TOKEN}` }
+          : {};
+        if (!follow) {
+          const res = await fetch(`${base}/runs/${runId}/logs`, { headers: authHeader });
+          if (res.status === 404) {
+            console.error(chalk.red(`Run or logs not found: ${runId}`));
+            process.exit(1);
+          }
+          if (!res.ok) {
+            console.error(chalk.red(`API error: ${res.status} ${await res.text()}`));
+            process.exit(1);
+          }
+          const text = await res.text();
+          process.stdout.write(text);
+          return;
+        }
+        const res = await fetch(`${base}/runs/${runId}/logs/stream`, { headers: authHeader });
+        if (res.status === 404 || !res.ok) {
+          console.error(chalk.red(`Run or logs not found: ${runId}`));
+          process.exit(1);
+        }
+        const reader = res.body?.getReader();
+        if (!reader) {
+          console.error(chalk.red("No response body"));
+          process.exit(1);
+        }
+        const decoder = new TextDecoder();
+        let buf = "";
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split("\n\n");
+            buf = lines.pop() ?? "";
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                const json = JSON.parse(line.slice(6)) as { lines?: string };
+                if (typeof json.lines === "string") process.stdout.write(json.lines);
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        return;
+      }
+
+      if (!follow) {
+        const content = await readLocalLogs();
+        process.stdout.write(content);
+        return;
+      }
+
+      let lastSize = 0;
+      process.on("SIGINT", () => process.exit(0));
+      for (;;) {
+        try {
+          const content = await readLocalLogs();
+          if (content.length > lastSize) {
+            process.stdout.write(content.slice(lastSize));
+            lastSize = content.length;
+          }
+        } catch (e) {
+          console.error(chalk.red(e instanceof Error ? e.message : String(e)));
+          process.exit(1);
+        }
+        if (await isRunTerminal()) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    });
+
+  program
     .command("serve")
-    .description("Start the HTTP API server (GET /pipelines, POST /pipelines/:id/run, GET /runs/:runId, GET /runs/:runId/stream, GET /metrics)")
+    .description("Start the HTTP API server (GET /pipelines, POST /pipelines/:id/run, GET /runs/:runId, GET /runs/:runId/stream, GET /runs/:runId/logs, GET /metrics)")
     .option("--port <number>", "Port (default: 4001)", "4001")
     .option("--pipelines-dir <path>", "Pipelines directory", defaultPipelinesDir)
     .option("--runs-dir <path>", "Run state directory (or set RIPLINE_RUNS_DIR)", defaultRunsDir)

@@ -79,6 +79,8 @@ export type AgentNode = NodeBase & {
   cwd?: string;
   /** When runner is claude-code and global bypass is allowed: set true to use bypass for this node only. Omit or false = dontAsk for this node. Safer to enable per-node than globally. */
   dangerouslySkipPermissions?: boolean;
+  /** When runner is claude-code: model to use (e.g. claude-sonnet-4-6, claude-opus-4-6). Omit to use config or CLI default. */
+  model?: string;
 };
 
 export type RunPipelineNode = NodeBase & {

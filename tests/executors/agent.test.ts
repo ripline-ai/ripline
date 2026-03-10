@@ -136,6 +136,55 @@ describe("Agent executor", () => {
     expect(capturedParams?.sessionId).toBeUndefined();
   });
 
+  it("passes model to runner when node has model", async () => {
+    let capturedParams: Parameters<AgentRunner>[0] | null = null;
+    const capturingRunner: AgentRunner = async (params) => {
+      capturedParams = params;
+      return { text: "ok" };
+    };
+    const node: AgentNode = {
+      id: "n",
+      type: "agent",
+      prompt: "Use opus.",
+      runner: "claude-code",
+      model: "claude-opus-4-6",
+    };
+    const context: ExecutorContext = {
+      inputs: {},
+      artifacts: {},
+      env: {},
+      outputs: {},
+    };
+
+    await executeAgent(node, context, capturingRunner);
+
+    expect(capturedParams?.model).toBe("claude-opus-4-6");
+  });
+
+  it("does not pass model when node model is empty string", async () => {
+    let capturedParams: Parameters<AgentRunner>[0] | null = null;
+    const capturingRunner: AgentRunner = async (params) => {
+      capturedParams = params;
+      return { text: "ok" };
+    };
+    const node: AgentNode = {
+      id: "n",
+      type: "agent",
+      prompt: "Hi",
+      model: "",
+    };
+    const context: ExecutorContext = {
+      inputs: {},
+      artifacts: {},
+      env: {},
+      outputs: {},
+    };
+
+    await executeAgent(node, context, capturingRunner);
+
+    expect(capturedParams).not.toHaveProperty("model");
+  });
+
   it("appends output schema instruction to prompt when contracts.output is set", async () => {
     let capturedParams: Parameters<AgentRunner>[0] | null = null;
     const capturingRunner: AgentRunner = async (params) => {

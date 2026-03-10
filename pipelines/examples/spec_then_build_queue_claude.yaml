@@ -1,0 +1,59 @@
+# Spec → Build → Queue (Claude Code)
+# Runs standalone: uses runner: claude-code for all agent nodes. Spawns implement_story_claude per task.
+# Input: task (string) — the feature or idea to spec and break down.
+# Use a profile to set projectRoot for the spawned implement_story_claude runs.
+id: spec_then_build_queue_claude
+name: Spec → Build → Queue (Claude Code)
+entry: [intake]
+nodes:
+  - id: intake
+    type: input
+
+  - id: spec
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 300
+    prompt: "Write a clear user-flow and design spec for: {{task}}"
+
+  - id: decompose
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 300
+    prompt: |
+      Based on the spec below, break the feature into small implementation stories (title, description, acceptance criteria).
+
+      Spec:
+      {{spec.text}}
+
+  - id: queue
+    type: agent
+    runner: claude-code
+    mode: execute
+    prompt: |
+      Output ONLY a valid JSON array — no markdown fencing, no explanation, no prose. Each element must have exactly these keys: id (string), title (string), description (string). Create one element per implementation task based on:
+
+      {{decompose.text}}
+
+  - id: parse
+    type: transform
+    expression: "(function(text) { var m = text.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); var raw = JSON.parse(m ? m[1] : text.trim()); return raw.map(function(t) { return { id: String(t.id), title: t.title, detail: t.detail || t.description || '' }; }); })(artifacts.queue.text)"
+
+  - id: spawn
+    type: enqueue
+    pipelineId: implement_story_claude
+    tasksSource: parse
+    mode: per-item
+
+  - id: result
+    type: output
+    source: spawn
+
+edges:
+  - { from: { node: intake },    to: { node: spec } }
+  - { from: { node: spec },      to: { node: decompose } }
+  - { from: { node: decompose }, to: { node: queue } }
+  - { from: { node: queue },     to: { node: parse } }
+  - { from: { node: parse },     to: { node: spawn } }
+  - { from: { node: spawn },     to: { node: result } }

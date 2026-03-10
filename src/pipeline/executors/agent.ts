@@ -1,4 +1,5 @@
 import type { AgentNode } from "../../types.js";
+import type { Logger } from "../../log.js";
 import { interpolateTemplate } from "../../expression.js";
 import type { ExecutorContext, NodeResult } from "./types.js";
 
@@ -24,6 +25,14 @@ export type AgentRunner = (params: {
   cwd?: string;
   /** When runner is claude-code: allow bypass for this node when global bypass is enabled. Omit/false = dontAsk. */
   dangerouslySkipPermissions?: boolean;
+  /** When runner is claude-code: model to use (e.g. claude-sonnet-4-6). Omit to use config or CLI default. */
+  model?: string;
+  /** Current run ID (set when running a stored run); used for run-scoped logging. */
+  runId?: string;
+  /** Current node ID; used for run-scoped logging. */
+  nodeId?: string;
+  /** Run-scoped logger (child with runId/nodeId). When set, logs go here in addition to or instead of stderr. */
+  log?: Logger;
 }) => Promise<AgentResult>;
 
 const interpolationContext = (context: ExecutorContext) => ({
@@ -64,6 +73,9 @@ export async function executeAgent(
     ...(node.mode !== undefined && { mode: node.mode }),
     ...(resolvedCwd !== undefined && { cwd: resolvedCwd }),
     ...(node.dangerouslySkipPermissions !== undefined && { dangerouslySkipPermissions: node.dangerouslySkipPermissions }),
+    ...(node.model !== undefined && node.model.trim() !== "" && { model: node.model.trim() }),
+    ...(context.runId !== undefined && { runId: context.runId, nodeId: node.id }),
+    ...(context.log !== undefined && { log: context.log }),
   });
 
   const value = {

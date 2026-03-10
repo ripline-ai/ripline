@@ -75,8 +75,8 @@ When running **standalone** (not inside OpenClaw), you can configure the **Claud
 
 **Configuration**
 
-- **Environment:** `RIPLINE_CLAUDE_CODE_MODE` (plan | execute), `RIPLINE_CLAUDE_CODE_CWD`, `RIPLINE_CLAUDE_CODE_MAX_TURNS`, `RIPLINE_CLAUDE_CODE_TIMEOUT` (seconds).
-- **Config file:** In `.ripline/agent.json` or `ripline.config.json`, use a top-level **`claudeCode`** key: `{ "claudeCode": { "mode": "execute", "cwd": "/path/to/project", "maxTurns": 10, "timeoutSeconds": 120 } }`.
+- **Environment:** `RIPLINE_CLAUDE_CODE_MODE` (plan | execute), `RIPLINE_CLAUDE_CODE_CWD`, `RIPLINE_CLAUDE_CODE_MODEL` (default model, e.g. `claude-sonnet-4-6`), `RIPLINE_CLAUDE_CODE_MAX_TURNS`, `RIPLINE_CLAUDE_CODE_TIMEOUT` (seconds).
+- **Config file:** In `.ripline/agent.json` or `ripline.config.json`, use a top-level **`claudeCode`** key: `{ "claudeCode": { "mode": "execute", "cwd": "/path/to/project", "model": "claude-sonnet-4-6", "maxTurns": 10, "timeoutSeconds": 120 } }`. The optional **`model`** sets the default for all Claude Code nodes; per-node **`model`** overrides it.
 - **Plugin config:** When the plugin runs without OpenClaw, you can set `pluginConfig.claudeCode` with the same shape.
 
 **Important:** When the pipeline runs **inside OpenClaw**, `claudeCodeRunner` is **not** set. Agent nodes with `runner: "claude-code"` will fail with “claude-code runner required”. Use the default runner (OpenClaw) for those environments.
@@ -118,6 +118,17 @@ By default, execute mode uses `permissionMode: "dontAsk"` with an explicit **all
 - **Environment:** Set `RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS=true` (useful in CI/CD).
 
 **Per-node opt-in (recommended):** For safety, bypass runs only for nodes that explicitly set **`dangerouslySkipPermissions: true`** in the pipeline YAML. Even with global bypass enabled, nodes that omit this property use default execute mode (`dontAsk` + allowedTools). This limits blast radius: only the nodes you mark get full autonomy.
+
+### Logging (Claude Code runner)
+
+The Claude Code runner writes diagnostic logs to stderr (and, when running a stored run, to `<runsDir>/<runId>/log.txt`):
+
+1. **Stream message logging** — Every message from the Claude Agent SDK stream is logged with `type` and `subtype` (e.g. `system/init`, `assistant`, `user`, `result`) so you can see turns in real time.
+2. **Result message dump** — When a `type=result` message arrives, the full object is logged (truncated to 2000 chars).
+3. **Rich error detail on failure** — On non-success (e.g. `error_max_turns`), the runner logs `subtype`, `errors`, and a result snippet, then throws with that detail.
+4. **Config at startup** — Set **`RIPLINE_LOG_CONFIG=1`** to log the effective config once per invocation: `maxTurns`, `timeoutMs`, `mode`, `cwd`. Omit or leave unset to keep startup quiet.
+
+To view logs for a run: use **`ripline logs <runId>`** (or **`ripline logs <runId> --follow`** to stream), or **`GET /runs/:runId/logs`** / **`GET /runs/:runId/logs/stream`** via the HTTP API. See [Logging](../README.md#logging) and [HTTP API – run logs](http-api.md#get-run-logs).
 
 **Activation rules:** Bypass is used only when **all** of the following are true: the global flag is enabled (config or env), the **node** sets `dangerouslySkipPermissions: true`, the node **mode** is `"execute"`, and **cwd** is explicitly set (in config or node params) and resolves to an existing directory. Otherwise the runner falls back to default execute mode and logs why bypass was not activated.
 
@@ -164,5 +175,6 @@ Any non-zero exit code or invalid JSON is surfaced as an error; the run record i
 - **`sessionId`** (optional, on node): Reserved for future use (e.g. explicit “use this session” override). Run-level session is set by the runner; nodes with `resetSession: false` receive it via execution context.
 - **`runner`** (optional): Set to `"claude-code"` to use the Claude Code runner for this node when configured; otherwise the default runner (OpenClaw > LLM > stub) is used.
 - **`mode`** (optional, when `runner: "claude-code"`): `"plan"` (read-only) or `"execute"` (default). Ignored for other runners.
+- **`model`** (optional, when `runner: "claude-code"`): Model to use for this node (e.g. `claude-sonnet-4-6`, `claude-opus-4-6`). Overrides the default from config or CLI. Omit to use the default.
 - **`cwd`** (optional, when `runner: "claude-code"`): Working directory for the Claude Code run; supports template interpolation (e.g. `{{ run.inputs.repoPath }}`). Must be an existing directory and must not contain `..`. Ignored for other runners.
 - **`dangerouslySkipPermissions`** (optional, when `runner: "claude-code"`): Set to `true` to allow bypass permissions for this node when global bypass is enabled (`~/.ripline/config.json` or `RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS=true`). Omit or `false` = use default execute mode (`dontAsk` + allowedTools) for this node. Safer to enable only on specific nodes that need full autonomy.

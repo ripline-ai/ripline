@@ -1,6 +1,7 @@
 import type { PipelineNode } from "../../types.js";
 import type { RunStore } from "../../run-store.js";
 import type { RunQueue } from "../../run-queue.js";
+import type { Logger } from "../../log.js";
 
 /** Result of executing a single node. Used for telemetry (artifact id + size). */
 export type NodeResult = {
@@ -29,6 +30,8 @@ export type ExecutorContext = {
   queue?: RunQueue;
   /** Run-level session ID for agent nodes with resetSession: false (shared conversation). */
   sessionId?: string;
+  /** Run-scoped logger (child with runId/nodeId). When set, agent runners can use it for run log capture. */
+  log?: Logger;
 };
 
 export type NodeExecutor = (

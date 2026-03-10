@@ -11,6 +11,7 @@ import type {
 import type { RunStore } from "../run-store.js";
 import { PipelineRunStore } from "../run-store.js";
 import type { RunQueue } from "../run-queue.js";
+import type { Logger } from "../log.js";
 import { validateOutputContract } from "../lib/contract-validate.js";
 import { executeNode } from "./executors/index.js";
 import type { AgentRunner } from "./executors/index.js";
@@ -46,6 +47,8 @@ export type RunnerOptions = {
   claudeCodeRunner?: AgentRunner;
   /** If set, write final outputs to this path as JSON. */
   outPath?: string;
+  /** Optional run-scoped logger; when set, a child logger (runId/nodeId) is passed to executors for log capture. */
+  log?: Logger;
 };
 
 export type NodeStartedEvent = { nodeId: string; nodeType: string; at: number };
@@ -442,6 +445,9 @@ export class DeterministicRunner extends EventEmitter {
         runId: record.id,
         store: this.store,
         queue: this.runnerOptions.queue,
+        ...(this.runnerOptions.log && {
+          log: this.runnerOptions.log.child({ runId: record.id, nodeId: node.id }),
+        }),
       }),
     };
   }
