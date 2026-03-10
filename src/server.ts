@@ -74,6 +74,24 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     }
   }
 
+  /** GET /pipelines/:id - single pipeline definition */
+  fastify.get<{ Params: { id: string } }>("/pipelines/:id", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const entry = await registry.get(request.params.id);
+      if (!entry) {
+        return reply.status(404).send({ error: "Not Found", message: `Pipeline ${request.params.id} not found` });
+      }
+      return reply.send({
+        id: entry.definition.id,
+        name: entry.definition.name,
+        ...(entry.definition.tags && { tags: entry.definition.tags }),
+        nodes: entry.definition.nodes,
+        edges: entry.definition.edges,
+      });
+    },
+  });
+
   /** GET /pipelines - list definitions (id, name, tags) */
   fastify.get("/pipelines", {
     preHandler: requireAuth,
