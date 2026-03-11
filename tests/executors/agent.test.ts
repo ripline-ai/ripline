@@ -326,3 +326,59 @@ describe("Agent executor", () => {
     expect(capturedParams?.prompt).toContain("object");
   });
 });
+
+describe("Skills and MCP server resolution", () => {
+  const capturingRunner = async (params: Parameters<import("../../src/pipeline/executors/agent.js").AgentRunner>[0]) =>
+    ({ text: "ok", _params: params } as import("../../src/pipeline/executors/agent.js").AgentResult & { _params: typeof params });
+
+  const baseContext: import("../../src/pipeline/executors/types.js").ExecutorContext = {
+    inputs: {},
+    artifacts: {},
+    env: {},
+    outputs: {},
+  };
+
+  it("resolves skills shorthand from registry to mcpServers", async () => {
+    let captured: Parameters<import("../../src/pipeline/executors/agent.js").AgentRunner>[0] | null = null;
+    const runner: import("../../src/pipeline/executors/agent.js").AgentRunner = async (p) => { captured = p; return { text: "ok" }; };
+    const node: import("../../src/types.js").AgentNode = { id: "n", type: "agent", agentId: "browser", prompt: "Go" };
+    const agentDefs: Record<string, import("../../src/types.js").AgentDefinition> = {
+      browser: { runner: "claude-code", skills: ["playwright"] },
+    };
+    const registry: import("../../src/types.js").SkillsRegistry = {
+      playwright: { command: "npx", args: ["@playwright/mcp@latest"], description: "Browser automation" },
+    };
+    await executeAgent(node, { ...baseContext, artifacts: {} }, { claudeCodeRunner: runner }, agentDefs, registry);
+    expect(captured?.mcpServers?.playwright).toMatchObject({ command: "npx", args: ["@playwright/mcp@latest"] });
+    expect((captured?.mcpServers?.playwright as Record<string, unknown>)?.description).toBeUndefined();
+  });
+
+  it("explicit mcpServers in agent definition override registry-resolved skills", async () => {
+    let captured: Parameters<import("../../src/pipeline/executors/agent.js").AgentRunner>[0] | null = null;
+    const runner: import("../../src/pipeline/executors/agent.js").AgentRunner = async (p) => { captured = p; return { text: "ok" }; };
+    const node: import("../../src/types.js").AgentNode = { id: "n", type: "agent", agentId: "browser", prompt: "Go" };
+    const agentDefs: Record<string, import("../../src/types.js").AgentDefinition> = {
+      browser: {
+        runner: "claude-code",
+        skills: ["playwright"],
+        mcpServers: { playwright: { command: "node", args: ["custom.js"] } },
+      },
+    };
+    const registry: import("../../src/types.js").SkillsRegistry = {
+      playwright: { command: "npx", args: ["@playwright/mcp@latest"] },
+    };
+    await executeAgent(node, { ...baseContext, artifacts: {} }, { claudeCodeRunner: runner }, agentDefs, registry);
+    expect(captured?.mcpServers?.playwright).toMatchObject({ command: "node", args: ["custom.js"] });
+  });
+
+  it("no mcpServers passed when agent has no skills config", async () => {
+    let captured: Parameters<import("../../src/pipeline/executors/agent.js").AgentRunner>[0] | null = null;
+    const runner: import("../../src/pipeline/executors/agent.js").AgentRunner = async (p) => { captured = p; return { text: "ok" }; };
+    const node: import("../../src/types.js").AgentNode = { id: "n", type: "agent", agentId: "vector", prompt: "Go" };
+    const agentDefs: Record<string, import("../../src/types.js").AgentDefinition> = {
+      vector: { runner: "claude-code", model: "claude-sonnet-4-6" },
+    };
+    await executeAgent(node, { ...baseContext, artifacts: {} }, { claudeCodeRunner: runner }, agentDefs);
+    expect(captured?.mcpServers).toBeUndefined();
+  });
+});

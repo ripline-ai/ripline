@@ -1,10 +1,40 @@
 import type { JSONSchema7 } from "json-schema";
 
+export type McpStdioServerConfig = {
+  type?: "stdio";
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+};
+
+export type McpSSEServerConfig = {
+  type: "sse";
+  url: string;
+  headers?: Record<string, string>;
+};
+
+export type McpHttpServerConfig = {
+  type: "http";
+  url: string;
+  headers?: Record<string, string>;
+};
+
+/** Serializable MCP server config (no live SDK instances). */
+export type McpServerConfig = McpStdioServerConfig | McpSSEServerConfig | McpHttpServerConfig;
+
+/** A named skill: an MCP server config with an optional human-readable description. */
+export type SkillDefinition = McpServerConfig & { description?: string };
+
+/** Named library of skills available to agents. */
+export type SkillsRegistry = Record<string, SkillDefinition>;
+
 export type RiplineProfile = {
   name: string;
   description?: string;
   /** Agent definitions for this profile. Merged on top of global agents (profile wins). */
   agents?: Record<string, AgentDefinition>;
+  /** Skills registry for this profile. Merged on top of global skills (profile wins). */
+  skills?: SkillsRegistry;
   inputs: Record<string, unknown>;
 };
 
@@ -46,6 +76,12 @@ export type ClaudeCodeAgentDefinition = {
   timeoutSeconds?: number;
   cwd?: string;
   dangerouslySkipPermissions?: boolean;
+  /** Named skills to attach from the skills registry (resolved to mcpServers at run time). */
+  skills?: string[];
+  /** Explicit MCP server configs. Merged with resolved skills; explicit entries win. */
+  mcpServers?: Record<string, McpServerConfig>;
+  /** Path to a markdown file describing available skills; injected into agent context. Relative to effective cwd, or absolute. */
+  skillsFile?: string;
 };
 
 /** An agent with no special Ripline config (e.g. an OpenClaw agent whose definition lives externally). */

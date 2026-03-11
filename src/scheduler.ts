@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { RunStore } from "./run-store.js";
 import type { RunQueue } from "./run-queue.js";
-import type { AgentDefinition, PipelineRegistryEntry } from "./types.js";
+import type { AgentDefinition, SkillsRegistry, PipelineRegistryEntry } from "./types.js";
 import { createLogger } from "./log.js";
 import { createRunScopedFileSink } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
@@ -16,6 +16,8 @@ export type SchedulerConfig = {
   claudeCodeRunner?: AgentRunner;
   /** Named agent definitions (from ripline.config.json or profile). */
   agentDefinitions?: Record<string, AgentDefinition>;
+  /** Skills registry for resolving agent skill shorthand names to MCP server configs. */
+  skillsRegistry?: SkillsRegistry;
   /** Poll interval when queue is empty (ms). */
   pollIntervalMs?: number;
 };
@@ -42,6 +44,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
     agentRunner,
     claudeCodeRunner,
     agentDefinitions,
+    skillsRegistry,
     pollIntervalMs = 500,
   } = config;
 
@@ -82,6 +85,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
           ...(agentRunner && { agentRunner }),
           ...(claudeCodeRunner && { claudeCodeRunner }),
           ...(agentDefinitions !== undefined && { agentDefinitions }),
+          ...(skillsRegistry !== undefined && { skillsRegistry }),
         });
         await runner.run(
           record.cursor !== undefined

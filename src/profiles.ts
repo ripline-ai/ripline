@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import type { AgentDefinition, RiplineProfile } from "./types.js";
-import { agentDefinitionSchema } from "./schema.js";
+import type { AgentDefinition, SkillsRegistry, RiplineProfile } from "./types.js";
+import { agentDefinitionSchema, skillsRegistrySchema } from "./schema.js";
 
 /**
  * Load a profile by name from the profile directory.
@@ -61,6 +61,10 @@ export function loadProfile(name: string, profileDir: string): RiplineProfile {
     }
     if (Object.keys(agents).length > 0) result.agents = agents;
   }
+  if (obj.skills != null && typeof obj.skills === "object" && !Array.isArray(obj.skills)) {
+    const parsed = skillsRegistrySchema.safeParse(obj.skills);
+    if (parsed.success && Object.keys(parsed.data).length > 0) result.skills = parsed.data as SkillsRegistry;
+  }
   return result;
 }
 
@@ -102,6 +106,18 @@ export function mergeAgents(
   profile: RiplineProfile | null
 ): Record<string, AgentDefinition> | undefined {
   const merged = { ...(global ?? {}), ...(profile?.agents ?? {}) };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/**
+ * Merge skills registries: profile skills override global skills.
+ * Returns merged registry, or undefined when both sources are empty.
+ */
+export function mergeSkills(
+  global: SkillsRegistry | null | undefined,
+  profile: RiplineProfile | null
+): SkillsRegistry | undefined {
+  const merged = { ...(global ?? {}), ...(profile?.skills ?? {}) };
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 

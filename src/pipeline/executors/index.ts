@@ -1,4 +1,4 @@
-import type { PipelineNode, AgentDefinition } from "../../types.js";
+import type { PipelineNode, AgentDefinition, SkillsRegistry } from "../../types.js";
 import type { ExecutorContext, NodeResult } from "./types.js";
 import { executeInput } from "./input.js";
 import { executeTransform } from "./transform.js";
@@ -22,6 +22,8 @@ export type ExecutorRegistryOptions = {
   claudeCodeRunner?: AgentRunner;
   /** Named agent definitions. Claude Code agents are routed automatically by their runner field. */
   agentDefinitions?: Record<string, AgentDefinition>;
+  /** Skills registry for resolving agent skill shorthand names to MCP server configs. */
+  skillsRegistry?: SkillsRegistry;
 };
 
 const executors: Map<string, (node: PipelineNode, context: ExecutorContext, options?: ExecutorRegistryOptions) => Promise<NodeResult>> = new Map();
@@ -41,7 +43,8 @@ function registerExecutors() {
         ...(options?.agentRunner !== undefined && { agentRunner: options.agentRunner }),
         ...(options?.claudeCodeRunner !== undefined && { claudeCodeRunner: options.claudeCodeRunner }),
       },
-      options?.agentDefinitions
+      options?.agentDefinitions,
+      options?.skillsRegistry
     );
   });
 }

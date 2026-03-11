@@ -4,8 +4,8 @@ import os from "node:os";
 import type { LlmAgentRunnerConfig } from "./llm-agent-runner.js";
 import type { ClaudeCodeRunnerConfig } from "./claude-code-runner.js";
 import { loadUserConfig } from "./config.js";
-import { agentDefinitionSchema } from "./schema.js";
-import type { AgentDefinition } from "./types.js";
+import { agentDefinitionSchema, skillsRegistrySchema } from "./schema.js";
+import type { AgentDefinition, SkillsRegistry } from "./types.js";
 
 const ENV_PROVIDER = "RIPLINE_AGENT_PROVIDER";
 const ENV_MODEL = "RIPLINE_AGENT_MODEL";
@@ -267,6 +267,24 @@ export function loadAgentDefinitionsFromFile(cwd: string): Record<string, AgentD
       if (parsed.success) result[id] = parsed.data as AgentDefinition;
     }
     return Object.keys(result).length > 0 ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load named skills registry from ripline.config.json (top-level `skills` key).
+ * Returns null if file missing, unreadable, or has no skills section.
+ */
+export function loadSkillsRegistryFromFile(cwd: string): SkillsRegistry | null {
+  const riplineConfig = path.join(cwd, "ripline.config.json");
+  if (!fs.existsSync(riplineConfig)) return null;
+  try {
+    const content = fs.readFileSync(riplineConfig, "utf-8");
+    const data = JSON.parse(content) as Record<string, unknown>;
+    if (!data.skills || typeof data.skills !== "object" || Array.isArray(data.skills)) return null;
+    const parsed = skillsRegistrySchema.safeParse(data.skills);
+    return parsed.success && Object.keys(parsed.data).length > 0 ? parsed.data as SkillsRegistry : null;
   } catch {
     return null;
   }

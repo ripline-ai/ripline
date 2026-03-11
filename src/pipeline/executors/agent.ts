@@ -1,4 +1,6 @@
-import type { AgentNode, AgentDefinition, ClaudeCodeAgentDefinition } from "../../types.js";
+import fs from "node:fs";
+import path from "node:path";
+import type { AgentNode, AgentDefinition, ClaudeCodeAgentDefinition, McpServerConfig, SkillsRegistry } from "../../types.js";
 import type { Logger } from "../../log.js";
 import { interpolateTemplate } from "../../expression.js";
 import type { ExecutorContext, NodeResult } from "./types.js";
@@ -27,6 +29,8 @@ export type AgentRunner = (params: {
   dangerouslySkipPermissions?: boolean;
   /** When runner is claude-code: model to use (e.g. claude-sonnet-4-6). Omit to use config or CLI default. */
   model?: string;
+  /** MCP servers to attach for this run (claude-code runner only). */
+  mcpServers?: Record<string, McpServerConfig>;
   /** Current run ID (set when running a stored run); used for run-scoped logging. */
   runId?: string;
   /** Current node ID; used for run-scoped logging. */
@@ -34,6 +38,21 @@ export type AgentRunner = (params: {
   /** Run-scoped logger (child with runId/nodeId). When set, logs go here in addition to or instead of stderr. */
   log?: Logger;
 }) => Promise<AgentResult>;
+
+function resolveSkillsContent(skillsFile: string | undefined, effectiveCwd: string | undefined): string | null {
+  if (skillsFile) {
+    const resolved = path.isAbsolute(skillsFile)
+      ? skillsFile
+      : effectiveCwd
+        ? path.join(effectiveCwd, skillsFile)
+        : skillsFile;
+    try { return fs.readFileSync(resolved, "utf-8"); } catch { return null; }
+  }
+  if (effectiveCwd) {
+    try { return fs.readFileSync(path.join(effectiveCwd, "SKILLS.md"), "utf-8"); } catch { return null; }
+  }
+  return null;
+}
 
 const interpolationContext = (context: ExecutorContext) => ({
   inputs: context.inputs,
@@ -46,7 +65,8 @@ export async function executeAgent(
   node: AgentNode,
   context: ExecutorContext,
   runners: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner },
-  agentDefinitions?: Record<string, AgentDefinition>
+  agentDefinitions?: Record<string, AgentDefinition>,
+  skillsRegistry?: SkillsRegistry
 ): Promise<NodeResult> {
   const agentId = node.agentId ?? "default";
   const agentDef = agentDefinitions?.[agentId];
@@ -71,22 +91,30 @@ export async function executeAgent(
   const ctx = interpolationContext(context);
   let prompt = interpolateTemplate(node.prompt, ctx);
 
+  // Merge fields: node wins over agent definition (cwd needed for SKILLS.md discovery)
+  const resolvedCwd = (() => {
+    if (node.cwd !== undefined && node.cwd.trim() !== "") return interpolateTemplate(node.cwd.trim(), ctx);
+    if (claudeCodeDef?.cwd !== undefined && claudeCodeDef.cwd.trim() !== "") return claudeCodeDef.cwd.trim();
+    return undefined;
+  })();
+
   // Prepend systemPrompt from agent definition when present
   if (claudeCodeDef?.systemPrompt) {
     prompt = `${claudeCodeDef.systemPrompt}\n\n${prompt}`;
+  }
+
+  // Inject SKILLS.md context when present (explicit skillsFile or auto-discovered from cwd)
+  if (claudeCodeDef) {
+    const skillsContent = resolveSkillsContent(claudeCodeDef.skillsFile, resolvedCwd);
+    if (skillsContent) {
+      prompt = `<skills>\n${skillsContent.trim()}\n</skills>\n\n${prompt}`;
+    }
   }
 
   if (node.contracts?.output && typeof node.contracts.output === "object") {
     const schemaBlock = `\n\nRespond with a single JSON object only (no markdown, code fences, or explanation). Your response must conform to this schema:\n\`\`\`json\n${JSON.stringify(node.contracts.output, null, 2)}\n\`\`\``;
     prompt = prompt + schemaBlock;
   }
-
-  // Merge fields: node wins over agent definition
-  const resolvedCwd = (() => {
-    if (node.cwd !== undefined && node.cwd.trim() !== "") return interpolateTemplate(node.cwd.trim(), ctx);
-    if (claudeCodeDef?.cwd !== undefined && claudeCodeDef.cwd.trim() !== "") return claudeCodeDef.cwd.trim();
-    return undefined;
-  })();
 
   const effectiveModel =
     (node.model !== undefined && node.model.trim() !== "" ? node.model.trim() : undefined) ??
@@ -95,6 +123,23 @@ export async function executeAgent(
   const effectiveThinking = node.thinking ?? claudeCodeDef?.thinking;
   const effectiveTimeout = node.timeoutSeconds ?? claudeCodeDef?.timeoutSeconds;
   const effectiveDangerously = node.dangerouslySkipPermissions ?? claudeCodeDef?.dangerouslySkipPermissions;
+
+  // Resolve MCP servers: registry-resolved skills < explicit mcpServers (explicit wins)
+  const effectiveMcpServers = (() => {
+    if (!claudeCodeDef) return undefined;
+    const fromSkills: Record<string, McpServerConfig> = {};
+    if (claudeCodeDef.skills && skillsRegistry) {
+      for (const skillName of claudeCodeDef.skills) {
+        const skill = skillsRegistry[skillName];
+        if (skill) {
+          const { description: _desc, ...mcpConfig } = skill as McpServerConfig & { description?: string };
+          fromSkills[skillName] = mcpConfig;
+        }
+      }
+    }
+    const merged = { ...fromSkills, ...(claudeCodeDef.mcpServers ?? {}) };
+    return Object.keys(merged).length > 0 ? merged : undefined;
+  })();
 
   const resetSession = node.resetSession ?? true;
   const result = await runner({
@@ -109,6 +154,7 @@ export async function executeAgent(
     ...(resolvedCwd !== undefined && { cwd: resolvedCwd }),
     ...(effectiveDangerously !== undefined && { dangerouslySkipPermissions: effectiveDangerously }),
     ...(effectiveModel !== undefined && { model: effectiveModel }),
+    ...(effectiveMcpServers !== undefined && { mcpServers: effectiveMcpServers }),
     ...(context.runId !== undefined && { runId: context.runId, nodeId: node.id }),
     ...(context.log !== undefined && { log: context.log }),
   });

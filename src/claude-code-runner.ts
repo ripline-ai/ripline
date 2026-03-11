@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { McpServerConfig } from "./types.js";
 import type { AgentResult, AgentRunner } from "./pipeline/executors/agent.js";
 
 const PLAN_MODE_DENY_TOOLS = ["Write", "Edit", "MultiEdit"];
@@ -37,6 +38,8 @@ export interface ClaudeCodeRunnerConfig {
   outputFormat?: "text" | "json";
   /** Opt-in bypass; only from user config or env, never from pipeline/profile. */
   allowDangerouslySkipPermissions?: boolean;
+  /** Default MCP servers applied to all runs (merged under call-level mcpServers; call-level wins). */
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 function validateCwd(cwd: string): string {
@@ -122,6 +125,11 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
     const cwdExplicit = params.cwd !== undefined || defaultCwd !== undefined;
     const modelRaw = params.model ?? config.model;
     const model = typeof modelRaw === "string" && modelRaw.trim() !== "" ? modelRaw.trim() : undefined;
+
+    const effectiveMcpServers = (() => {
+      const merged = { ...(config.mcpServers ?? {}), ...(params.mcpServers ?? {}) };
+      return Object.keys(merged).length > 0 ? merged : undefined;
+    })();
 
     const defaultMaxTurnsForCall =
       mode === "plan" ? DEFAULT_MAX_TURNS_PLAN : DEFAULT_MAX_TURNS_EXECUTE;
@@ -211,6 +219,7 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
           ...(disallowedTools.length > 0 && { disallowedTools }),
           ...(Object.keys(hooks).length > 0 && { hooks }),
           ...(model !== undefined && { model }),
+          ...(effectiveMcpServers !== undefined && { mcpServers: effectiveMcpServers }),
         };
 
         const q = query({

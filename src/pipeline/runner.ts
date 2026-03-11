@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import type {
   AgentDefinition,
+  SkillsRegistry,
   PipelineDefinition,
   PipelineNode,
   PipelineRunRecord,
@@ -48,6 +49,8 @@ export type RunnerOptions = {
   claudeCodeRunner?: AgentRunner;
   /** Global named agent definitions. Merged with pipeline-level agents (pipeline wins). */
   agentDefinitions?: Record<string, AgentDefinition>;
+  /** Skills registry for resolving agent skill shorthand names to MCP server configs. */
+  skillsRegistry?: SkillsRegistry;
   /** If set, write final outputs to this path as JSON. */
   outPath?: string;
   /** Optional run-scoped logger; when set, a child logger (runId/nodeId) is passed to executors for log capture. */
@@ -306,10 +309,11 @@ export class DeterministicRunner extends EventEmitter {
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           const executorContext = this.getExecutorContext(node, context, record);
-          const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner; agentDefinitions?: Record<string, AgentDefinition> } = {};
+          const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner; agentDefinitions?: Record<string, AgentDefinition>; skillsRegistry?: SkillsRegistry } = {};
           if (this.runnerOptions.agentRunner !== undefined) execOptions.agentRunner = this.runnerOptions.agentRunner;
           if (this.runnerOptions.claudeCodeRunner !== undefined) execOptions.claudeCodeRunner = this.runnerOptions.claudeCodeRunner;
           if (this.runnerOptions.agentDefinitions !== undefined) execOptions.agentDefinitions = this.runnerOptions.agentDefinitions;
+          if (this.runnerOptions.skillsRegistry !== undefined) execOptions.skillsRegistry = this.runnerOptions.skillsRegistry;
           nodeResult = await executeNode(
               node,
               executorContext,

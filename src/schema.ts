@@ -143,6 +143,34 @@ const nodeSchema = z.lazy(() =>
   ])
 ) as z.ZodType<PipelineNode>;
 
+const mcpStdioServerSchema = z.object({
+  type: z.literal("stdio").optional(),
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+});
+
+const mcpSseServerSchema = z.object({
+  type: z.literal("sse"),
+  url: z.string().min(1),
+  headers: z.record(z.string(), z.string()).optional(),
+});
+
+const mcpHttpServerSchema = z.object({
+  type: z.literal("http"),
+  url: z.string().min(1),
+  headers: z.record(z.string(), z.string()).optional(),
+});
+
+const mcpServerConfigSchema = z.union([mcpStdioServerSchema, mcpSseServerSchema, mcpHttpServerSchema]);
+
+const skillDefinitionSchema = z.intersection(
+  mcpServerConfigSchema,
+  z.object({ description: z.string().optional() })
+);
+
+export const skillsRegistrySchema = z.record(z.string(), skillDefinitionSchema);
+
 const claudeCodeAgentDefinitionSchema = z.object({
   runner: z.literal("claude-code"),
   systemPrompt: z.string().optional(),
@@ -152,6 +180,9 @@ const claudeCodeAgentDefinitionSchema = z.object({
   timeoutSeconds: z.number().int().positive().optional(),
   cwd: z.string().optional(),
   dangerouslySkipPermissions: z.boolean().optional(),
+  skills: z.array(z.string()).optional(),
+  mcpServers: z.record(z.string(), mcpServerConfigSchema).optional(),
+  skillsFile: z.string().optional(),
 });
 
 const externalAgentDefinitionSchema = z.object({

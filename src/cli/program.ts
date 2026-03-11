@@ -18,9 +18,10 @@ import {
   resolveStandaloneLlmAgentConfig,
   resolveClaudeCodeConfig,
   loadAgentDefinitionsFromFile,
+  loadSkillsRegistryFromFile,
 } from "../agent-runner-config.js";
 import { loadUserConfig, resolvePipelineDir, resolveProfileDir } from "../config.js";
-import { loadProfile, listProfiles, mergeInputs, mergeAgents } from "../profiles.js";
+import { loadProfile, listProfiles, mergeInputs, mergeAgents, mergeSkills } from "../profiles.js";
 
 export type RiplineCliOptions = {
   defaults?: {
@@ -230,6 +231,10 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         ? undefined
         : mergeAgents(loadAgentDefinitionsFromFile(cwd), profile);
 
+      const skillsRegistry = isDemo
+        ? undefined
+        : mergeSkills(loadSkillsRegistryFromFile(cwd), profile);
+
       const runnerOptions: RunnerOptions = {
         runsDir,
         verbose,
@@ -239,6 +244,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         ...(agentRunner !== undefined && { agentRunner }),
         ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
         ...(agentDefinitions !== undefined && { agentDefinitions }),
+        ...(skillsRegistry !== undefined && { skillsRegistry }),
       };
       const runner = new DeterministicRunner(definition, runnerOptions);
 
