@@ -99,6 +99,12 @@ const base = site.value?.base ?? "/ripline/";
   box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.4);
 }
 
+@media (max-width: 768px) {
+  .home-extra {
+    padding: 0 16px 3rem;
+  }
+}
+
 .home-section {
   max-width: 720px;
   margin: 0 auto;
@@ -274,5 +280,65 @@ const base = site.value?.base ?? "/ripline/";
   color: var(--mist);
   opacity: 0.9;
   margin: 0;
+}
+
+/* Mobile: comfortable padding and readable text */
+@media (max-width: 768px) {
+  .home-extra {
+    padding: 0 16px 3rem;
+  }
+
+  .home-section {
+    padding: 2rem 0;
+  }
+
+  .section-title {
+    font-size: 1.2rem;
+  }
+
+  .section-lead {
+    font-size: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .problem-card {
+    padding: 0.875rem 0 0.875rem 1rem;
+  }
+
+  .problem-card p {
+    font-size: 0.9375rem;
+    line-height: 1.6;
+  }
+
+  .usecase-flow ol,
+  .usecase-impl ul {
+    padding-left: 1.25rem;
+  }
+
+  .usecase-flow li,
+  .usecase-impl li {
+    margin-bottom: 0.5rem;
+    font-size: 0.9375rem;
+  }
+
+  .usecase-links {
+    font-size: 0.9375rem;
+  }
+
+  .usecase-links a {
+    display: inline-block;
+    margin-bottom: 0.25rem;
+  }
+
+  .oss-actions {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .oss-link {
+    width: 100%;
+    text-align: center;
+    padding: 0.75rem 1rem;
+  }
 }
 </style>

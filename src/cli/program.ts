@@ -17,9 +17,10 @@ import { createClaudeCodeRunner } from "../claude-code-runner.js";
 import {
   resolveStandaloneLlmAgentConfig,
   resolveClaudeCodeConfig,
+  loadAgentDefinitionsFromFile,
 } from "../agent-runner-config.js";
 import { loadUserConfig, resolvePipelineDir, resolveProfileDir } from "../config.js";
-import { loadProfile, listProfiles, mergeInputs } from "../profiles.js";
+import { loadProfile, listProfiles, mergeInputs, mergeAgents } from "../profiles.js";
 
 export type RiplineCliOptions = {
   defaults?: {
@@ -225,6 +226,10 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
 
       const env = parseEnvPairs(opts.env ?? []);
 
+      const agentDefinitions = isDemo
+        ? undefined
+        : mergeAgents(loadAgentDefinitionsFromFile(cwd), profile);
+
       const runnerOptions: RunnerOptions = {
         runsDir,
         verbose,
@@ -233,6 +238,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         ...(outPath !== undefined && { outPath }),
         ...(agentRunner !== undefined && { agentRunner }),
         ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+        ...(agentDefinitions !== undefined && { agentDefinitions }),
       };
       const runner = new DeterministicRunner(definition, runnerOptions);
 

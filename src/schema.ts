@@ -143,6 +143,26 @@ const nodeSchema = z.lazy(() =>
   ])
 ) as z.ZodType<PipelineNode>;
 
+const claudeCodeAgentDefinitionSchema = z.object({
+  runner: z.literal("claude-code"),
+  systemPrompt: z.string().optional(),
+  model: z.string().min(1).optional(),
+  mode: z.enum(["plan", "execute"]).optional(),
+  thinking: z.enum(["off", "minimal", "low", "medium", "high"]).optional(),
+  timeoutSeconds: z.number().int().positive().optional(),
+  cwd: z.string().optional(),
+  dangerouslySkipPermissions: z.boolean().optional(),
+});
+
+const externalAgentDefinitionSchema = z.object({
+  runner: z.literal("openclaw").optional(),
+});
+
+export const agentDefinitionSchema = z.union([
+  claudeCodeAgentDefinitionSchema,
+  externalAgentDefinitionSchema,
+]);
+
 const edgeSchema = z.object({
   id: z.string().optional(),
   from: z.object({ node: z.string().min(1), port: z.string().optional() }),

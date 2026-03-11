@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import type { RiplineProfile } from "./types.js";
+import type { AgentDefinition, RiplineProfile } from "./types.js";
+import { agentDefinitionSchema } from "./schema.js";
 
 /**
  * Load a profile by name from the profile directory.
@@ -52,6 +53,14 @@ export function loadProfile(name: string, profileDir: string): RiplineProfile {
     const d = obj.description.trim();
     if (d) result.description = d;
   }
+  if (obj.agents != null && typeof obj.agents === "object" && !Array.isArray(obj.agents)) {
+    const agents: Record<string, AgentDefinition> = {};
+    for (const [id, def] of Object.entries(obj.agents as Record<string, unknown>)) {
+      const parsed = agentDefinitionSchema.safeParse(def);
+      if (parsed.success) agents[id] = parsed.data as AgentDefinition;
+    }
+    if (Object.keys(agents).length > 0) result.agents = agents;
+  }
   return result;
 }
 
@@ -82,6 +91,18 @@ export function listProfiles(profileDir: string): RiplineProfile[] {
     }
   }
   return profiles;
+}
+
+/**
+ * Merge agent definitions: profile agents override global agents.
+ * Returns merged map, or undefined when both sources are empty.
+ */
+export function mergeAgents(
+  global: Record<string, AgentDefinition> | null | undefined,
+  profile: RiplineProfile | null
+): Record<string, AgentDefinition> | undefined {
+  const merged = { ...(global ?? {}), ...(profile?.agents ?? {}) };
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 /**

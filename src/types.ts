@@ -3,6 +3,8 @@ import type { JSONSchema7 } from "json-schema";
 export type RiplineProfile = {
   name: string;
   description?: string;
+  /** Agent definitions for this profile. Merged on top of global agents (profile wins). */
+  agents?: Record<string, AgentDefinition>;
   inputs: Record<string, unknown>;
 };
 
@@ -33,6 +35,25 @@ export type NodeRetryConfig = {
   maxAttempts: number;
   delayMs?: number;
 };
+
+export type ClaudeCodeAgentDefinition = {
+  runner: "claude-code";
+  /** Prepended to the node's prompt at run time. */
+  systemPrompt?: string;
+  model?: string;
+  mode?: "plan" | "execute";
+  thinking?: "off" | "minimal" | "low" | "medium" | "high";
+  timeoutSeconds?: number;
+  cwd?: string;
+  dangerouslySkipPermissions?: boolean;
+};
+
+/** An agent with no special Ripline config (e.g. an OpenClaw agent whose definition lives externally). */
+export type ExternalAgentDefinition = {
+  runner?: "openclaw";
+};
+
+export type AgentDefinition = ClaudeCodeAgentDefinition | ExternalAgentDefinition;
 
 export type NodeBase = {
   id: string;

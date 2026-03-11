@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import fs from "node:fs/promises";
 import type {
+  AgentDefinition,
   PipelineDefinition,
   PipelineNode,
   PipelineRunRecord,
@@ -45,6 +46,8 @@ export type RunnerOptions = {
   agentRunner?: AgentRunner;
   /** For agent nodes with runner: claude-code. Not set when running inside OpenClaw. */
   claudeCodeRunner?: AgentRunner;
+  /** Global named agent definitions. Merged with pipeline-level agents (pipeline wins). */
+  agentDefinitions?: Record<string, AgentDefinition>;
   /** If set, write final outputs to this path as JSON. */
   outPath?: string;
   /** Optional run-scoped logger; when set, a child logger (runId/nodeId) is passed to executors for log capture. */
@@ -303,9 +306,10 @@ export class DeterministicRunner extends EventEmitter {
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           const executorContext = this.getExecutorContext(node, context, record);
-          const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner } = {};
+          const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner; agentDefinitions?: Record<string, AgentDefinition> } = {};
           if (this.runnerOptions.agentRunner !== undefined) execOptions.agentRunner = this.runnerOptions.agentRunner;
           if (this.runnerOptions.claudeCodeRunner !== undefined) execOptions.claudeCodeRunner = this.runnerOptions.claudeCodeRunner;
+          if (this.runnerOptions.agentDefinitions !== undefined) execOptions.agentDefinitions = this.runnerOptions.agentDefinitions;
           nodeResult = await executeNode(
               node,
               executorContext,

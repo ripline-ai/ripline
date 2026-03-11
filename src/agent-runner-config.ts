@@ -4,6 +4,8 @@ import os from "node:os";
 import type { LlmAgentRunnerConfig } from "./llm-agent-runner.js";
 import type { ClaudeCodeRunnerConfig } from "./claude-code-runner.js";
 import { loadUserConfig } from "./config.js";
+import { agentDefinitionSchema } from "./schema.js";
+import type { AgentDefinition } from "./types.js";
 
 const ENV_PROVIDER = "RIPLINE_AGENT_PROVIDER";
 const ENV_MODEL = "RIPLINE_AGENT_MODEL";
@@ -245,6 +247,29 @@ export function loadClaudeCodeConfigFromFile(cwd: string): ClaudeCodeRunnerConfi
   }
 
   return null;
+}
+
+/**
+ * Load named agent definitions from ripline.config.json (top-level `agents` key).
+ * Returns null if file missing, unreadable, or has no agents section.
+ */
+export function loadAgentDefinitionsFromFile(cwd: string): Record<string, AgentDefinition> | null {
+  const riplineConfig = path.join(cwd, "ripline.config.json");
+  if (!fs.existsSync(riplineConfig)) return null;
+  try {
+    const content = fs.readFileSync(riplineConfig, "utf-8");
+    const data = JSON.parse(content) as Record<string, unknown>;
+    if (!data.agents || typeof data.agents !== "object" || Array.isArray(data.agents)) return null;
+    const raw = data.agents as Record<string, unknown>;
+    const result: Record<string, AgentDefinition> = {};
+    for (const [id, def] of Object.entries(raw)) {
+      const parsed = agentDefinitionSchema.safeParse(def);
+      if (parsed.success) result[id] = parsed.data as AgentDefinition;
+    }
+    return Object.keys(result).length > 0 ? result : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

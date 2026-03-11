@@ -24,7 +24,7 @@ describe("Agent executor", () => {
       outputs: {},
     };
 
-    const result = await executeAgent(node, context, mockRunner);
+    const result = await executeAgent(node, context, { agentRunner: mockRunner });
 
     expect(result.artifactKey).toBe("break-down");
     expect((result.value as { text: string }).text).toContain("Response for vector");
@@ -54,7 +54,7 @@ describe("Agent executor", () => {
       outputs: {},
     };
 
-    await executeAgent(node, context, capturingRunner);
+    await executeAgent(node, context, { agentRunner: capturingRunner });
 
     expect(capturedParams?.agentId).toBe("nova");
     expect(capturedParams?.thinking).toBe("high");
@@ -79,7 +79,7 @@ describe("Agent executor", () => {
       outputs: {},
     };
 
-    await executeAgent(node, context, capturingRunner);
+    await executeAgent(node, context, { agentRunner: capturingRunner });
 
     expect(capturedParams?.resetSession).toBe(true);
     expect(capturedParams?.sessionId).toBeUndefined();
@@ -105,7 +105,7 @@ describe("Agent executor", () => {
       sessionId: "run-session-abc-123",
     };
 
-    await executeAgent(node, context, capturingRunner);
+    await executeAgent(node, context, { agentRunner: capturingRunner });
 
     expect(capturedParams?.resetSession).toBe(false);
     expect(capturedParams?.sessionId).toBe("run-session-abc-123");
@@ -130,7 +130,7 @@ describe("Agent executor", () => {
       outputs: {},
     };
 
-    await executeAgent(node, context, capturingRunner);
+    await executeAgent(node, context, { agentRunner: capturingRunner });
 
     expect(capturedParams?.resetSession).toBe(false);
     expect(capturedParams?.sessionId).toBeUndefined();
@@ -156,7 +156,7 @@ describe("Agent executor", () => {
       outputs: {},
     };
 
-    await executeAgent(node, context, capturingRunner);
+    await executeAgent(node, context, { agentRunner: capturingRunner });
 
     expect(capturedParams?.model).toBe("claude-opus-4-6");
   });
@@ -180,9 +180,119 @@ describe("Agent executor", () => {
       outputs: {},
     };
 
-    await executeAgent(node, context, capturingRunner);
+    await executeAgent(node, context, { agentRunner: capturingRunner });
 
     expect(capturedParams).not.toHaveProperty("model");
+  });
+
+  it("routes to claudeCodeRunner when agent definition has runner: claude-code", async () => {
+    let usedRunner: string | null = null;
+    const agentRunner: AgentRunner = async () => { usedRunner = "agentRunner"; return { text: "from agent" }; };
+    const claudeCodeRunner: AgentRunner = async () => { usedRunner = "claudeCodeRunner"; return { text: "from claude" }; };
+    const node: AgentNode = {
+      id: "n",
+      type: "agent",
+      agentId: "writer",
+      prompt: "Write something.",
+    };
+    const context: ExecutorContext = { inputs: {}, artifacts: {}, env: {}, outputs: {} };
+
+    const result = await executeAgent(
+      node,
+      context,
+      { agentRunner, claudeCodeRunner },
+      { writer: { runner: "claude-code" } }
+    );
+
+    expect(usedRunner).toBe("claudeCodeRunner");
+    expect((result.value as { text: string }).text).toBe("from claude");
+  });
+
+  it("prepends systemPrompt from agent definition to node prompt", async () => {
+    let capturedParams: Parameters<AgentRunner>[0] | null = null;
+    const capturingRunner: AgentRunner = async (params) => { capturedParams = params; return { text: "ok" }; };
+    const node: AgentNode = {
+      id: "n",
+      type: "agent",
+      agentId: "writer",
+      prompt: "Write a post.",
+    };
+    const context: ExecutorContext = { inputs: {}, artifacts: {}, env: {}, outputs: {} };
+
+    await executeAgent(
+      node,
+      context,
+      { claudeCodeRunner: capturingRunner },
+      { writer: { runner: "claude-code", systemPrompt: "You are a technical writer." } }
+    );
+
+    expect(capturedParams?.prompt).toBe("You are a technical writer.\n\nWrite a post.");
+  });
+
+  it("node-level model overrides agent definition model", async () => {
+    let capturedParams: Parameters<AgentRunner>[0] | null = null;
+    const capturingRunner: AgentRunner = async (params) => { capturedParams = params; return { text: "ok" }; };
+    const node: AgentNode = {
+      id: "n",
+      type: "agent",
+      agentId: "writer",
+      prompt: "Write.",
+      model: "claude-opus-4-6",
+    };
+    const context: ExecutorContext = { inputs: {}, artifacts: {}, env: {}, outputs: {} };
+
+    await executeAgent(
+      node,
+      context,
+      { claudeCodeRunner: capturingRunner },
+      { writer: { runner: "claude-code", model: "claude-haiku-4-5-20251001" } }
+    );
+
+    expect(capturedParams?.model).toBe("claude-opus-4-6");
+  });
+
+  it("uses agent definition model when node does not specify one", async () => {
+    let capturedParams: Parameters<AgentRunner>[0] | null = null;
+    const capturingRunner: AgentRunner = async (params) => { capturedParams = params; return { text: "ok" }; };
+    const node: AgentNode = {
+      id: "n",
+      type: "agent",
+      agentId: "writer",
+      prompt: "Write.",
+    };
+    const context: ExecutorContext = { inputs: {}, artifacts: {}, env: {}, outputs: {} };
+
+    await executeAgent(
+      node,
+      context,
+      { claudeCodeRunner: capturingRunner },
+      { writer: { runner: "claude-code", model: "claude-sonnet-4-6", mode: "plan" } }
+    );
+
+    expect(capturedParams?.model).toBe("claude-sonnet-4-6");
+    expect(capturedParams?.mode).toBe("plan");
+  });
+
+  it("falls through to agentRunner when agent definition has no claude-code runner", async () => {
+    let usedRunner: string | null = null;
+    const agentRunner: AgentRunner = async () => { usedRunner = "agentRunner"; return { text: "from agent" }; };
+    const claudeCodeRunner: AgentRunner = async () => { usedRunner = "claudeCodeRunner"; return { text: "from claude" }; };
+    const node: AgentNode = {
+      id: "n",
+      type: "agent",
+      agentId: "nova",
+      prompt: "Do something.",
+    };
+    const context: ExecutorContext = { inputs: {}, artifacts: {}, env: {}, outputs: {} };
+
+    await executeAgent(
+      node,
+      context,
+      { agentRunner, claudeCodeRunner },
+      { nova: { runner: "openclaw" } }
+    );
+
+    expect(usedRunner).toBe("agentRunner");
   });
 
   it("appends output schema instruction to prompt when contracts.output is set", async () => {
@@ -205,7 +315,7 @@ describe("Agent executor", () => {
       outputs: {},
     };
 
-    await executeAgent(node, context, capturingRunner);
+    await executeAgent(node, context, { agentRunner: capturingRunner });
 
     expect(capturedParams?.prompt).toContain("Write features.");
     expect(capturedParams?.prompt).toContain("JSON object only");

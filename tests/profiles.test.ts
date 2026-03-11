@@ -6,6 +6,7 @@ import {
   loadProfile,
   listProfiles,
   mergeInputs,
+  mergeAgents,
 } from "../src/profiles.js";
 
 describe("loadProfile", () => {
@@ -105,6 +106,101 @@ describe("listProfiles", () => {
   it("returns empty array for missing directory", () => {
     const dir = path.join(os.tmpdir(), "ripline-profile-missing-dir-" + Date.now());
     expect(listProfiles(dir)).toEqual([]);
+  });
+});
+
+describe("loadProfile agents", () => {
+  it("parses valid agents from profile YAML", () => {
+    const dir = path.join(os.tmpdir(), "ripline-profile-agents-" + Date.now());
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "myproject.yaml"),
+      `name: myproject
+inputs: {}
+agents:
+  writer:
+    runner: claude-code
+    model: claude-sonnet-4-6
+    mode: execute
+    systemPrompt: You are a technical writer.
+`,
+      "utf-8"
+    );
+    try {
+      const p = loadProfile("myproject", dir);
+      expect(p.agents).toBeDefined();
+      expect(p.agents?.writer).toMatchObject({
+        runner: "claude-code",
+        model: "claude-sonnet-4-6",
+        mode: "execute",
+        systemPrompt: "You are a technical writer.",
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("silently skips invalid agent definitions", () => {
+    const dir = path.join(os.tmpdir(), "ripline-profile-agents-bad-" + Date.now());
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "myproject.yaml"),
+      `name: myproject
+inputs: {}
+agents:
+  valid:
+    runner: openclaw
+  invalid:
+    runner: unknown-runner
+`,
+      "utf-8"
+    );
+    try {
+      const p = loadProfile("myproject", dir);
+      expect(p.agents?.valid).toBeDefined();
+      expect(p.agents?.invalid).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves agents undefined when profile has no agents section", () => {
+    const dir = path.join(os.tmpdir(), "ripline-profile-no-agents-" + Date.now());
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "plain.yaml"), "name: plain\ninputs: {}\n", "utf-8");
+    try {
+      const p = loadProfile("plain", dir);
+      expect(p.agents).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("mergeAgents", () => {
+  it("returns global agents when profile has none", () => {
+    const global = { writer: { runner: "claude-code" as const, model: "claude-sonnet-4-6" } };
+    expect(mergeAgents(global, null)).toEqual(global);
+  });
+
+  it("profile agents override global agents with the same id", () => {
+    const global = { writer: { runner: "claude-code" as const, model: "claude-haiku-4-5-20251001" } };
+    const profile = { name: "p", inputs: {}, agents: { writer: { runner: "claude-code" as const, model: "claude-opus-4-6" } } };
+    const merged = mergeAgents(global, profile);
+    expect(merged?.writer).toMatchObject({ model: "claude-opus-4-6" });
+  });
+
+  it("profile agents are merged with non-overlapping global agents", () => {
+    const global = { base: { runner: "claude-code" as const } };
+    const profile = { name: "p", inputs: {}, agents: { extra: { runner: "openclaw" as const } } };
+    const merged = mergeAgents(global, profile);
+    expect(merged?.base).toBeDefined();
+    expect(merged?.extra).toBeDefined();
+  });
+
+  it("returns undefined when both sources are empty", () => {
+    expect(mergeAgents(null, null)).toBeUndefined();
+    expect(mergeAgents({}, { name: "p", inputs: {} })).toBeUndefined();
   });
 });
 

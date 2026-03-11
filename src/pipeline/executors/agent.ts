@@ -1,4 +1,4 @@
-import type { AgentNode } from "../../types.js";
+import type { AgentNode, AgentDefinition, ClaudeCodeAgentDefinition } from "../../types.js";
 import type { Logger } from "../../log.js";
 import { interpolateTemplate } from "../../expression.js";
 import type { ExecutorContext, NodeResult } from "./types.js";
@@ -45,35 +45,70 @@ const interpolationContext = (context: ExecutorContext) => ({
 export async function executeAgent(
   node: AgentNode,
   context: ExecutorContext,
-  agentRunner: AgentRunner
+  runners: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner },
+  agentDefinitions?: Record<string, AgentDefinition>
 ): Promise<NodeResult> {
   const agentId = node.agentId ?? "default";
+  const agentDef = agentDefinitions?.[agentId];
+  const claudeCodeDef =
+    agentDef && "runner" in agentDef && agentDef.runner === "claude-code"
+      ? (agentDef as ClaudeCodeAgentDefinition)
+      : undefined;
+
+  // Determine which runner to use: node.runner takes precedence, then agent definition runner
+  const useClaudeCode = node.runner === "claude-code" || claudeCodeDef !== undefined;
+  const runner = useClaudeCode
+    ? (runners.claudeCodeRunner ?? runners.agentRunner)
+    : runners.agentRunner;
+
+  if (!runner) {
+    const msg = useClaudeCode
+      ? "Agent node requires claude-code runner (use standalone Ripline with Claude Code config; not available inside OpenClaw)"
+      : "Agent node requires agentRunner in runner options (e.g. OpenClaw sessions_spawn)";
+    throw new Error(msg);
+  }
+
   const ctx = interpolationContext(context);
   let prompt = interpolateTemplate(node.prompt, ctx);
+
+  // Prepend systemPrompt from agent definition when present
+  if (claudeCodeDef?.systemPrompt) {
+    prompt = `${claudeCodeDef.systemPrompt}\n\n${prompt}`;
+  }
 
   if (node.contracts?.output && typeof node.contracts.output === "object") {
     const schemaBlock = `\n\nRespond with a single JSON object only (no markdown, code fences, or explanation). Your response must conform to this schema:\n\`\`\`json\n${JSON.stringify(node.contracts.output, null, 2)}\n\`\`\``;
     prompt = prompt + schemaBlock;
   }
 
-  const resolvedCwd =
-    node.cwd !== undefined && node.cwd.trim() !== ""
-      ? interpolateTemplate(node.cwd.trim(), ctx)
-      : undefined;
+  // Merge fields: node wins over agent definition
+  const resolvedCwd = (() => {
+    if (node.cwd !== undefined && node.cwd.trim() !== "") return interpolateTemplate(node.cwd.trim(), ctx);
+    if (claudeCodeDef?.cwd !== undefined && claudeCodeDef.cwd.trim() !== "") return claudeCodeDef.cwd.trim();
+    return undefined;
+  })();
+
+  const effectiveModel =
+    (node.model !== undefined && node.model.trim() !== "" ? node.model.trim() : undefined) ??
+    claudeCodeDef?.model;
+  const effectiveMode = node.mode ?? claudeCodeDef?.mode;
+  const effectiveThinking = node.thinking ?? claudeCodeDef?.thinking;
+  const effectiveTimeout = node.timeoutSeconds ?? claudeCodeDef?.timeoutSeconds;
+  const effectiveDangerously = node.dangerouslySkipPermissions ?? claudeCodeDef?.dangerouslySkipPermissions;
 
   const resetSession = node.resetSession ?? true;
-  const result = await agentRunner({
+  const result = await runner({
     agentId,
     prompt,
     resetSession,
     ...(resetSession === false && context.sessionId !== undefined && { sessionId: context.sessionId }),
-    ...(node.thinking !== undefined && { thinking: node.thinking }),
-    ...(node.timeoutSeconds !== undefined && { timeoutSeconds: node.timeoutSeconds }),
-    ...(node.runner !== undefined && { runner: node.runner }),
-    ...(node.mode !== undefined && { mode: node.mode }),
+    ...(effectiveThinking !== undefined && { thinking: effectiveThinking }),
+    ...(effectiveTimeout !== undefined && { timeoutSeconds: effectiveTimeout }),
+    ...(useClaudeCode && { runner: "claude-code" }),
+    ...(effectiveMode !== undefined && { mode: effectiveMode }),
     ...(resolvedCwd !== undefined && { cwd: resolvedCwd }),
-    ...(node.dangerouslySkipPermissions !== undefined && { dangerouslySkipPermissions: node.dangerouslySkipPermissions }),
-    ...(node.model !== undefined && node.model.trim() !== "" && { model: node.model.trim() }),
+    ...(effectiveDangerously !== undefined && { dangerouslySkipPermissions: effectiveDangerously }),
+    ...(effectiveModel !== undefined && { model: effectiveModel }),
     ...(context.runId !== undefined && { runId: context.runId, nodeId: node.id }),
     ...(context.log !== undefined && { log: context.log }),
   });

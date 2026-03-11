@@ -1,0 +1,126 @@
+id: idea_generation
+name: Idea Generation Meeting
+entry: [intake]
+nodes:
+  - id: intake
+    type: input
+
+  - id: spectra-brief
+    type: agent
+    agentId: main
+    prompt: |
+      You are kicking off a twice-daily idea generation meeting with Vector and Nova.
+
+      Read the following to build context:
+      1. All project states: ls /home/openclaw/.openclaw/workspace/kanban/projects/ and read each project.yaml and task files
+      2. Recent session logs from today: read memory files in /home/openclaw/.openclaw/workspace/memory/
+      3. Existing ideas: read /home/openclaw/.openclaw/workspace/kanban/ideas/ if it exists
+
+      Then write a concise briefing (3-5 sentences) summarizing:
+      - What projects are active and what state they're in
+      - What's been worked on recently
+      - What areas seem ripe for new ideas
+
+      Output ONLY the briefing text. No preamble.
+
+  - id: vector-ideas
+    type: agent
+    agentId: vector
+    prompt: |
+      Briefing from Spectra:
+      {{spectra-brief.text}}
+
+      You are Vector, CTO. Based on this context, generate 3-5 high-value engineering/product ideas across active projects. Think about: technical improvements, architecture, automation, developer experience, new features that would have high impact.
+
+      For each idea output:
+      - title (short, punchy)
+      - description (2-3 sentences)
+      - project (the project ID it belongs to, or 'general')
+
+      Output as a JSON array:
+      [{"title":"...","description":"...","project":"..."},...]
+
+      No markdown fencing, no prose — just the JSON array.
+
+  - id: nova-ideas
+    type: agent
+    agentId: nova
+    prompt: |
+      Briefing from Spectra:
+      {{spectra-brief.text}}
+
+      You are Nova, UX Designer. Based on this context, generate 3-5 ideas focused on user experience, design, product polish, and how humans interact with the tools being built.
+
+      For each idea output:
+      - title (short, punchy)
+      - description (2-3 sentences)
+      - project (the project ID it belongs to, or 'general')
+
+      Output as a JSON array:
+      [{"title":"...","description":"...","project":"..."},...]
+
+      No markdown fencing, no prose — just the JSON array.
+
+  - id: writer-ideas
+    type: agent
+    agentId: writer
+    prompt: |
+      Briefing from Spectra:
+      {{spectra-brief.text}}
+
+      You are Writer, content creator for Craig's AI tech YouTube channel. Based on this context, generate 3-5 video ideas that would educate or entertain an audience of developers and AI enthusiasts. Think about: tutorials, explainers, case studies, behind-the-scenes, thought leadership, tools/features worth showcasing.
+
+      For each idea output:
+      - title (short, punchy — could be a video title)
+      - description (2-3 sentences explaining the hook and value)
+      - project ('youtube' or another project if cross-project collab)
+
+      Output as a JSON array:
+      [{"title":"...","description":"...","project":"..."},...]
+
+      No markdown fencing, no prose — just the JSON array.
+
+  - id: write-ideas
+    type: agent
+    agentId: main
+    prompt: |
+      Vector's ideas (JSON):
+      {{vector-ideas.text}}
+
+      Nova's ideas (JSON):
+      {{nova-ideas.text}}
+
+      Writer's ideas (JSON):
+      {{writer-ideas.text}}
+
+      Parse all three JSON arrays and write each idea as a markdown file to /home/openclaw/.openclaw/workspace/kanban/ideas/.
+
+      For each idea, create a file named `idea_<timestamp>_<index>.md` with this format:
+      ---
+      id: idea_<timestamp>_<index>
+      title: "<title>"
+      description: "<description>"
+      project: "<project>"
+      source: "<vector or nova>"
+      generatedAt: "<ISO timestamp>"
+      status: active
+      votes: 0
+      ---
+
+      <description>
+
+      Use the write tool to create each file. After writing all files, output a summary: "Generated X ideas from Vector, Y ideas from Nova. Written to ideas board."
+
+  - id: result
+    type: output
+    source: write-ideas
+
+edges:
+  - { from: { node: intake },       to: { node: spectra-brief } }
+  - { from: { node: spectra-brief }, to: { node: vector-ideas } }
+  - { from: { node: spectra-brief }, to: { node: nova-ideas } }
+  - { from: { node: spectra-brief }, to: { node: writer-ideas } }
+  - { from: { node: vector-ideas },  to: { node: write-ideas } }
+  - { from: { node: nova-ideas },    to: { node: write-ideas } }
+  - { from: { node: writer-ideas },  to: { node: write-ideas } }
+  - { from: { node: write-ideas },   to: { node: result } }

@@ -1,4 +1,4 @@
-import type { PipelineNode } from "../../types.js";
+import type { PipelineNode, AgentDefinition } from "../../types.js";
 import type { ExecutorContext, NodeResult } from "./types.js";
 import { executeInput } from "./input.js";
 import { executeTransform } from "./transform.js";
@@ -20,6 +20,8 @@ export { executeAgent } from "./agent.js";
 export type ExecutorRegistryOptions = {
   agentRunner?: AgentRunner;
   claudeCodeRunner?: AgentRunner;
+  /** Named agent definitions. Claude Code agents are routed automatically by their runner field. */
+  agentDefinitions?: Record<string, AgentDefinition>;
 };
 
 const executors: Map<string, (node: PipelineNode, context: ExecutorContext, options?: ExecutorRegistryOptions) => Promise<NodeResult>> = new Map();
@@ -32,18 +34,12 @@ function registerExecutors() {
   executors.set("collect_children", (node, ctx) => executeCollectChildren(node as import("../../types.js").CollectChildrenNode, ctx));
   executors.set("agent", (node, ctx, options) => {
     const agentNode = node as import("../../types.js").AgentNode;
-    const runner =
-      agentNode.runner === "claude-code" && options?.claudeCodeRunner !== undefined
-        ? options.claudeCodeRunner
-        : options?.agentRunner;
-    if (!runner) {
-      const msg =
-        agentNode.runner === "claude-code"
-          ? "Agent node has runner: claude-code but claudeCodeRunner was not provided (use standalone Ripline with Claude Code config; not available inside OpenClaw)"
-          : "Agent node requires agentRunner in runner options (e.g. OpenClaw sessions_spawn)";
-      return Promise.reject(new Error(msg));
-    }
-    return executeAgent(agentNode, ctx, runner);
+    return executeAgent(
+      agentNode,
+      ctx,
+      { agentRunner: options?.agentRunner, claudeCodeRunner: options?.claudeCodeRunner },
+      options?.agentDefinitions
+    );
   });
 }
 registerExecutors();
