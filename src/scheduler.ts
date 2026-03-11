@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { RunStore } from "./run-store.js";
 import type { RunQueue } from "./run-queue.js";
-import type { PipelineRegistryEntry } from "./types.js";
+import type { AgentDefinition, PipelineRegistryEntry } from "./types.js";
 import { createLogger } from "./log.js";
 import { createRunScopedFileSink } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
@@ -14,6 +14,8 @@ export type SchedulerConfig = {
   maxConcurrency: number;
   agentRunner?: AgentRunner;
   claudeCodeRunner?: AgentRunner;
+  /** Named agent definitions (from ripline.config.json or profile). */
+  agentDefinitions?: Record<string, AgentDefinition>;
   /** Poll interval when queue is empty (ms). */
   pollIntervalMs?: number;
 };
@@ -39,6 +41,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
     maxConcurrency,
     agentRunner,
     claudeCodeRunner,
+    agentDefinitions,
     pollIntervalMs = 500,
   } = config;
 
@@ -78,6 +81,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
           ...(log !== undefined && { log }),
           ...(agentRunner && { agentRunner }),
           ...(claudeCodeRunner && { claudeCodeRunner }),
+          ...(agentDefinitions !== undefined && { agentDefinitions }),
         });
         await runner.run(
           record.cursor !== undefined

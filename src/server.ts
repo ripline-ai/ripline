@@ -6,7 +6,7 @@ import Fastify, {
   type FastifyReply,
 } from "fastify";
 import cors from "@fastify/cors";
-import type { PipelinePluginConfig } from "./types.js";
+import type { AgentDefinition, PipelinePluginConfig } from "./types.js";
 import type { PipelineRunRecord } from "./types.js";
 import { PipelineRegistry } from "./registry.js";
 import { PipelineRunStore } from "./run-store.js";
@@ -15,6 +15,7 @@ import { createScheduler } from "./scheduler.js";
 import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
+import { loadAgentDefinitionsFromFile } from "./agent-runner-config.js";
 
 const DEFAULT_RUNS_DIR = ".ripline/runs";
 const SSE_POLL_MS = 500;
@@ -31,6 +32,8 @@ export type ServerConfig = PipelinePluginConfig & {
   agentRunner?: AgentRunner;
   /** For agent nodes with runner: claude-code. Not set when running inside OpenClaw. */
   claudeCodeRunner?: AgentRunner;
+  /** Named agent definitions. Loaded from ripline.config.json in pipelinesDir when not provided. */
+  agentDefinitions?: Record<string, AgentDefinition>;
 };
 
 export async function createApp(config: ServerConfig): Promise<FastifyInstance> {
@@ -44,6 +47,8 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       ? stubAgentRunner
       : (config.agentRunner ?? stubAgentRunner);
   const claudeCodeRunner = config.claudeCodeRunner;
+  const agentDefinitions =
+    config.agentDefinitions ?? loadAgentDefinitionsFromFile(config.pipelinesDir) ?? undefined;
   const maxConcurrency = config.maxConcurrency ?? 0;
   const queue = createRunQueue(store);
   const scheduler =
@@ -55,6 +60,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           maxConcurrency,
           agentRunner,
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+          ...(agentDefinitions !== undefined && { agentDefinitions }),
         })
       : null;
   if (scheduler) scheduler.start();
@@ -112,6 +118,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           log: runLog,
           agentRunner,
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+          ...(agentDefinitions !== undefined && { agentDefinitions }),
         });
         const runIdPromise = new Promise<string>((resolve) => {
           runner.once("run.started", (record: PipelineRunRecord) => resolve(record.id));
@@ -219,6 +226,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           log: retryLog,
           agentRunner,
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+          ...(agentDefinitions !== undefined && { agentDefinitions }),
         });
         const order = tempRunner.getExecutionOrder();
 

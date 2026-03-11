@@ -37,7 +37,10 @@ function registerExecutors() {
     return executeAgent(
       agentNode,
       ctx,
-      { agentRunner: options?.agentRunner, claudeCodeRunner: options?.claudeCodeRunner },
+      {
+        ...(options?.agentRunner !== undefined && { agentRunner: options.agentRunner }),
+        ...(options?.claudeCodeRunner !== undefined && { claudeCodeRunner: options.claudeCodeRunner }),
+      },
       options?.agentDefinitions
     );
   });
