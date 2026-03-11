@@ -138,6 +138,10 @@ export type AgentNode = NodeBase & {
   dangerouslySkipPermissions?: boolean;
   /** When runner is claude-code: model to use (e.g. claude-sonnet-4-6, claude-opus-4-6). Omit to use config or CLI default. */
   model?: string;
+  /** Node-level skill names to attach from the registry (merged with agent-definition skills; node wins). */
+  skills?: string[];
+  /** Node-level explicit MCP server configs (merged on top of agent-definition mcpServers; node wins). */
+  mcpServers?: Record<string, McpServerConfig>;
 };
 
 export type RunPipelineNode = NodeBase & {

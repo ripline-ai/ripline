@@ -42,6 +42,34 @@ const transformNode = baseNode.extend({
   assigns: z.string().optional(),
 });
 
+const mcpStdioServerSchema = z.object({
+  type: z.literal("stdio").optional(),
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+});
+
+const mcpSseServerSchema = z.object({
+  type: z.literal("sse"),
+  url: z.string().min(1),
+  headers: z.record(z.string(), z.string()).optional(),
+});
+
+const mcpHttpServerSchema = z.object({
+  type: z.literal("http"),
+  url: z.string().min(1),
+  headers: z.record(z.string(), z.string()).optional(),
+});
+
+const mcpServerConfigSchema = z.union([mcpStdioServerSchema, mcpSseServerSchema, mcpHttpServerSchema]);
+
+const skillDefinitionSchema = z.intersection(
+  mcpServerConfigSchema,
+  z.object({ description: z.string().optional() })
+);
+
+export const skillsRegistrySchema = z.record(z.string(), skillDefinitionSchema);
+
 const agentNode = baseNode.extend({
   type: z.literal("agent"),
   prompt: z.string().min(1),
@@ -59,6 +87,10 @@ const agentNode = baseNode.extend({
   dangerouslySkipPermissions: z.boolean().optional(),
   /** When runner is claude-code: model to use (e.g. claude-sonnet-4-6). Omit to use config or CLI default. */
   model: z.string().min(1).optional(),
+  /** Node-level skill names (merged with agent-definition skills; node wins). */
+  skills: z.array(z.string()).optional(),
+  /** Node-level explicit MCP server configs (merged on top of agent-definition mcpServers; node wins). */
+  mcpServers: z.record(z.string(), mcpServerConfigSchema).optional(),
 });
 
 const runPipelineNode = baseNode.extend({
@@ -142,34 +174,6 @@ const nodeSchema = z.lazy(() =>
     collectChildrenNode,
   ])
 ) as z.ZodType<PipelineNode>;
-
-const mcpStdioServerSchema = z.object({
-  type: z.literal("stdio").optional(),
-  command: z.string().min(1),
-  args: z.array(z.string()).optional(),
-  env: z.record(z.string(), z.string()).optional(),
-});
-
-const mcpSseServerSchema = z.object({
-  type: z.literal("sse"),
-  url: z.string().min(1),
-  headers: z.record(z.string(), z.string()).optional(),
-});
-
-const mcpHttpServerSchema = z.object({
-  type: z.literal("http"),
-  url: z.string().min(1),
-  headers: z.record(z.string(), z.string()).optional(),
-});
-
-const mcpServerConfigSchema = z.union([mcpStdioServerSchema, mcpSseServerSchema, mcpHttpServerSchema]);
-
-const skillDefinitionSchema = z.intersection(
-  mcpServerConfigSchema,
-  z.object({ description: z.string().optional() })
-);
-
-export const skillsRegistrySchema = z.record(z.string(), skillDefinitionSchema);
 
 const claudeCodeAgentDefinitionSchema = z.object({
   runner: z.literal("claude-code"),

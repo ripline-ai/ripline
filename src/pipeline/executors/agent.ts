@@ -124,20 +124,28 @@ export async function executeAgent(
   const effectiveTimeout = node.timeoutSeconds ?? claudeCodeDef?.timeoutSeconds;
   const effectiveDangerously = node.dangerouslySkipPermissions ?? claudeCodeDef?.dangerouslySkipPermissions;
 
-  // Resolve MCP servers: registry-resolved skills < explicit mcpServers (explicit wins)
+  // Resolve MCP servers (lowest → highest precedence):
+  // registry-resolved agent skills < agent mcpServers < registry-resolved node skills < node mcpServers
   const effectiveMcpServers = (() => {
-    if (!claudeCodeDef) return undefined;
-    const fromSkills: Record<string, McpServerConfig> = {};
-    if (claudeCodeDef.skills && skillsRegistry) {
-      for (const skillName of claudeCodeDef.skills) {
-        const skill = skillsRegistry[skillName];
+    if (!useClaudeCode) return undefined;
+    const resolveSkillNames = (names: string[] | undefined): Record<string, McpServerConfig> => {
+      if (!names || !skillsRegistry) return {};
+      const out: Record<string, McpServerConfig> = {};
+      for (const name of names) {
+        const skill = skillsRegistry[name];
         if (skill) {
           const { description: _desc, ...mcpConfig } = skill as McpServerConfig & { description?: string };
-          fromSkills[skillName] = mcpConfig;
+          out[name] = mcpConfig;
         }
       }
-    }
-    const merged = { ...fromSkills, ...(claudeCodeDef.mcpServers ?? {}) };
+      return out;
+    };
+    const merged = {
+      ...resolveSkillNames(claudeCodeDef?.skills),
+      ...(claudeCodeDef?.mcpServers ?? {}),
+      ...resolveSkillNames(node.skills),
+      ...(node.mcpServers ?? {}),
+    };
     return Object.keys(merged).length > 0 ? merged : undefined;
   })();
 
