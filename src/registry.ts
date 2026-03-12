@@ -18,6 +18,7 @@ export class PipelineRegistry {
     const seen = new Set<string>();
     for (const file of entries) {
       if (file.startsWith('.')) continue;
+      if (file === 'ripline.config.json') continue;
       if (!/[.](ya?ml|json)$/i.test(file)) continue;
       const fullPath = path.join(this.pipelinesDir, file);
       const stat = await fs.stat(fullPath).catch(() => null);
