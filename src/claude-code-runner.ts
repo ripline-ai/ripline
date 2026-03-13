@@ -20,8 +20,20 @@ const DEFAULT_EXECUTE_ALLOWED_TOOLS = [
   "Grep",
   "LS",
   "Bash(git *)",
+  "Bash(git add *)",
+  "Bash(git commit *)",
+  "Bash(git push *)",
+  "Bash(git pull *)",
+  "Bash(git checkout *)",
+  "Bash(git switch *)",
+  "Bash(git branch *)",
+  "Bash(git merge *)",
+  "Bash(git rebase *)",
+  "Bash(git stash *)",
   "Bash(git log *)",
   "Bash(git diff *)",
+  "Bash(git status)",
+  "Bash(git fetch *)",
   "Bash(find *)",
   "Bash(cat *)",
 ];
@@ -231,15 +243,24 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
         let usage: { input?: number; output?: number } | undefined;
 
         for await (const message of q) {
-          const m = message as { type?: string; subtype?: string; result?: string; usage?: unknown; errors?: string[] };
-          logErr(
-            `[claude-code-runner] message: type=${m.type ?? "n/a"} subtype=${m.subtype ?? "n/a"}`
-          );
+          const m = message as { type?: string; subtype?: string; result?: string; usage?: unknown; errors?: string[]; message?: { content?: Array<{ type: string; text?: string; name?: string; input?: unknown }> }; error?: string };
+          if (params.log && m.type === "assistant") {
+            for (const block of (m.message?.content ?? [])) {
+              if (block.type === "text" && block.text) {
+                params.log.log("info", block.text.trimEnd());
+              } else if (block.type === "tool_use" && block.name) {
+                const inp = block.input as Record<string, unknown> | undefined;
+                const detail = inp?.command ?? inp?.file_path ?? inp?.path ?? inp?.pattern ?? inp?.prompt;
+                const suffix = typeof detail === "string" ? `: ${detail.slice(0, 200)}` : "";
+                params.log.log("info", `tool: ${block.name}${suffix}`);
+              }
+            }
+            if (m.error) {
+              logErr(`[claude-code-runner] assistant error: ${m.error}`);
+            }
+          }
           if (m.type === "result") {
             clearTimeout(timeoutId);
-            logErr(
-              `[claude-code-runner] result message: ${JSON.stringify(m, null, 2).slice(0, 2000)}`
-            );
             if (m.subtype === "success" && typeof m.result === "string") {
               resultText = m.result;
               const u = m.usage as

@@ -16,8 +16,14 @@ import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
 import { loadAgentDefinitionsFromFile, loadSkillsRegistryFromFile } from "./agent-runner-config.js";
+import { listProfiles, loadProfile } from "./profiles.js";
 
 const DEFAULT_RUNS_DIR = ".ripline/runs";
+const DEFAULT_PROFILES_DIR = path.join(
+  process.env.HOME ?? path.resolve("."),
+  ".ripline",
+  "profiles"
+);
 const SSE_POLL_MS = 500;
 
 /** Stub agent for HTTP-triggered runs when no OpenClaw is available. */
@@ -28,6 +34,7 @@ const stubAgentRunner: AgentRunner = async ({ agentId, prompt }) => ({
 
 export type ServerConfig = PipelinePluginConfig & {
   runsDir?: string;
+  profilesDir?: string;
   /** When set (e.g. by OpenClaw plugin), agent nodes use this runner; otherwise stub. */
   agentRunner?: AgentRunner;
   /** For agent nodes with runner: claude-code. Not set when running inside OpenClaw. */
@@ -154,6 +161,51 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       },
     }
   );
+
+  const profilesDir = config.profilesDir ?? DEFAULT_PROFILES_DIR;
+
+  async function profileToResponse(name: string): Promise<{ id: string; name: string; description?: string; projectRoot?: string; createdAt: string; updatedAt: string } | null> {
+    try {
+      const profile = loadProfile(name, profilesDir);
+      const filePath = path.join(profilesDir, `${name}.yaml`);
+      let mtime = new Date().toISOString();
+      try { mtime = (await fs.stat(filePath)).mtime.toISOString(); } catch { /* use now */ }
+      return {
+        id: name,
+        name: profile.name,
+        ...(profile.description !== undefined && { description: profile.description }),
+        ...(typeof profile.inputs?.projectRoot === "string" && { projectRoot: profile.inputs.projectRoot }),
+        createdAt: mtime,
+        updatedAt: mtime,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** GET /profiles - list all profiles */
+  fastify.get<{ Querystring: { q?: string } }>("/profiles", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const all = listProfiles(profilesDir);
+      const { q } = request.query;
+      const filtered = q ? all.filter((p) => p.name.toLowerCase().includes(q.toLowerCase())) : all;
+      const results = await Promise.all(filtered.map((p) => profileToResponse(p.name)));
+      return reply.send(results.filter(Boolean));
+    },
+  });
+
+  /** GET /profiles/:id - fetch single profile */
+  fastify.get<{ Params: { id: string } }>("/profiles/:id", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const result = await profileToResponse(request.params.id);
+      if (!result) {
+        return reply.status(404).send({ error: "Not Found", message: `Profile ${request.params.id} not found` });
+      }
+      return reply.send(result);
+    },
+  });
 
   /** GET /metrics - queue depth, active workers, avg duration (when scheduler active) */
   if (scheduler) {
