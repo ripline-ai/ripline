@@ -54,11 +54,25 @@ function resolveSkillsContent(skillsFile: string | undefined, effectiveCwd: stri
   return null;
 }
 
+function resolveSkillTextContent(skillNames: string[], skillsDir: string | undefined): string | null {
+  if (!skillsDir || skillNames.length === 0) return null;
+  const parts: string[] = [];
+  for (const name of skillNames) {
+    const filePath = path.join(skillsDir, `${name}.md`);
+    try {
+      const content = fs.readFileSync(filePath, "utf-8").trim();
+      if (content) parts.push(content);
+    } catch { /* skill has no .md file — that's fine */ }
+  }
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
 const interpolationContext = (context: ExecutorContext) => ({
   inputs: context.inputs,
   ...context.inputs,
   ...context.artifacts,
   env: context.env,
+  run: { inputs: context.inputs },
 });
 
 export async function executeAgent(
@@ -66,7 +80,8 @@ export async function executeAgent(
   context: ExecutorContext,
   runners: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner },
   agentDefinitions?: Record<string, AgentDefinition>,
-  skillsRegistry?: SkillsRegistry
+  skillsRegistry?: SkillsRegistry,
+  skillsDir?: string
 ): Promise<NodeResult> {
   const agentId = node.agentId ?? "default";
   const agentDef = agentDefinitions?.[agentId];
@@ -103,11 +118,14 @@ export async function executeAgent(
     prompt = `${claudeCodeDef.systemPrompt}\n\n${prompt}`;
   }
 
-  // Inject SKILLS.md context when present (explicit skillsFile or auto-discovered from cwd)
+  // Inject skills context: per-skill .md files from skillsDir + SKILLS.md/skillsFile from cwd
   if (claudeCodeDef) {
-    const skillsContent = resolveSkillsContent(claudeCodeDef.skillsFile, resolvedCwd);
-    if (skillsContent) {
-      prompt = `<skills>\n${skillsContent.trim()}\n</skills>\n\n${prompt}`;
+    const allSkillNames = [...(claudeCodeDef.skills ?? []), ...(node.skills ?? [])];
+    const skillTextContent = resolveSkillTextContent(allSkillNames, skillsDir);
+    const cwdSkillsContent = resolveSkillsContent(claudeCodeDef.skillsFile, resolvedCwd);
+    const combined = [skillTextContent, cwdSkillsContent].filter(Boolean).join("\n\n");
+    if (combined) {
+      prompt = `<skills>\n${combined.trim()}\n</skills>\n\n${prompt}`;
     }
   }
 

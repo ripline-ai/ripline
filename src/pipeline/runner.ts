@@ -51,6 +51,8 @@ export type RunnerOptions = {
   agentDefinitions?: Record<string, AgentDefinition>;
   /** Skills registry for resolving agent skill shorthand names to MCP server configs. */
   skillsRegistry?: SkillsRegistry;
+  /** Directory containing per-skill markdown files (e.g. ~/.ripline/skills/). */
+  skillsDir?: string;
   /** If set, write final outputs to this path as JSON. */
   outPath?: string;
   /** Optional run-scoped logger; when set, a child logger (runId/nodeId) is passed to executors for log capture. */
@@ -309,11 +311,12 @@ export class DeterministicRunner extends EventEmitter {
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
           const executorContext = this.getExecutorContext(node, context, record);
-          const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner; agentDefinitions?: Record<string, AgentDefinition>; skillsRegistry?: SkillsRegistry } = {};
+          const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner; agentDefinitions?: Record<string, AgentDefinition>; skillsRegistry?: SkillsRegistry; skillsDir?: string } = {};
           if (this.runnerOptions.agentRunner !== undefined) execOptions.agentRunner = this.runnerOptions.agentRunner;
           if (this.runnerOptions.claudeCodeRunner !== undefined) execOptions.claudeCodeRunner = this.runnerOptions.claudeCodeRunner;
           if (this.runnerOptions.agentDefinitions !== undefined) execOptions.agentDefinitions = this.runnerOptions.agentDefinitions;
           if (this.runnerOptions.skillsRegistry !== undefined) execOptions.skillsRegistry = this.runnerOptions.skillsRegistry;
+          if (this.runnerOptions.skillsDir !== undefined) execOptions.skillsDir = this.runnerOptions.skillsDir;
           nodeResult = await executeNode(
               node,
               executorContext,

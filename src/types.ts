@@ -41,6 +41,7 @@ export type RiplineProfile = {
 export type RiplineUserConfig = {
   pipelineDir?: string;
   profileDir?: string;
+  skillsDir?: string;
   defaultProfile?: string;
   /** Only from ~/.ripline/config.json; never from pipeline/profile/input. */
   claudeCode?: { allowDangerouslySkipPermissions?: boolean };

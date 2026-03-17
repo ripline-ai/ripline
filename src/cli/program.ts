@@ -20,7 +20,7 @@ import {
   loadAgentDefinitionsFromFile,
   loadSkillsRegistryFromFile,
 } from "../agent-runner-config.js";
-import { loadUserConfig, resolvePipelineDir, resolveProfileDir } from "../config.js";
+import { loadUserConfig, resolvePipelineDir, resolveProfileDir, resolveSkillsDir } from "../config.js";
 import { loadProfile, listProfiles, mergeInputs, mergeAgents, mergeSkills } from "../profiles.js";
 
 export type RiplineCliOptions = {
@@ -90,6 +90,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         homedir,
       });
       const profileDir = resolveProfileDir({ flag: opts.profileDir, homedir });
+      const skillsDir = resolveSkillsDir({ homedir });
 
       const runsDirRaw = opts.runsDir ?? process.env.RIPLINE_RUNS_DIR ?? defaultRunsDir;
       const runsDir = path.isAbsolute(runsDirRaw) ? path.resolve(runsDirRaw) : path.join(cwd, runsDirRaw);
@@ -229,11 +230,17 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
 
       const agentDefinitions = isDemo
         ? undefined
-        : mergeAgents(loadAgentDefinitionsFromFile(cwd), profile);
+        : mergeAgents(
+            { ...(loadAgentDefinitionsFromFile(pipelineDir) ?? {}), ...(loadAgentDefinitionsFromFile(cwd) ?? {}) },
+            profile
+          );
 
       const skillsRegistry = isDemo
         ? undefined
-        : mergeSkills(loadSkillsRegistryFromFile(cwd), profile);
+        : mergeSkills(
+            { ...(loadSkillsRegistryFromFile(pipelineDir) ?? {}), ...(loadSkillsRegistryFromFile(cwd) ?? {}) },
+            profile
+          );
 
       const runnerOptions: RunnerOptions = {
         runsDir,
@@ -245,6 +252,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
         ...(agentDefinitions !== undefined && { agentDefinitions }),
         ...(skillsRegistry !== undefined && { skillsRegistry }),
+        skillsDir,
       };
       const runner = new DeterministicRunner(definition, runnerOptions);
 

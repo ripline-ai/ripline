@@ -6,7 +6,9 @@ import Fastify, {
   type FastifyReply,
 } from "fastify";
 import cors from "@fastify/cors";
+import os from "node:os";
 import type { AgentDefinition, SkillsRegistry, PipelinePluginConfig } from "./types.js";
+import { resolveSkillsDir } from "./config.js";
 import type { PipelineRunRecord } from "./types.js";
 import { PipelineRegistry } from "./registry.js";
 import { PipelineRunStore } from "./run-store.js";
@@ -17,6 +19,7 @@ import { DeterministicRunner } from "./pipeline/runner.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
 import { loadAgentDefinitionsFromFile, loadSkillsRegistryFromFile } from "./agent-runner-config.js";
 import { listProfiles, loadProfile } from "./profiles.js";
+import YAML from "yaml";
 
 const DEFAULT_RUNS_DIR = ".ripline/runs";
 const DEFAULT_PROFILES_DIR = path.join(
@@ -43,6 +46,8 @@ export type ServerConfig = PipelinePluginConfig & {
   agentDefinitions?: Record<string, AgentDefinition>;
   /** Skills registry. Loaded from ripline.config.json in pipelinesDir when not provided. */
   skillsRegistry?: SkillsRegistry;
+  /** Directory containing per-skill markdown files. Defaults to ~/.ripline/skills. */
+  skillsDir?: string;
 };
 
 export async function createApp(config: ServerConfig): Promise<FastifyInstance> {
@@ -60,6 +65,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     config.agentDefinitions ?? loadAgentDefinitionsFromFile(config.pipelinesDir) ?? undefined;
   const skillsRegistry =
     config.skillsRegistry ?? loadSkillsRegistryFromFile(config.pipelinesDir) ?? undefined;
+  const skillsDir = config.skillsDir ?? resolveSkillsDir({ homedir: os.homedir() });
   const maxConcurrency = config.maxConcurrency ?? 0;
   const queue = createRunQueue(store);
   const scheduler =
@@ -73,6 +79,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
           ...(agentDefinitions !== undefined && { agentDefinitions }),
           ...(skillsRegistry !== undefined && { skillsRegistry }),
+          skillsDir,
         })
       : null;
   if (scheduler) scheduler.start();
@@ -146,6 +153,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
           ...(agentDefinitions !== undefined && { agentDefinitions }),
           ...(skillsRegistry !== undefined && { skillsRegistry }),
+          skillsDir,
         });
         const runIdPromise = new Promise<string>((resolve) => {
           runner.once("run.started", (record: PipelineRunRecord) => resolve(record.id));
@@ -204,6 +212,54 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         return reply.status(404).send({ error: "Not Found", message: `Profile ${request.params.id} not found` });
       }
       return reply.send(result);
+    },
+  });
+
+  /** POST /profiles - create a new profile YAML */
+  fastify.post<{ Body: { name?: string; description?: string; inputs?: Record<string, unknown> } }>("/profiles", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const { name, description, inputs } = (request.body as { name?: string; description?: string; inputs?: Record<string, unknown> }) ?? {};
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return reply.status(400).send({ error: "Bad Request", message: "name is required" });
+      }
+      const safeName = name.trim().replace(/[/\\]/g, "");
+      if (!safeName) {
+        return reply.status(400).send({ error: "Bad Request", message: "Invalid profile name" });
+      }
+      const filePath = path.join(profilesDir, `${safeName}.yaml`);
+      try {
+        await fs.access(filePath);
+        return reply.status(409).send({ error: "Conflict", message: `Profile "${safeName}" already exists` });
+      } catch { /* does not exist — proceed */ }
+      const profileObj: Record<string, unknown> = { name: safeName };
+      if (typeof description === "string" && description.trim()) {
+        profileObj.description = description.trim();
+      }
+      profileObj.inputs = (inputs && typeof inputs === "object" && !Array.isArray(inputs)) ? inputs : {};
+      const content = YAML.stringify(profileObj);
+      await fs.mkdir(profilesDir, { recursive: true });
+      await fs.writeFile(filePath, content, "utf8");
+      const result = await profileToResponse(safeName);
+      return reply.status(201).send(result);
+    },
+  });
+
+  /** DELETE /profiles/:id - remove a profile YAML */
+  fastify.delete<{ Params: { id: string } }>("/profiles/:id", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const safeName = request.params.id.replace(/[/\\]/g, "");
+      const filePath = path.join(profilesDir, `${safeName}.yaml`);
+      try {
+        await fs.unlink(filePath);
+        return reply.status(204).send();
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+          return reply.status(404).send({ error: "Not Found", message: `Profile ${safeName} not found` });
+        }
+        return reply.status(500).send({ error: "Internal Server Error", message: String(err) });
+      }
     },
   });
 
@@ -300,6 +356,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
           ...(agentDefinitions !== undefined && { agentDefinitions }),
           ...(skillsRegistry !== undefined && { skillsRegistry }),
+          skillsDir,
         });
         const order = tempRunner.getExecutionOrder();
 
@@ -359,6 +416,9 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
             log: resumeLog,
             agentRunner,
             ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+            ...(agentDefinitions !== undefined && { agentDefinitions }),
+            ...(skillsRegistry !== undefined && { skillsRegistry }),
+            skillsDir,
           });
           inlineRunner.run({ resumeRunId: runId }).catch((err) => {
             console.error(`[server] retry run failed: ${err instanceof Error ? err.message : String(err)}`);

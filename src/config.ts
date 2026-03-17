@@ -31,6 +31,9 @@ export function loadUserConfig(homedir?: string): RiplineUserConfig {
     if (typeof parsed.profileDir === "string") {
       result.profileDir = expandTilde(parsed.profileDir.trim(), home);
     }
+    if (typeof parsed.skillsDir === "string") {
+      result.skillsDir = expandTilde(parsed.skillsDir.trim(), home);
+    }
     if (typeof parsed.defaultProfile === "string") {
       const v = parsed.defaultProfile.trim();
       if (v) result.defaultProfile = v;
@@ -82,6 +85,31 @@ export function resolvePipelineDir(options?: {
   }
 
   return path.join(home, ".ripline", "pipelines");
+}
+
+/**
+ * Resolve skills directory in order: flag > user config skillsDir >
+ * default ~/.ripline/skills.
+ */
+export function resolveSkillsDir(options?: {
+  flag?: string;
+  homedir?: string;
+}): string {
+  const home = options?.homedir ?? os.homedir();
+
+  if (options?.flag?.trim()) {
+    const p = options.flag.trim();
+    return path.isAbsolute(p) ? path.resolve(p) : path.resolve(process.cwd(), p);
+  }
+
+  const userConfig = loadUserConfig(home);
+  if (userConfig.skillsDir) {
+    return path.isAbsolute(userConfig.skillsDir)
+      ? path.resolve(userConfig.skillsDir)
+      : path.resolve(home, userConfig.skillsDir);
+  }
+
+  return path.join(home, ".ripline", "skills");
 }
 
 /**

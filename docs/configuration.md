@@ -37,6 +37,7 @@ Optional. Applied globally for the current user.
 |-------|------|---------|-------------|
 | `pipelineDir` | string | `~/.ripline/pipelines` | Default directory to search for pipeline YAML/JSON files. Supports `~` expansion. |
 | `profileDir` | string | `~/.ripline/profiles` | Default directory to search for profile YAML files. Supports `~` expansion. |
+| `skillsDir` | string | `~/.ripline/skills` | Directory containing per-skill markdown files. See [Text skills](agent-integration#text-skills). Supports `~` expansion. |
 | `defaultProfile` | string \| null | `null` | Profile name applied to every run unless `--profile` or `--no-profile` is passed. |
 | `claudeCode.allowDangerouslySkipPermissions` | boolean | `false` | **User-level gate** for the bypass permissions feature in the Claude Code runner. Must be `true` here (or via the env var) for any node with `dangerouslySkipPermissions: true` to use bypass mode. See [Agent integration](agent-integration#bypass-permissions-mode-advanced). |
 
@@ -234,6 +235,11 @@ When the same setting is available from multiple sources, values are resolved in
 2. `profileDir` in `~/.ripline/config.json`
 3. Default: `~/.ripline/profiles/`
 
+### Skills directory
+
+1. `skillsDir` in `~/.ripline/config.json`
+2. Default: `~/.ripline/skills/`
+
 ### Agent runner config
 
 1. CLI flags (`--agent-provider`, `--agent-model`, `--agent-base-url`)
@@ -253,14 +259,18 @@ When the same setting is available from multiple sources, values are resolved in
 
 ```
 ~/.ripline/
-├── config.json          # user config (pipelineDir, profileDir, defaultProfile, claudeCode)
+├── config.json          # user config (pipelineDir, profileDir, skillsDir, defaultProfile, claudeCode)
 ├── agent.json           # standalone agent runner config (provider, model, apiKey, baseURL)
 ├── pipelines/           # default pipeline directory
 │   ├── my-pipeline.yaml
 │   └── spec-then-implement.yaml
-└── profiles/            # default profile directory
-    ├── project-a.yaml
-    └── project-b.yaml
+├── profiles/            # default profile directory
+│   ├── project-a.yaml
+│   └── project-b.yaml
+└── skills/              # text skill files (one .md per skill name)
+    ├── github-cli.md
+    ├── aws-cli.md
+    └── web-search.md
 
 <project-root>/
 ├── ripline.config.json  # project-local overrides (pipelineDir, agent, claudeCode)

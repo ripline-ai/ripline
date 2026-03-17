@@ -18,6 +18,8 @@ export type SchedulerConfig = {
   agentDefinitions?: Record<string, AgentDefinition>;
   /** Skills registry for resolving agent skill shorthand names to MCP server configs. */
   skillsRegistry?: SkillsRegistry;
+  /** Directory containing per-skill markdown files (e.g. ~/.ripline/skills/). */
+  skillsDir?: string;
   /** Poll interval when queue is empty (ms). */
   pollIntervalMs?: number;
 };
@@ -45,6 +47,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
     claudeCodeRunner,
     agentDefinitions,
     skillsRegistry,
+    skillsDir,
     pollIntervalMs = 500,
   } = config;
 
@@ -86,6 +89,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
           ...(claudeCodeRunner && { claudeCodeRunner }),
           ...(agentDefinitions !== undefined && { agentDefinitions }),
           ...(skillsRegistry !== undefined && { skillsRegistry }),
+          ...(skillsDir !== undefined && { skillsDir }),
         });
         await runner.run(
           record.cursor !== undefined
@@ -122,6 +126,9 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                   ...(parentLog !== undefined && { log: parentLog }),
                   ...(agentRunner && { agentRunner }),
                   ...(claudeCodeRunner && { claudeCodeRunner }),
+                  ...(agentDefinitions !== undefined && { agentDefinitions }),
+                  ...(skillsRegistry !== undefined && { skillsRegistry }),
+                  ...(skillsDir !== undefined && { skillsDir }),
                 });
                 try {
                   await parentRunner.run({ resumeRunId: parent.id });
@@ -164,6 +171,9 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                   ...(parentLog !== undefined && { log: parentLog }),
                   ...(agentRunner && { agentRunner }),
                   ...(claudeCodeRunner && { claudeCodeRunner }),
+                  ...(agentDefinitions !== undefined && { agentDefinitions }),
+                  ...(skillsRegistry !== undefined && { skillsRegistry }),
+                  ...(skillsDir !== undefined && { skillsDir }),
                 });
                 try {
                   await parentRunner.run({ resumeRunId: parent.id });

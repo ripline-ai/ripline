@@ -216,6 +216,8 @@ Calls an agent runner (OpenClaw, LLM, or Claude Code) with a prompt and returns 
 | `mode` | `"plan"` \| `"execute"` | — | Claude Code runner only. `"plan"` = read-only (PreToolUse hook denies writes). `"execute"` = full access (default). |
 | `cwd` | string | — | Claude Code runner only. Working directory; supports `{{ }}` interpolation. Must resolve to an existing directory. Must not contain `..`. |
 | `dangerouslySkipPermissions` | boolean | — | Claude Code runner only. When `true` and global bypass is enabled, the node runs with `--dangerously-skip-permissions`. Omit or `false` = use `dontAsk` mode. See [Agent integration](agent-integration#bypass-permissions-mode-advanced). |
+| `skills` | string[] | — | Named skills to attach to this node. Each name is resolved in two ways: (1) as an MCP server from the skills registry (wires in a tool server), and (2) as a text file at `<skillsDir>/<name>.md` (injects usage instructions into the prompt). A skill may be one or both. See [Skills](agent-integration#skills). |
+| `mcpServers` | object | — | Explicit MCP server configs keyed by name, merged on top of registry-resolved skills. Node-level entries win over agent-definition entries. |
 
 **Output:** `{ text: string, tokenUsage?: { input: number, output: number } }` stored as the node's artifact.
 

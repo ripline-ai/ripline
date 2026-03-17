@@ -136,6 +136,115 @@ To view logs for a run: use **`ripline logs <runId>`** (or **`ripline logs <runI
 
 **Reference:** Claude Code’s own documentation for `--dangerously-skip-permissions` (or equivalent) describes the same capability at the CLI level.
 
+## Skills
+
+Agent nodes support two complementary skill mechanisms, both referenced with the same `skills` array.
+
+### MCP server skills
+
+An MCP server skill wires a tool server (like Playwright) into the agent's session. These are defined in the skills registry in `ripline.config.json` or a profile:
+
+```json
+{
+  "skills": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"]
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": { "BRAVE_API_KEY": "your-key" }
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "your-token" }
+    }
+  }
+}
+```
+
+Reference them on any node:
+
+```yaml
+- id: implement
+  type: agent
+  runner: claude-code
+  mode: execute
+  skills: [playwright, brave-search, github]
+  prompt: "..."
+```
+
+### Text skills
+
+A text skill is a markdown file that teaches the agent how to use a CLI tool, API, or workflow pattern. The file's content is injected into the agent's prompt as a `<skills>` block before the main prompt.
+
+**Location:** `~/.ripline/skills/<skill-name>.md` (configurable via `skillsDir` in `~/.ripline/config.json`)
+
+**Example — `~/.ripline/skills/github-cli.md`:**
+
+```markdown
+# GitHub CLI (gh)
+
+Use `gh` for all GitHub operations. Never construct raw `git` API calls when `gh` can handle it.
+
+## Key commands
+
+- `gh pr list --state open` — list open PRs
+- `gh pr create --title "..." --body "..." --base main` — open a PR
+- `gh pr merge <number> --squash` — merge a PR
+- `gh issue create --title "..." --body "..."` — create an issue
+- `gh issue list --assignee @me` — list your issues
+- `gh run list` — list recent workflow runs
+- `gh run watch <id>` — watch a run in real time
+
+## Auth
+
+Assumes `gh auth login` has been run. If a command fails with auth errors, stop and report — do not attempt to re-auth.
+```
+
+**Example — `~/.ripline/skills/aws-cli.md`:**
+
+```markdown
+# AWS CLI
+
+Use the `aws` CLI for all AWS operations.
+
+## Common patterns
+
+- `aws s3 ls s3://bucket-name/` — list bucket contents
+- `aws s3 cp file.txt s3://bucket/path/` — upload a file
+- `aws lambda invoke --function-name my-fn out.json` — invoke a Lambda
+- `aws logs tail /aws/lambda/my-fn --follow` — stream logs
+
+## Credentials
+
+Credentials are resolved from the environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`) or from `~/.aws/credentials`. Never hardcode credentials.
+```
+
+When a node references `skills: [github-cli, aws-cli]`, both files are read and injected before the prompt:
+
+```yaml
+- id: deploy
+  type: agent
+  runner: claude-code
+  mode: execute
+  skills: [github-cli, aws-cli]
+  prompt: |
+    Open a PR for the current branch and deploy the latest Lambda after it merges.
+```
+
+**A skill can be both a text file AND an MCP server.** If `github-cli` has an entry in the registry (for MCP tool access) and a `github-cli.md` file in the skills directory, both are applied: the MCP server is wired in and the markdown is injected into the prompt.
+
+**Discovery:** Ripline checks for `<skillName>.md` in the skills directory for every name in the `skills` array. If no file exists for a given name, that name is silently skipped (it may still resolve as an MCP server skill). No error is thrown for missing text skill files.
+
+### `SKILLS.md` (legacy / per-project)
+
+If the agent's effective `cwd` contains a `SKILLS.md` file, its content is also injected. This is an older per-project mechanism; named text skills in `~/.ripline/skills/` are preferred for reusable cross-pipeline knowledge.
+
+---
+
 ## Context isolation (sessions)
 
 To avoid **context bleed** between agent nodes, the plugin uses OpenClaw’s native session model:
