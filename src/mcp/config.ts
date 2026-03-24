@@ -1,6 +1,6 @@
 import path from "node:path";
 import os from "node:os";
-import { resolvePipelineDir, loadUserConfig } from "../config.js";
+import { resolvePipelineDir } from "../config.js";
 import { resolveStandaloneLlmAgentConfig } from "../agent-runner-config.js";
 import { createLlmAgentRunner } from "../llm-agent-runner.js";
 import type { AgentRunner } from "../pipeline/executors/agent.js";
