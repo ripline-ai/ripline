@@ -34,19 +34,22 @@ export async function handleListPipelines(ctx: McpToolContext): Promise<unknown>
 type RunPipelineArgs = {
   pipeline_id: string;
   inputs?: Record<string, unknown>;
-  env?: Record<string, string>;
 };
 
 export async function handleRunPipeline(ctx: McpToolContext, args: unknown): Promise<unknown> {
-  const { pipeline_id, inputs = {}, env: _env = {} } = args as RunPipelineArgs;
+  const { pipeline_id, inputs = {} } = args as RunPipelineArgs;
 
   const entry = await ctx.registry.get(pipeline_id);
   if (!entry) {
     return { error: `pipeline not found: ${pipeline_id}` };
   }
 
-  const runId = await ctx.queue.enqueue(pipeline_id, inputs);
-  return { runId: runId as string, status: "pending" };
+  const runIdOrIds = await ctx.queue.enqueue(pipeline_id, inputs);
+  const runId = Array.isArray(runIdOrIds) ? runIdOrIds[0] : runIdOrIds;
+  if (runId === undefined) {
+    return { error: "failed to enqueue pipeline run" };
+  }
+  return { runId, status: "pending" };
 }
 
 // ---------------------------------------------------------------------------

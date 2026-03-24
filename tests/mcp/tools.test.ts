@@ -1,7 +1,8 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it } from "vitest";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { MemoryRunStore } from "../../src/run-store-memory.js";
 import { createRunQueue } from "../../src/run-queue.js";
 import { PipelineRegistry } from "../../src/registry.js";
@@ -95,6 +96,22 @@ describe("handleGetRunLogs", () => {
     const result = await handleGetRunLogs(makeCtx(), { run_id: "nonexistent" });
     expect((result as { error: string }).error).toMatch(/not found/);
   });
+
+  it("reads log content from runsDir when file exists", async () => {
+    const runsDir = path.join(os.tmpdir(), `ripline-tools-test-${randomUUID()}`);
+    const ctx = { ...makeCtx(), runsDir };
+    const { runId } = await handleRunPipeline(ctx, { pipeline_id: "hello_world" }) as { runId: string };
+
+    // Write a fake log file
+    await fs.mkdir(path.join(runsDir, runId), { recursive: true });
+    await fs.writeFile(path.join(runsDir, runId, "log.txt"), "hello log", "utf8");
+
+    const result = await handleGetRunLogs(ctx, { run_id: runId });
+    expect((result as { logs: string }).logs).toBe("hello log");
+
+    // Cleanup
+    await fs.rm(runsDir, { recursive: true, force: true });
+  });
 });
 
 describe("handleListRuns", () => {
@@ -119,6 +136,19 @@ describe("handleListRuns", () => {
     }
     const result = await handleListRuns(ctx, { limit: 2 });
     expect((result as unknown[]).length).toBe(2);
+  });
+
+  it("filters by status when provided", async () => {
+    const ctx = makeCtx();
+    const { runId } = await handleRunPipeline(ctx, { pipeline_id: "hello_world" }) as { runId: string };
+    // Claim the run to set status to running
+    await ctx.store.claimRun(runId);
+
+    const completed = await handleListRuns(ctx, { status: "completed" });
+    expect((completed as unknown[]).length).toBe(0);
+
+    const running = await handleListRuns(ctx, { status: "running" });
+    expect((running as unknown[]).length).toBe(1);
   });
 });
 
