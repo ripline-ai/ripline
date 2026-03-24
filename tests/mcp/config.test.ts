@@ -1,5 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import path from "node:path";
+import { describe, expect, it } from "vitest";
 import os from "node:os";
 
 // We test resolveMcpConfig by passing argv arrays directly
@@ -8,7 +7,7 @@ import { resolveMcpConfig } from "../../src/mcp/config.js";
 describe("resolveMcpConfig", () => {
   it("returns defaults when no args and no user config", () => {
     const cfg = resolveMcpConfig([], os.homedir());
-    expect(cfg.runsDir).toBe(".ripline/runs");
+    expect(cfg.runsDir).toBe(os.homedir() + "/.ripline/runs");
     expect(cfg.maxConcurrency).toBe(4);
     expect(typeof cfg.pipelinesDir).toBe("string");
   });

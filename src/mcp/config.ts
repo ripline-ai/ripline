@@ -40,7 +40,7 @@ export function resolveMcpConfig(argv: string[] = process.argv.slice(2), homedir
 
   return {
     pipelinesDir,
-    runsDir: runsDir ?? ".ripline/runs",
+    runsDir: runsDir !== undefined ? path.resolve(runsDir) : path.join(homedir, ".ripline", "runs"),
     maxConcurrency,
   };
 }
