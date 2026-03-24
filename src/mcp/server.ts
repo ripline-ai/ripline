@@ -92,30 +92,37 @@ export function createMcpServer(ctx: McpToolContext): Server {
     const { name, arguments: args } = request.params;
     let result: unknown;
 
-    switch (name) {
-      case "list_pipelines":
-        result = await handleListPipelines(ctx);
-        break;
-      case "run_pipeline":
-        result = await handleRunPipeline(ctx, args);
-        break;
-      case "get_run":
-        result = await handleGetRun(ctx, args);
-        break;
-      case "get_run_logs":
-        result = await handleGetRunLogs(ctx, args);
-        break;
-      case "list_runs":
-        result = await handleListRuns(ctx, args);
-        break;
-      case "resume_run":
-        result = await handleResumeRun(ctx, args);
-        break;
-      default:
-        return {
-          content: [{ type: "text", text: JSON.stringify({ error: `unknown tool: ${name}` }) }],
-          isError: true,
-        };
+    try {
+      switch (name) {
+        case "list_pipelines":
+          result = await handleListPipelines(ctx);
+          break;
+        case "run_pipeline":
+          result = await handleRunPipeline(ctx, args);
+          break;
+        case "get_run":
+          result = await handleGetRun(ctx, args);
+          break;
+        case "get_run_logs":
+          result = await handleGetRunLogs(ctx, args);
+          break;
+        case "list_runs":
+          result = await handleListRuns(ctx, args);
+          break;
+        case "resume_run":
+          result = await handleResumeRun(ctx, args);
+          break;
+        default:
+          return {
+            content: [{ type: "text", text: JSON.stringify({ error: `unknown tool: ${name}` }) }],
+            isError: true,
+          };
+      }
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }],
+        isError: true,
+      };
     }
 
     return {
