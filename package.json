@@ -44,6 +44,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.71",
     "@fastify/cors": "^11.2.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@sinclair/typebox": "^0.34.48",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
