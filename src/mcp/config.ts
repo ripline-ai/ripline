@@ -33,7 +33,10 @@ export function resolveMcpConfig(argv: string[] = process.argv.slice(2), homedir
     }
   }
 
-  const pipelinesDir = resolvePipelineDir({ flag: pipelinesDirFlag, homedir });
+  const pipelinesDir = resolvePipelineDir({
+    ...(pipelinesDirFlag !== undefined && { flag: pipelinesDirFlag }),
+    homedir,
+  });
 
   return {
     pipelinesDir,
