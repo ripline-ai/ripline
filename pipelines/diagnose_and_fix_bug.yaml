@@ -1,0 +1,146 @@
+# Diagnose and Fix Bug Pipeline
+# Fetches a bug from Wintermute, loads the linked project context,
+# uses a Claude Code agent to diagnose the root cause in the project workspace,
+# and patches the bug back with diagnosis, proposed fix, and status → resolved.
+#
+# Inputs:
+#   bug_id  — Wintermute bug ID (required)
+
+id: diagnose_and_fix_bug
+name: Diagnose and Fix Bug
+entry: [intake]
+
+nodes:
+  - id: intake
+    type: input
+
+  # ── 1. Fetch bug from Wintermute ──────────────────────────────────────────
+  - id: fetch_bug
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 30
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
+
+      curl -s http://localhost:3000/api/bugs/{{bug_id}}
+
+  - id: parse_bug
+    type: transform
+    expression: "(function(text) { var t = text.trim(); var start = t.indexOf('{'); var end = t.lastIndexOf('}'); if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {} } var m = t.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1].trim() : t); })(artifacts.fetch_bug.text)"
+
+  # ── 2. Fetch linked project from Wintermute ───────────────────────────────
+  - id: fetch_project
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 30
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
+
+      curl -s http://localhost:3000/api/projects/{{parse_bug.projectId}}
+
+  - id: parse_project
+    type: transform
+    expression: "(function(text) { var m = text.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); var raw = JSON.parse(m ? m[1] : text.trim()); var proj = Array.isArray(raw) ? raw[0] : raw; var localPath = (proj.metadata && proj.metadata.localPath) ? proj.metadata.localPath : '/home/openclaw/' + proj.name.toLowerCase(); return { projectId: proj.id, projectName: proj.name, localPath: localPath, description: proj.description || '' }; })(artifacts.fetch_project.text)"
+
+  # ── 3. Diagnose the bug using Claude Code agent ───────────────────────────
+  - id: diagnose
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: "{{parse_project.localPath}}"
+    timeoutSeconds: 600
+    prompt: |
+      You are a senior software engineer performing root cause analysis on a bug.
+
+      ## Bug Details
+      Title: {{parse_bug.title}}
+      Description: {{parse_bug.description}}
+      {{#if parse_bug.errorSignature}}Error Signature: {{parse_bug.errorSignature}}{{/if}}
+      {{#if parse_bug.stepsToReproduce}}Steps to Reproduce: {{parse_bug.stepsToReproduce}}{{/if}}
+      {{#if parse_bug.severity}}Severity: {{parse_bug.severity}}{{/if}}
+      {{#if parse_bug.stackTrace}}Stack Trace: {{parse_bug.stackTrace}}{{/if}}
+
+      ## Project
+      Name: {{parse_project.projectName}}
+      Path: {{parse_project.localPath}}
+
+      ## Instructions
+      1. Analyze the error signature and any stack trace to identify likely code locations.
+      2. Search the codebase for relevant files — grep for error messages, function names, and related modules.
+      3. Read the relevant source files to understand the code flow that leads to this bug.
+      4. Determine the root cause of the bug.
+      5. Propose a concrete fix with specific file paths and code changes.
+
+      Output a JSON object with exactly these fields:
+
+      {
+        "diagnosis": "Detailed root cause analysis — what is happening and why. 3-8 sentences.",
+        "proposedFix": "Concrete description of the fix — which files to change, what to change, and why it resolves the issue. Use bullet points.",
+        "affectedFiles": ["list", "of", "file", "paths"],
+        "confidence": "high|medium|low"
+      }
+
+      Output ONLY the JSON object — no markdown fencing, no prose.
+
+  - id: parse_diagnosis
+    type: transform
+    expression: "(function(text) { var t = text.trim(); var start = t.indexOf('{'); var end = t.lastIndexOf('}'); if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {} } var m = t.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1].trim() : t); })(artifacts.diagnose.text)"
+
+  # ── 4. Patch bug back to Wintermute with diagnosis ────────────────────────
+  - id: patch_bug
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 60
+    prompt: |
+      Run this exact Python script using the Bash tool:
+
+      python3 << 'PYEOF'
+      import json, subprocess
+
+      bug_id = "{{bug_id}}"
+      diagnosis = json.loads('''{{parse_diagnosis}}'''.replace("'", "\\'")) if isinstance('''{{parse_diagnosis}}''', str) else {{parse_diagnosis}}
+
+      # Build the patch payload
+      payload = {
+          "status": "resolved",
+          "diagnosis": diagnosis.get("diagnosis", "") if isinstance(diagnosis, dict) else str(diagnosis),
+          "proposedFix": diagnosis.get("proposedFix", "") if isinstance(diagnosis, dict) else "",
+          "affectedFiles": diagnosis.get("affectedFiles", []) if isinstance(diagnosis, dict) else [],
+          "confidence": diagnosis.get("confidence", "medium") if isinstance(diagnosis, dict) else "medium"
+      }
+
+      r = subprocess.run(
+          ["curl", "-s", "-X", "PATCH",
+           f"http://localhost:3000/api/bugs/{bug_id}",
+           "-H", "Content-Type: application/json",
+           "--data-binary", json.dumps(payload)],
+          capture_output=True, text=True
+      )
+      print(r.stdout)
+      PYEOF
+
+      After the script runs, use the Bash tool to echo "patch_bug complete" and stop.
+
+  - id: result
+    type: output
+    source: patch_bug
+
+edges:
+  - { from: { node: intake },          to: { node: fetch_bug } }
+  - { from: { node: fetch_bug },       to: { node: parse_bug } }
+  - { from: { node: parse_bug },       to: { node: fetch_project } }
+  - { from: { node: fetch_project },   to: { node: parse_project } }
+  - { from: { node: parse_project },   to: { node: diagnose } }
+  - { from: { node: diagnose },        to: { node: parse_diagnosis } }
+  - { from: { node: parse_diagnosis }, to: { node: patch_bug } }
+  - { from: { node: patch_bug },       to: { node: result } }
