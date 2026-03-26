@@ -298,9 +298,9 @@ nodes:
     expression: "(function(text) { var t = text.trim(); var start = t.indexOf('{'); var end = t.lastIndexOf('}'); if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {} } var m = t.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1].trim() : t); })(artifacts.generate_spec.text)"
 
   # ── 5. PATCH idea with spec ───────────────────────────────────────────────
-  # Fetches the parse_spec artifact from the Ripline run API at runtime to avoid
-  # embedding large spec content (which may contain implementation instructions)
-  # directly in the agent prompt, which caused Claude Code to abort.
+  # Searches all recent Ripline runs for the most recent feature_pipeline run
+  # for this idea_id that has a completed parse_spec step. This avoids relying
+  # on the idea's stored runId (which may point to a previous flesh_out run).
   - id: patch_idea
     type: agent
     runner: claude-code
@@ -316,36 +316,34 @@ nodes:
 
       idea_id = "{{idea_id}}"
 
-      # Get the idea to find the current runId
+      # Search all recent runs for the most recent feature_pipeline run
+      # for this idea that has a completed parse_spec step.
       r = subprocess.run(
-          ["curl", "-s", f"http://localhost:3000/api/ideas/{idea_id}"],
+          ["curl", "-s", "http://localhost:4001/runs"],
           capture_output=True, text=True
       )
-      idea = json.loads(r.stdout)
-      run_id = idea.get("runId")
-      if not run_id:
-          print("ERROR: no runId on idea"); sys.exit(1)
+      runs_data = json.loads(r.stdout)
+      runs = runs_data.get("runs", [])
 
-      # Get the run to find parse_spec artifact
-      r = subprocess.run(
-          ["curl", "-s", f"http://localhost:4001/runs/{run_id}"],
-          capture_output=True, text=True
-      )
-      run = json.loads(r.stdout)
-
-      # Extract parse_spec from completed steps
       spec = None
-      for step in run.get("steps", []):
-          if step.get("nodeId") == "parse_spec" and step.get("status") == "completed":
-              spec = step.get("data", {}).get("artifactValue")
+      for run in runs:
+          if run.get("pipelineId") != "feature_pipeline":
+              continue
+          inputs = run.get("inputs", {})
+          if isinstance(inputs, str):
+              try: inputs = json.loads(inputs)
+              except: continue
+          if inputs.get("idea_id") != idea_id:
+              continue
+          for step in run.get("steps", []):
+              if step.get("nodeId") == "parse_spec" and step.get("status") == "completed":
+                  spec = step.get("data", {}).get("artifactValue")
+                  break
+          if spec:
               break
 
-      # Fallback: check cursor context
-      if spec is None:
-          spec = run.get("cursor", {}).get("context", {}).get("artifacts", {}).get("parse_spec")
-
       if not spec:
-          print("ERROR: parse_spec artifact not found"); sys.exit(1)
+          print("ERROR: parse_spec artifact not found in any feature_pipeline run"); sys.exit(1)
 
       spec["status"] = "specced"
 
