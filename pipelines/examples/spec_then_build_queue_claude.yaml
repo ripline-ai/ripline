@@ -50,9 +50,27 @@ nodes:
     type: collect_children
     description: "Gather child run results (and partial failures) for downstream verification"
 
+  # After all stories are implemented: run build + tests, fix any failures with Sonnet
+  - id: verify
+    type: agent
+    runner: claude-code
+    mode: execute
+    model: claude-sonnet-4-6
+    cwd: "{{ run.inputs.projectRoot }}"
+    timeoutSeconds: 600
+    prompt: |
+      All implementation stories have completed. Summary: {{JSON.stringify(artifacts.collect.summary)}}.
+
+      Now do a full verification pass on the project at the current working directory:
+      1. Run the build. Fix any type errors or compilation failures and commit the fixes.
+      2. Run the test suite. Fix any failing tests and commit the fixes.
+      3. If anything could not be fixed, leave a clear note in your output describing what remains.
+
+      Be thorough but focused — only fix real build/test failures, do not refactor or add features.
+
   - id: result
     type: output
-    source: collect
+    source: verify
 
 edges:
   - { from: { node: intake },    to: { node: spec } }
@@ -61,4 +79,5 @@ edges:
   - { from: { node: queue },     to: { node: parse } }
   - { from: { node: parse },     to: { node: spawn } }
   - { from: { node: spawn },     to: { node: collect } }
-  - { from: { node: collect },   to: { node: result } }
+  - { from: { node: collect },   to: { node: verify } }
+  - { from: { node: verify },    to: { node: result } }
