@@ -79,7 +79,34 @@ nodes:
           type: output
           source: implement_story
 
-  # ── 5. Mark idea as done ──────────────────────────────────────────────────
+  # ── 5. Merge feature branch to master ────────────────────────────────────
+  - id: merge_to_master
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 60
+    prompt: |
+      Run these exact commands using the Bash tool, one at a time:
+
+      1. Find the project directory by checking the idea's projectId:
+         curl -s http://localhost:3000/api/ideas/{{idea_id}} | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('projectId',''))"
+
+      2. Based on the projectId, determine the project directory:
+         - project_wintermute or wintermute → /home/openclaw/wintermute
+         - project_ripline or ripline → /home/openclaw/ripline
+         - If empty or unknown, default to /home/openclaw/wintermute
+
+      3. Run these git commands in that directory (replace PROJECT_DIR):
+         git -C PROJECT_DIR checkout master
+         git -C PROJECT_DIR merge {{branch_name}} --no-edit
+         git -C PROJECT_DIR push origin master 2>/dev/null || echo "no remote push (ok)"
+         git -C PROJECT_DIR branch -d {{branch_name}} 2>/dev/null || echo "branch delete skipped"
+
+      Output a single line: "merged {{branch_name}} to master" or an error if it failed.
+
+  # ── 6. Mark idea as done ──────────────────────────────────────────────────
   - id: patch_complete
     type: agent
     runner: claude-code
@@ -101,7 +128,8 @@ nodes:
     source: patch_complete
 
 edges:
-  - { from: { node: intake },        to: { node: parse_plan } }
-  - { from: { node: parse_plan },    to: { node: story_loop } }
-  - { from: { node: story_loop },    to: { node: patch_complete } }
+  - { from: { node: intake },         to: { node: parse_plan } }
+  - { from: { node: parse_plan },     to: { node: story_loop } }
+  - { from: { node: story_loop },     to: { node: merge_to_master } }
+  - { from: { node: merge_to_master }, to: { node: patch_complete } }
   - { from: { node: patch_complete }, to: { node: result } }
