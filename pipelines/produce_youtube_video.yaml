@@ -1,0 +1,979 @@
+# Produce YouTube Video
+# End-to-end faceless YouTube video production pipeline.
+# Inputs: title, hook, outline, channel_niche, channel_tone, target_audience, voice_id, video_idea_id
+# Steps: script → voiceover → [research_clips (if local source present)] → visuals → assemble → output
+# External API steps (ElevenLabs, image/video gen) stub gracefully when keys are absent.
+#
+# VIDEO SOURCES SYSTEM:
+#   video_sources is a JSON array of source objects in priority order.
+#   Each has a "type" field: "local" | "pexels" | "runway" | "kling" | "dalle" | "placeholder"
+#   The pipeline tries each source in order, falling back to the next if:
+#     - the required API key is not set
+#     - no clips are found (for local/pexels)
+#   If video_sources is empty or not provided, falls back to legacy source_type logic.
+#
+# VISUALS PRIORITY ORDER (from video_sources, or legacy fallback):
+#   1. local       — local TV clips from channel's mediaPaths (requires show_slugs)
+#   2. pexels      — Pexels stock footage API  — if PEXELS_API_KEY is set
+#   3. runway      — Runway ML Gen-3 text-to-video  — if RUNWAY_API_KEY is set
+#   4. kling       — Kling AI text-to-video  — if KLING_API_KEY is set
+#   5. dalle       — DALL-E 3 static images  — if OPENAI_API_KEY is set
+#   6. placeholder — ffmpeg solid-color placeholders — always available
+#
+# ENVATO ELEMENTS NOTE:
+#   Envato Elements does NOT have a public API for programmatic asset downloads.
+#   Their Terms of Service explicitly prohibit using scripts or bots to mass-download
+#   content (see help.elements.envato.com Fair Use Policy). The Envato Market API
+#   (build.envato.com) covers marketplace purchases only, not Elements subscriptions.
+#   No ENVATO_API_KEY step is implemented. If Envato ever opens a public Elements API,
+#   add a step between Runway/Kling and DALL-E that searches/downloads stock clips.
+id: produce_youtube_video
+name: Produce YouTube Video
+entry: [intake]
+nodes:
+  - id: intake
+    type: input
+    description: >
+      title: video title.
+      hook: opening hook sentence.
+      outline: optional section breakdown.
+      channel_niche: channel niche/topic area.
+      channel_tone: tone (e.g. "educational, casual").
+      target_audience: who the video is for.
+      voice_id: ElevenLabs voice ID (optional, leave empty to skip TTS).
+      video_idea_id: Wintermute VideoIdea ID for status callbacks.
+      duration_seconds: target video duration in seconds (default: 120).
+      visual_style: "generative" | "images" | "auto" (default: "auto").
+      aspect_ratio: "16:9" | "9:16" (default: "16:9"). Use "9:16" for YouTube Shorts / TikTok (max 180s).
+      notes: additional context for production (optional).
+      preapproved_script: if non-empty, use this script verbatim and skip write_script generation.
+      video_sources: JSON array of source objects in priority order, e.g. '[{"type":"local"},{"type":"runway"},{"type":"dalle"},{"type":"placeholder"}]'.
+        Supported types: local | pexels | runway | kling | dalle | placeholder.
+        If empty or not provided, falls back to legacy source_type logic.
+      show_slugs: JSON array of indexed show slugs to pull local clips from (e.g. '["real-housewives-of-new-york","rhonj"]').
+        Used when video_sources contains a "local" source.
+      show_slug: (legacy) single indexed show slug. Used if show_slugs is empty.
+      source_type: (legacy) "generative" | "tv-clips" | "mixed" (default: "generative"). Used if video_sources is not provided.
+      video_concept: concept/topic for clip search. Defaults to title if empty.
+      wintermute_base_url: base URL for Wintermute API callbacks (default: http://localhost:3000).
+      captions_enabled: "true" | "false" (default: "true"). If "true", generate and burn captions.
+      channel_vault_path: absolute path to the channel vault directory (e.g. /home/openclaw/obsidian/Channels/{name}/). Optional — enables vault integration.
+      idea_vault_path: absolute path to the idea file (e.g. /home/openclaw/obsidian/Channels/{name}/ideas/{id}-{slug}.md). Optional — enables vault script read/write.
+
+  - id: gather_context
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /tmp
+    timeoutSeconds: 300
+    prompt: |
+      You are a research assistant gathering context and recent findings for a YouTube video.
+
+      Channel vault path: {{channel_vault_path}}
+      Idea vault path: {{idea_vault_path}}
+      Video concept: {{video_concept}}
+      Video title: {{title}}
+
+      ## STEP 0: Check if vault integration is enabled
+
+      If channel_vault_path is empty or not provided:
+        Output: GATHER_CONTEXT: skipped (no channel_vault_path)
+        Stop here.
+
+      ## STEP 1: Read knowledge-base files
+
+      Read the following files if they exist (use the Read tool):
+      - {{channel_vault_path}}/knowledge-base/context.md
+      - {{channel_vault_path}}/knowledge-base/sources.md
+
+      If a file does not exist, skip it silently.
+
+      ## STEP 2: Read channel research profile
+
+      Read {{channel_vault_path}}/channel.md using the Read tool.
+      Parse the YAML frontmatter to extract:
+      - research_profile.reddit_communities (list of subreddit names, e.g. ["r/BravoRealHousewives", "r/RHONJ"])
+      - research_profile.web_sources (list of website names)
+
+      If channel.md does not exist, set both to empty lists.
+
+      ## STEP 3: Web search
+
+      Use your WebSearch tool to search for recent information about: "{{title}}"
+      Also search for: "{{video_concept}}" if it differs from the title.
+
+      Collect 3-5 key findings from the web search results.
+
+      ## STEP 4: Reddit search
+
+      For each community in the reddit_communities list from STEP 2:
+        - Strip the leading "r/" if present to get the community name
+        - URL-encode the concept: "{{title}}"
+        - Run:
+          curl -s -A "Mozilla/5.0 (compatible; research-bot/1.0)" \
+            "https://www.reddit.com/r/<community>/search.json?q=<encoded_concept>&sort=new&limit=5&t=month"
+        - Parse the JSON response and extract the top post titles and their score/comments
+
+      Collect key sentiment and discussion points from the Reddit results.
+
+      ## STEP 5: Write research output
+
+      Determine the idea filename:
+      - If idea_vault_path is non-empty: extract the filename from the path (e.g. "vi_1b84c1dd-why-rhonj-will-never-be-the-same.md")
+      - If idea_vault_path is empty: use "research-{{video_idea_id}}.md"
+
+      Write a research summary to {{channel_vault_path}}/research/<idea_filename>:
+
+      ```
+      ---
+      id: {{video_idea_id}}
+      channel: {{channel_niche}}
+      researched_at: <current ISO timestamp>
+      sources_used:
+        - web
+        - reddit
+      ---
+
+      ## Web Findings
+      <key findings from web search>
+
+      ## Reddit Sentiment
+      <key sentiment and discussion points from Reddit>
+      ```
+
+      Use the Write tool to create this file (create parent directories if needed using Bash mkdir -p).
+
+      ## STEP 6: Append to research log
+
+      Append a brief entry to {{channel_vault_path}}/knowledge-base/research-log.md:
+
+      ```
+      ## <current date YYYY-MM-DD> — {{title}}
+      - Sources: web, reddit
+      - Key finding: <1-sentence summary of most important finding>
+      ```
+
+      Use the Bash tool with tee -a to append (do not overwrite). Create the file if it doesn't exist.
+
+      ## STEP 7: Output
+
+      Output the full research summary text (the content written in STEP 5, without the frontmatter).
+      Begin with: GATHER_CONTEXT: complete
+      Then output the research content so it can be passed to the script generation step.
+
+  - id: write_script
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /tmp
+    timeoutSeconds: 300
+    prompt: |
+      You are a professional YouTube scriptwriter for faceless channels.
+
+      ## STEP 0: Check for a vault script (skip generation if approved/locked)
+
+      Idea vault path: {{idea_vault_path}}
+      Channel vault path: {{channel_vault_path}}
+
+      If idea_vault_path is non-empty:
+        1. Read {{idea_vault_path}} using the Read tool.
+        2. Parse the YAML frontmatter and check the `script_status` field.
+        3. Extract the idea filename from the path (e.g. "vi_1b84c1dd-why-rhonj.md").
+        4. If script_status is "approved" or "locked":
+           - Check if {{channel_vault_path}}/scripts/<idea_filename> exists using the Read tool.
+           - If it exists: read it, extract the body text (everything after the frontmatter ---),
+             output that text EXACTLY, and skip all steps below. Done.
+           - If it does not exist: continue to generation below.
+        5. Otherwise (script_status is anything else): continue to generation below.
+
+      ## STEP 1: Check preapproved script (legacy path)
+
+      Preapproved script (use verbatim if non-empty):
+      {{preapproved_script}}
+
+      If the preapproved script above is non-empty, skip to STEP 3 using it as the script.
+
+      ## STEP 2: Generate script
+
+      Write a complete, production-ready narration script for this video.
+
+      Title: {{title}}
+      Opening Hook: {{hook}}
+      Channel Niche: {{channel_niche}}
+      Tone: {{channel_tone}}
+      Target Audience: {{target_audience}}
+      Outline / Section Breakdown:
+      {{outline}}
+      Target Duration: {{duration_seconds}} seconds
+      Additional Notes: {{notes}}
+
+      {{ gather_context.text && !gather_context.text.startsWith('GATHER_CONTEXT: skipped') ? 'Recent research on this topic:\n' + gather_context.text + '\n\nUse the above findings to make the script timely and accurate.' : '' }}
+
+      ## Script Requirements
+
+      Structure the script as:
+      1. HOOK (first 15-30 seconds) — use the hook above verbatim or improve it
+      2. INTRO (brief context, 15-20 seconds)
+      3. MAIN CONTENT (3-5 sections based on the outline; add [SECTION: Title] markers)
+      4. OUTRO (call to action + subscribe ask, 15-20 seconds)
+
+      Rules:
+      - Write for spoken narration only — no on-screen text markers, no stage directions
+      - Short sentences. Punchy. Natural when read aloud.
+      - Target word count: {{duration_seconds}} × 2.3 ≈ {{ Math.round(duration_seconds * 2.3) }} words
+        (at ~150 wpm pacing). Scale the number of main sections accordingly:
+          60s  → ~138 words → 2 sections
+          90s  → ~207 words → 2-3 sections
+          120s → ~276 words → 3 sections
+          180s → ~414 words → 4 sections
+          300s → ~690 words → 5 sections
+      - Sound like a knowledgeable friend, not a corporate presenter
+      - Match the tone: {{channel_tone}}
+
+      ## STEP 3: Write script to vault (if idea_vault_path is provided)
+
+      If idea_vault_path is non-empty AND channel_vault_path is non-empty:
+        1. Extract the idea filename from idea_vault_path.
+        2. Determine the script file path: {{channel_vault_path}}/scripts/<idea_filename>
+        3. Create the scripts directory if needed: mkdir -p {{channel_vault_path}}/scripts/
+        4. Write the script file using the Write tool with this format:
+           ---
+           id: {{video_idea_id}}
+           channel: {{channel_niche}}
+           generated_at: <current ISO timestamp>
+           locked: false
+           ---
+
+           <script content>
+
+      ## STEP 4: Output
+
+      Output ONLY the narration script text (no frontmatter, no headers, no meta-commentary).
+
+  - id: generate_visual_prompts
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 120
+    prompt: |
+      You are a visual director for a faceless YouTube channel.
+
+      Based on the video script below, generate visual prompts for each section.
+      These will be used with either a text-to-video AI (Runway ML or Kling AI) or
+      an image generator (DALL-E 3) depending on which API keys are available.
+
+      Script:
+      {{write_script.text}}
+
+      Channel Niche: {{channel_niche}}
+
+      For each logical section of the script (hook, intro, each main section, outro),
+      write one prompt. Format your output as a JSON array like:
+      [
+        { "section": "hook", "prompt": "...", "video_prompt": "..." },
+        { "section": "intro", "prompt": "...", "video_prompt": "..." },
+        ...
+      ]
+
+      Aspect ratio for this video: {{aspect_ratio}}
+      (16:9 = landscape YouTube video; 9:16 = portrait Shorts/TikTok)
+
+      For each entry:
+      - "prompt": image prompt (for DALL-E fallback) — photorealistic or clean digital
+        illustration style, no text, no faces, no copyrighted logos, high contrast.
+        If aspect_ratio is "16:9": use 1792x1024 landscape orientation.
+        If aspect_ratio is "9:16": use 1024x1792 portrait orientation.
+      - "video_prompt": text-to-video prompt (for Runway/Kling) — describe a 4-second
+        cinematic shot with camera movement (e.g. slow pan, zoom in, tracking shot),
+        no human faces, visually dynamic, relevant to the section content.
+        If aspect_ratio is "9:16": describe vertical/portrait framing.
+
+      Guidelines for both:
+      - No text overlays, no people's faces, no copyrighted logos
+      - Relevant to the section content
+      - Suitable for a {{channel_tone}} tone channel about {{channel_niche}}
+
+      Output ONLY the JSON array. No explanation.
+
+  - id: voiceover
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /tmp
+    timeoutSeconds: 180
+    prompt: |
+      You are responsible for generating the voiceover audio for this YouTube video.
+
+      Script to convert to speech:
+      {{write_script.text}}
+
+      Voice ID: {{voice_id}}
+      Captions enabled: {{captions_enabled}}
+      Wintermute base URL: {{wintermute_base_url}}
+
+      Instructions:
+      1. If voice_id is non-empty:
+         - Before calling the TTS proxy, strip all editorial annotations from the script:
+           * Remove anything matching `[word: text]` patterns (e.g. [note: ...], [gap: ...], [section: ...])
+           * Remove short all-caps labels like [HOOK], [CTA], [OUTRO]
+           * Store the cleaned script text for use in the API call.
+         - Call the Wintermute TTS proxy (no API key required — auth is handled server-side):
+         - If captions_enabled is "true":
+           * Run:
+             curl -s -X POST "{{wintermute_base_url}}/api/tts" \
+               -H "Content-Type: application/json" \
+               -d '{"voiceId":"<voice_id>","text":"<cleaned script>","withTimestamps":true}' \
+               -o /tmp/yt_{{video_idea_id}}/tts_response.json
+           * Check the HTTP status. If non-200, fall back to the silent placeholder (step 2).
+           * Parse /tmp/yt_{{video_idea_id}}/tts_response.json — it is a JSON object with:
+             - "audio_base64": base64-encoded MP3 audio
+             - "alignment": { "characters": [...], "character_start_times_seconds": [...], "character_end_times_seconds": [...] }
+           * Decode the base64 audio and save it to /tmp/yt_{{video_idea_id}}/voiceover.mp3
+           * Save the "alignment" object to /tmp/yt_{{video_idea_id}}/alignment.json
+           * Confirm both files were created and report their sizes
+           * Output: TIMESTAMPS_AVAILABLE=true
+         - If captions_enabled is NOT "true":
+           * Run:
+             curl -s -X POST "{{wintermute_base_url}}/api/tts" \
+               -H "Content-Type: application/json" \
+               -d '{"voiceId":"<voice_id>","text":"<cleaned script>","withTimestamps":false}' \
+               -o /tmp/yt_{{video_idea_id}}/voiceover.mp3
+           * Check the HTTP status. If non-200, fall back to the silent placeholder (step 2).
+           * Output: TIMESTAMPS_AVAILABLE=false
+      2. If voice_id is empty, or if the TTS proxy returned a non-200 response:
+         - Output: "VOICEOVER STUB: TTS not available. Audio assembly will use a silent placeholder."
+         - Create the directory /tmp/yt_{{video_idea_id}}/ if it doesn't exist
+         - Use ffmpeg to generate a silent audio file: ffmpeg -f lavfi -i anullsrc=r=44100:cl=stereo -t 30 -q:a 9 -acodec libmp3lame /tmp/yt_{{video_idea_id}}/voiceover.mp3 -y
+         - Output: TIMESTAMPS_AVAILABLE=false
+      3. Output a one-line summary of what was done.
+
+  - id: generate_captions
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /tmp
+    timeoutSeconds: 120
+    prompt: |
+      You are responsible for generating an ASS (Advanced SubStation Alpha) caption file for this YouTube video.
+
+      Working directory: /tmp/yt_{{video_idea_id}}/
+      Output ASS file: /tmp/yt_{{video_idea_id}}/captions.ass
+      Captions enabled: {{captions_enabled}}
+      Aspect ratio: {{aspect_ratio}}
+      Script (narration text): {{write_script.text}}
+
+      Voiceover step output:
+      {{voiceover.text}}
+
+      Instructions:
+
+      1. If captions_enabled is NOT "true":
+         - Output: CAPTIONS: skipped (captions_enabled=false)
+         - Stop. Do not create captions.ass.
+
+      2. Check the voiceover step output for "TIMESTAMPS_AVAILABLE=true".
+         - If found, alignment data should be at /tmp/yt_{{video_idea_id}}/alignment.json
+
+      3. Determine ASS style settings based on aspect ratio:
+         - If aspect_ratio is "16:9": PlayResX=1920, PlayResY=1080, Fontsize=36, MarginV=100
+         - If aspect_ratio is "9:16": PlayResX=1080, PlayResY=1920, Fontsize=48, MarginV=150
+
+      4. Write the ASS file header (substitute <PlayResX>, <PlayResY>, <Fontsize>, <MarginV> with values from step 3):
+
+         [Script Info]
+         ScriptType: v4.00+
+         PlayResX: <PlayResX>
+         PlayResY: <PlayResY>
+         WrapStyle: 0
+
+         [V4+ Styles]
+         Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+         Style: Default,Arial,<Fontsize>,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,0,2,20,20,<MarginV>,1
+
+         [Events]
+         Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+
+      5. ASS timestamp format: H:MM:SS.cc (hours, minutes, seconds, centiseconds — NOT milliseconds).
+         Examples: 0:00:01.50, 0:00:03.20, 0:01:15.00
+         To convert from seconds (float s): H = floor(s/3600), M = floor((s%3600)/60), S = floor(s%60), cc = round((s - floor(s)) * 100)
+         Format as: {H}:{MM}:{SS}.{cc} — zero-pad M and S to 2 digits, cc to 2 digits.
+
+      6. ASS Dialogue line format:
+         Dialogue: 0,<Start>,<End>,Default,,0,0,0,,<text>
+
+      7. PATH A — ElevenLabs alignment data available (TIMESTAMPS_AVAILABLE=true):
+         a. Read /tmp/yt_{{video_idea_id}}/alignment.json
+            It has this structure:
+            {
+              "characters": ["H","e","l","l","o"," ","w","o","r","l","d",...],
+              "character_start_times_seconds": [0.0, 0.05, ...],
+              "character_end_times_seconds": [0.05, 0.1, ...]
+            }
+         b. Reconstruct words from the character array:
+            - Group consecutive non-space characters into words
+            - Each word's start_time = character_start_times_seconds of its first character
+            - Each word's end_time = character_end_times_seconds of its last character
+         c. Group words into short caption lines of 1–2 words each (max 2 words per line).
+            - Each caption line's start = first word's start_time
+            - Each caption line's end = last word's end_time
+            - Add a small gap: if the next caption starts within 0.05s of the previous end, set end = next_start - 0.05
+         d. Write captions.ass with the header from step 4, then one Dialogue line per caption group.
+            Each Dialogue line must include a fade effect tag: {\fad(120,80)} before the text.
+            Example Dialogue lines:
+            Dialogue: 0,0:00:01.50,0:00:02.30,Default,,0,0,0,,{\fad(120,80)}Hello world
+            Dialogue: 0,0:00:02.35,0:00:03.20,Default,,0,0,0,,{\fad(120,80)}this is
+
+      8. PATH B — No alignment data (TIMESTAMPS_AVAILABLE=false or alignment.json missing):
+         a. Get the audio duration:
+              ffprobe -v quiet -show_entries format=duration -of csv=p=0 \
+                /tmp/yt_{{video_idea_id}}/voiceover.mp3
+         b. Clean the script text: remove [bracket] annotations, trim whitespace
+         c. Split into words. Group into caption lines of 2 words each.
+         d. Calculate timing: evenly distribute total duration across all caption lines.
+            - duration_per_caption = audio_duration / total_caption_count
+            - start_time of caption N = N * duration_per_caption
+            - end_time of caption N = (N+1) * duration_per_caption - 0.1
+         e. Write captions.ass with the header from step 4, then one Dialogue line per caption group.
+            Each Dialogue line must include a fade effect tag: {\fad(120,80)} before the text.
+
+      9. After writing captions.ass:
+         - Verify the file exists and is non-empty
+         - Report the number of caption entries written
+         - Output: CAPTIONS_ASS=/tmp/yt_{{video_idea_id}}/captions.ass
+
+  - id: research_clips
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /tmp
+    timeoutSeconds: 900
+    prompt: |
+      You are responsible for researching and extracting TV clips for this YouTube video.
+
+      Video sources (JSON): {{video_sources}}
+      Source type (legacy fallback): {{source_type}}
+      Show slugs (JSON array): {{show_slugs}}
+      Show slug (legacy fallback): {{show_slug}}
+      Video concept: {{video_concept}}
+      Wintermute base URL: {{wintermute_base_url}}
+      Output directory: /tmp/yt_{{video_idea_id}}/visuals/
+
+      Channel vault path: {{channel_vault_path}}
+
+      {{ channel_vault_path ? '## Channel Knowledge Base\n\nRead ' + channel_vault_path + '/knowledge-base/context.md using the Read tool (if it exists). If it does not exist, skip this section.\n\nChannel knowledge base:\n<contents of context.md will be read above>\n\nUse the above context (cast tenure, drama arcs, etc.) to verify that selected clips feature the relevant cast members and seasons. Cross-reference the cast tenure information against episode season numbers when applying the CAST/SEASON FILTER below.' : '' }}
+
+      ## STEP 1: Determine whether local clip research is needed
+
+      Parse the video_sources JSON array. If it is empty, malformed, or not provided,
+      fall back to the legacy source_type field.
+
+      - New path: if video_sources is a non-empty JSON array, check if any entry has type "local".
+        - If NO "local" entry exists → output CLIP_RESEARCH: skipped (no local source) and CLIP_CANDIDATES: [] then stop.
+        - If "local" entry exists → proceed to STEP 2.
+      - Legacy path (video_sources is empty/not provided):
+        - If source_type is "generative" or empty → output CLIP_RESEARCH: skipped (source_type=generative) and CLIP_CANDIDATES: [] then stop.
+        - If source_type is "tv-clips" or "mixed" → proceed to STEP 2.
+
+      ## STEP 2: Resolve which show slugs to search
+
+      Parse show_slugs as a JSON array. If it is non-empty, use all slugs in it.
+      Otherwise fall back to show_slug as a single-element array.
+      If no slugs are available, output CLIP_RESEARCH: no show slugs configured and CLIP_CANDIDATES: [] then stop.
+
+      Create the output directory:
+        mkdir -p /tmp/yt_{{video_idea_id}}/visuals/
+
+      ## STEP 3: Research clips — constrained to the correct show slugs
+
+      IMPORTANT: You MUST only search within the show slugs resolved in STEP 2. Do NOT search
+      all indexed shows — that will return clips from wrong franchises and ruin the video.
+
+      For each show slug resolved in STEP 2, make one request:
+        curl -s -X POST "{{wintermute_base_url}}/api/media-index/research-clips" \
+          -H "Content-Type: application/json" \
+          -d '{"concept": "{{video_concept}}", "showSlugs": ["<slug>"], "maxClips": 7}'
+
+      If the API does not accept a "showSlugs" parameter (i.e., results come back from
+      the wrong show), fall back to per-slug requests using the "show" query param:
+        curl -s "{{wintermute_base_url}}/api/media-index/research-clips?show=<slug>" \
+          -X POST -H "Content-Type: application/json" \
+          -d '{"concept": "{{video_concept}}", "maxClips": 7}'
+
+      Collect all results into a combined candidates list.
+
+      FRANCHISE FILTER — MANDATORY: After collecting results, inspect each candidate's
+      episodeId. The episodeId starts with the show slug (e.g. "real-housewives-of-new-jersey-s08e04").
+      REJECT any candidate whose episodeId does NOT start with one of the resolved show slugs.
+      This prevents cross-franchise contamination (e.g., RHOA clips appearing in an RHONJ video).
+
+      CAST/SEASON FILTER — MANDATORY: If the video concept mentions a specific cast member,
+      only keep clips from seasons where that person was a main cast member. Use your knowledge
+      of the show's cast history to determine their tenure, then verify against the episodeId
+      season number (format sXXeXX, e.g., s08e04 = Season 8). Reject clips from seasons that
+      predate or postdate that person's time on the show.
+
+      If all candidates are rejected by the filters above:
+        Output: CLIP_RESEARCH: no clips found (all candidates were from wrong show or wrong season)
+        Output: CLIP_CANDIDATES: []
+        Then stop.
+
+      Each valid candidate has:
+        - videoPath: absolute path to the source video file
+        - startSeconds: start time in seconds
+        - endSeconds: end time in seconds
+        - episodeId: episode identifier
+        - relevanceReason: why this clip is relevant
+
+      ## STEP 4: Decide whether to extract clips
+
+      - If using legacy source_type "mixed": if fewer than 2 clips total were returned, output:
+          CLIP_RESEARCH: insufficient clips found (N found, need ≥2), falling back to generative
+          CLIP_CANDIDATES: []
+        Then stop.
+      - If using video_sources with "local" type (new path): proceed with whatever clips were found.
+      - If using legacy source_type "tv-clips": proceed with whatever clips were found.
+
+      ## STEP 5: Select and extract clips
+
+      From all valid candidates, select at most 7 (prefer variety: different episodes, different seasons).
+      If more than 7 candidates exist, pick the most relevant and diverse 7.
+      ALL selected clips must be from the correct show(s) and correct seasons — never select
+      clips from a franchise or season that does not match the video concept.
+
+      For each selected candidate (max 7):
+      1. Derive outputName from episodeId and startSeconds (e.g. "show-s01e03-245")
+      2. POST to {{wintermute_base_url}}/api/media-index/extract-clip:
+           curl -s -X POST "{{wintermute_base_url}}/api/media-index/extract-clip" \
+             -H "Content-Type: application/json" \
+             -d '{"videoPath": "<videoPath>", "startSeconds": <startSeconds>, "endSeconds": <endSeconds>, "outputName": "<outputName>"}'
+      3. Collect the clipPath from each response
+      4. Copy or symlink each clipPath to /tmp/yt_{{video_idea_id}}/visuals/section_<N>.mp4
+         (where N is the 0-indexed position in the candidates array)
+
+      ## STEP 6: Output summary
+
+      Output:
+        CLIP_RESEARCH: extracted N clips from <show slugs used>
+        CLIP_CANDIDATES: <JSON array of clip objects with videoPath, startSeconds, endSeconds, episodeId>
+        CLIP_PATHS: <JSON array of extracted clip file paths>
+
+  - id: generate_visuals
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /tmp
+    timeoutSeconds: 600
+    prompt: |
+      You are responsible for generating visual assets for this YouTube video.
+      You will try each configured video source in priority order until one succeeds.
+      Before generating any clip, check the Wintermute video library for cached clips.
+
+      Video sources (JSON, ordered by priority): {{video_sources}}
+      Source type (legacy fallback): {{source_type}}
+      Clip research output:
+      {{research_clips.text}}
+
+      Visual prompts (JSON array with both "prompt" and "video_prompt" fields):
+      {{generate_visual_prompts.text}}
+
+      Output directory: /tmp/yt_{{video_idea_id}}/visuals/
+      Wintermute base URL: {{wintermute_base_url}}
+      Visual style override: {{visual_style}}
+      Aspect ratio: {{aspect_ratio}}
+      (16:9 → width=1920 height=1080; 9:16 → width=1080 height=1920)
+      DALL-E size: 16:9 → "1792x1024"; 9:16 → "1024x1792"
+      Runway ratio: 16:9 → "1280:768"; 9:16 → "768:1280"
+      Kling aspect_ratio: 16:9 → "16:9"; 9:16 → "9:16"
+      ffmpeg scale: 16:9 → scale=1920:1080; 9:16 → scale=1080:1920
+      NOTE: For Shorts (9:16) the target duration_seconds should be ≤60s.
+
+      ## STEP 0: Check if local TV clips were already extracted
+
+      Parse the clip research output above.
+      - If it contains "CLIP_PATHS:" with a non-empty JSON array:
+        - Parse the CLIP_PATHS array to get the list of extracted clip file paths.
+        - Parse the visual prompts JSON to count how many sections there are (call this SECTION_COUNT).
+        - Check which section_N.mp4 files actually exist in /tmp/yt_{{video_idea_id}}/visuals/:
+            ls /tmp/yt_{{video_idea_id}}/visuals/section_*.mp4 2>/dev/null
+        - For any section index N (0 to SECTION_COUNT-1) that does NOT have a section_N.mp4 file:
+          * This is a missing-clip gap. Fill it using the nearest available clip from the same show:
+            - Find the section_M.mp4 with M closest to N that does exist.
+            - Copy it: cp /tmp/yt_{{video_idea_id}}/visuals/section_M.mp4 /tmp/yt_{{video_idea_id}}/visuals/section_N.mp4
+          * If NO clips at all exist (the list is completely empty), do NOT set VISUALS_TYPE=video —
+            fall through to the generative steps below instead.
+          * Output: "VISUALS: Filled N gap(s) using nearest available clip"
+        - If at least one clip exists (after gap-filling):
+          - Set VISUALS_TYPE=video
+          - Output: "VISUALS: Using N TV clips extracted from local media (M gaps filled)"
+          - Output: VISUALS_TYPE=video
+          - Skip all steps below and go directly to STEP 6 (Output summary).
+      - Otherwise: continue with generative/stock steps below.
+
+      ## STEP 1: Determine source priority order
+
+      Parse the video_sources JSON array.
+      - If it is a non-empty valid array, use it as the priority order.
+      - Otherwise, derive from legacy source_type:
+        - "tv-clips" → [local, placeholder]
+        - "mixed"    → [local, runway, kling, dalle, placeholder]
+        - "generative" or empty → [runway, kling, dalle, placeholder]
+
+      Filter out "local" from the list since local clip extraction was already handled in STEP 0.
+
+      Also check the visual_style override:
+      - If visual_style is "images": skip all video sources (runway, kling, pexels), use dalle then placeholder.
+      - If visual_style is "generative": skip dalle and pexels sources.
+      - If visual_style is "auto" (default): use the priority order as-is.
+
+      ## STEP 2: Setup
+
+      Create the output directory:
+        mkdir -p /tmp/yt_{{video_idea_id}}/visuals/
+
+      Parse the visual prompts JSON array.
+
+      ## STEP 2B: Video Library Cache Lookup
+
+      For each section prompt, BEFORE generating, check the video library cache:
+        For each section N (0-indexed):
+          - Use the video_prompt field as the lookup prompt
+          - Call POST {{wintermute_base_url}}/api/video-library/lookup
+            Body: { "prompt": "<video_prompt from the section>", "aspectRatio": "{{aspect_ratio}}" }
+          - If the response has clip.filePath and matchType is "exact" or "fuzzy":
+            - Copy or symlink the cached file to /tmp/yt_{{video_idea_id}}/visuals/section_<N>.mp4
+              (or .png if it's an image)
+            - Mark this section as "cached" — skip generation for it
+          - Otherwise: mark this section as "needs generation"
+
+      Proceed with generation only for sections marked "needs generation".
+
+      ## STEP 3: Check available API keys
+
+      The following API keys are passed in as inputs (use these directly — do not check env vars):
+        PEXELS_API_KEY = {{pexels_api_key}}
+        RUNWAY_API_KEY = {{runway_api_key}}
+        KLING_API_KEY = {{kling_api_key}}
+        OPENAI_API_KEY = {{openai_api_key}}
+
+      A key is "set" if it is non-empty.
+
+      ## STEP 4: Generate visuals using priority order
+
+      Iterate through the source priority list from STEP 1. For each source type, attempt
+      generation for all remaining "needs generation" sections. Move to the next source only
+      if the current source's API key is missing OR if it fails for a section.
+
+      ### Source: pexels (Pexels stock footage)
+      If PEXELS_API_KEY is set:
+        For each section that needs generation:
+          - Use the "prompt" field as the search query
+          - Call the Pexels Videos API:
+              GET https://api.pexels.com/videos/search?query=<URL-encoded prompt>&per_page=3&orientation=<landscape|portrait>
+              Headers:
+                Authorization: {{pexels_api_key}}
+            Use orientation=landscape for 16:9, orientation=portrait for 9:16.
+          - Parse the response and pick the best matching video from response.videos[0]
+          - From video.video_files, select the file with the highest quality (largest width)
+          - Download that file's link to /tmp/yt_{{video_idea_id}}/visuals/section_<N>.mp4
+          - If download succeeds, mark section as "done (pexels)"
+          - If no results or download fails, leave as "needs generation" for next source
+        After all sections: output "VISUALS: Downloaded N/M clips via Pexels."
+        Set VISUALS_TYPE=video.
+        If all sections are done, go to STEP 5.
+
+      ### Source: runway (Runway ML text-to-video)
+      If RUNWAY_API_KEY is set:
+        For each remaining "needs generation" section:
+          - Call the Runway Gen-3 Alpha Turbo API:
+              POST https://api.dev.runwayml.com/v1/image_to_video
+              Headers:
+                Authorization: Bearer {{runway_api_key}}
+                X-Runway-Version: 2024-11-06
+                Content-Type: application/json
+              Body:
+                {
+                  "model": "gen3a_turbo",
+                  "promptText": "<video_prompt from the section>",
+                  "duration": 5,
+                  "ratio": "<if aspect_ratio is '9:16' use '768:1280', otherwise use '1280:768'>"
+                }
+          - Poll GET https://api.dev.runwayml.com/v1/tasks/<taskId> every 5s until SUCCEEDED/FAILED.
+            Maximum wait: 120 seconds per clip.
+          - On SUCCEEDED: download to /tmp/yt_{{video_idea_id}}/visuals/section_<N>.mp4
+          - On FAILED or timeout: leave as "needs generation" for next source.
+        After all sections: output "VISUALS: Generated N/M clips via Runway ML Gen-3 Turbo."
+        Set VISUALS_TYPE=video.
+        If all sections are done, go to STEP 5.
+
+      ### Source: kling (Kling AI text-to-video)
+      If KLING_API_KEY is set:
+        For each remaining "needs generation" section:
+          - Call the Kling AI API:
+              POST https://api.klingai.com/v1/videos/text2video
+              Headers:
+                Authorization: Bearer {{kling_api_key}}
+                Content-Type: application/json
+              Body:
+                {
+                  "model": "kling-v2",
+                  "prompt": "<video_prompt from the section>",
+                  "duration": "5",
+                  "aspect_ratio": "<use the aspect_ratio input: '16:9' or '9:16'>"
+                }
+          - Poll GET https://api.klingai.com/v1/videos/text2video/<taskId> every 5s.
+            Maximum wait: 120 seconds per clip.
+          - On succeed: download data.task_result.videos[0].url to section_<N>.mp4
+          - On failed or timeout: leave as "needs generation" for next source.
+        After all sections: output "VISUALS: Generated N/M clips via Kling AI."
+        Set VISUALS_TYPE=video.
+        If all sections are done, go to STEP 5.
+
+      ### Source: dalle (DALL-E 3 static images)
+      If OPENAI_API_KEY is set:
+        For each remaining "needs generation" section:
+          - Call the OpenAI Images API:
+              POST https://api.openai.com/v1/images/generations
+              Headers:
+                Authorization: Bearer {{openai_api_key}}
+                Content-Type: application/json
+              Body:
+                {
+                  "model": "dall-e-3",
+                  "prompt": "<prompt field from the section>",
+                  "size": "<if aspect_ratio is '9:16' use '1024x1792', otherwise use '1792x1024'>",
+                  "quality": "standard",
+                  "n": 1
+                }
+          - Download the returned image URL to /tmp/yt_{{video_idea_id}}/visuals/section_<N>.png
+        Report how many images were generated.
+        Set VISUALS_TYPE=image.
+        If all sections are done, go to STEP 5.
+
+      ### Source: placeholder (ffmpeg solid-color placeholders — always available)
+      For any still-remaining "needs generation" sections:
+        - Output: "VISUALS STUB: Using placeholder for N sections."
+        - For each such section:
+            If aspect_ratio is "9:16": use size=1080x1920; otherwise (16:9): use size=1920x1080.
+            ffmpeg -f lavfi -i color=c=0x1a1a2e:size=<WxH>:rate=1 -frames:v 1 \
+              /tmp/yt_{{video_idea_id}}/visuals/section_<N>.png -y
+        Set VISUALS_TYPE=image (if not already set to video).
+
+      ## STEP 5: Register new clips in the video library
+
+      For each newly generated clip (NOT cached ones):
+        - Determine file path, duration, dimensions from the file
+        - Call POST {{wintermute_base_url}}/api/video-library
+          Body:
+            {
+              "prompt": "<video_prompt used for this section>",
+              "service": "<pexels|runway|kling|dalle|placeholder>",
+              "filePath": "<absolute path to the file>",
+              "durationSeconds": <number>,
+              "width": <number>,
+              "height": <number>,
+              "aspectRatio": "{{aspect_ratio}}",
+              "usedInVideos": ["{{video_idea_id}}"]
+            }
+        - If the POST succeeds, note the clip ID returned
+
+      ## STEP 6: Output summary
+
+      Output a summary including:
+      - Which sources were used and how many clips came from each
+      - How many visual assets were newly generated vs served from cache
+      - The list of output files
+      - VISUALS_TYPE=video or VISUALS_TYPE=image (on its own line at the end)
+
+  - id: assemble_video
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /tmp
+    timeoutSeconds: 600
+    prompt: |
+      You are responsible for assembling the final YouTube video using ffmpeg.
+
+      Working directory: /tmp/yt_{{video_idea_id}}/
+      Visuals directory: /tmp/yt_{{video_idea_id}}/visuals/
+      Audio file: /tmp/yt_{{video_idea_id}}/voiceover.mp3
+      Output video: /tmp/yt_{{video_idea_id}}/output.mp4
+      Aspect ratio: {{aspect_ratio}}
+      Captions enabled: {{captions_enabled}}
+
+      Previous step output (contains VISUALS_TYPE):
+      {{generate_visuals.text}}
+
+      Clip research output (may contain CLIP_PATHS for TV-clips mode):
+      {{research_clips.text}}
+
+      Captions step output:
+      {{generate_captions.text}}
+
+      Determine the output dimensions from the aspect ratio:
+      - If aspect_ratio is "16:9": W=1920, H=1080
+      - If aspect_ratio is "9:16": W=1080, H=1920
+
+      Steps:
+      1. Parse the previous step output to determine VISUALS_TYPE (video or image).
+         Look for the line "VISUALS_TYPE=video" or "VISUALS_TYPE=image".
+
+      2. Determine if captions should be burned in:
+         - captions_enabled must be "true"
+         - AND captions.ass must exist: check with: ls /tmp/yt_{{video_idea_id}}/captions.ass
+         - If both conditions are met, set USE_CAPTIONS=true; otherwise USE_CAPTIONS=false.
+
+      3. List the visuals directory:
+           ls /tmp/yt_{{video_idea_id}}/visuals/
+
+      4. Check that the audio file exists:
+           ls -la /tmp/yt_{{video_idea_id}}/voiceover.mp3
+
+      5. Get audio duration:
+           ffprobe -v quiet -show_entries format=duration -of csv=p=0 \
+             /tmp/yt_{{video_idea_id}}/voiceover.mp3
+         Store this as AUDIO_DUR. Use -t $AUDIO_DUR in all ffmpeg commands below instead of
+         -shortest (VBR MP3 files can report incorrect stream durations causing -shortest to
+         truncate too early; using the container duration from ffprobe is more reliable).
+
+      6. IF VISUALS_TYPE=video (Runway or Kling produced .mp4 clips):
+         a. Count the video clips in /tmp/yt_{{video_idea_id}}/visuals/*.mp4
+         b. Create a concat list at /tmp/yt_{{video_idea_id}}/visuals.txt:
+              - Each line: file '/tmp/yt_{{video_idea_id}}/visuals/section_N.mp4'
+            (sorted by section number)
+         c. Concatenate clips and mix with voiceover, using correct dimensions for aspect ratio.
+
+            If USE_CAPTIONS=false, for 16:9 (W=1920, H=1080):
+              ffmpeg -y \
+                -f concat -safe 0 -i /tmp/yt_{{video_idea_id}}/visuals.txt \
+                -i /tmp/yt_{{video_idea_id}}/voiceover.mp3 \
+                -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:color=black,fps=24" \
+                -c:v libx264 -preset fast -crf 23 \
+                -c:a aac -b:a 128k \
+                -t $AUDIO_DUR \
+                /tmp/yt_{{video_idea_id}}/output.mp4
+
+            If USE_CAPTIONS=false, for 9:16 (W=1080, H=1920):
+              ffmpeg -y \
+                -f concat -safe 0 -i /tmp/yt_{{video_idea_id}}/visuals.txt \
+                -i /tmp/yt_{{video_idea_id}}/voiceover.mp3 \
+                -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=24" \
+                -c:v libx264 -preset fast -crf 23 \
+                -c:a aac -b:a 128k \
+                -t $AUDIO_DUR \
+                /tmp/yt_{{video_idea_id}}/output.mp4
+
+            If USE_CAPTIONS=true, for 16:9 (W=1920, H=1080):
+              ffmpeg -y \
+                -f concat -safe 0 -i /tmp/yt_{{video_idea_id}}/visuals.txt \
+                -i /tmp/yt_{{video_idea_id}}/voiceover.mp3 \
+                -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:color=black,fps=24,subtitles=/tmp/yt_{{video_idea_id}}/captions.ass" \
+                -c:v libx264 -preset fast -crf 23 \
+                -c:a aac -b:a 128k \
+                -t $AUDIO_DUR \
+                /tmp/yt_{{video_idea_id}}/output.mp4
+
+            If USE_CAPTIONS=true, for 9:16 (W=1080, H=1920):
+              ffmpeg -y \
+                -f concat -safe 0 -i /tmp/yt_{{video_idea_id}}/visuals.txt \
+                -i /tmp/yt_{{video_idea_id}}/voiceover.mp3 \
+                -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=24,subtitles=/tmp/yt_{{video_idea_id}}/captions.ass" \
+                -c:v libx264 -preset fast -crf 23 \
+                -c:a aac -b:a 128k \
+                -t $AUDIO_DUR \
+                /tmp/yt_{{video_idea_id}}/output.mp4
+
+      7. IF VISUALS_TYPE=image (DALL-E or placeholder .png images):
+         a. Count the images in /tmp/yt_{{video_idea_id}}/visuals/*.png
+         b. Calculate display duration per image: audio_duration / image_count
+         c. Create an ffmpeg concat list at /tmp/yt_{{video_idea_id}}/images.txt:
+              - Each entry: file line THEN duration line (file must come first):
+                  file '/tmp/yt_{{video_idea_id}}/visuals/section_N.png'
+                  duration <seconds>
+              - IMPORTANT: After the last image entry, repeat the last file path one more time
+                WITHOUT a duration line. This is required by the ffmpeg concat demuxer to
+                correctly apply the duration of the final segment. Example for 3 images:
+                  file '/tmp/.../section_0.png'
+                  duration 9.5
+                  file '/tmp/.../section_1.png'
+                  duration 9.5
+                  file '/tmp/.../section_2.png'
+                  duration 9.5
+                  file '/tmp/.../section_2.png'
+         d. Assemble slideshow with voiceover, using correct dimensions for aspect ratio.
+
+            If USE_CAPTIONS=false, for 16:9 (W=1920, H=1080):
+              ffmpeg -y \
+                -f concat -safe 0 -i /tmp/yt_{{video_idea_id}}/images.txt \
+                -i /tmp/yt_{{video_idea_id}}/voiceover.mp3 \
+                -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:color=black,fps=24" \
+                -c:v libx264 -preset fast -crf 23 \
+                -c:a aac -b:a 128k \
+                -t $AUDIO_DUR \
+                /tmp/yt_{{video_idea_id}}/output.mp4
+
+            If USE_CAPTIONS=false, for 9:16 (W=1080, H=1920):
+              ffmpeg -y \
+                -f concat -safe 0 -i /tmp/yt_{{video_idea_id}}/images.txt \
+                -i /tmp/yt_{{video_idea_id}}/voiceover.mp3 \
+                -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=24" \
+                -c:v libx264 -preset fast -crf 23 \
+                -c:a aac -b:a 128k \
+                -t $AUDIO_DUR \
+                /tmp/yt_{{video_idea_id}}/output.mp4
+
+            If USE_CAPTIONS=true, for 16:9 (W=1920, H=1080):
+              ffmpeg -y \
+                -f concat -safe 0 -i /tmp/yt_{{video_idea_id}}/images.txt \
+                -i /tmp/yt_{{video_idea_id}}/voiceover.mp3 \
+                -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1:color=black,fps=24,subtitles=/tmp/yt_{{video_idea_id}}/captions.ass" \
+                -c:v libx264 -preset fast -crf 23 \
+                -c:a aac -b:a 128k \
+                -t $AUDIO_DUR \
+                /tmp/yt_{{video_idea_id}}/output.mp4
+
+            If USE_CAPTIONS=true, for 9:16 (W=1080, H=1920):
+              ffmpeg -y \
+                -f concat -safe 0 -i /tmp/yt_{{video_idea_id}}/images.txt \
+                -i /tmp/yt_{{video_idea_id}}/voiceover.mp3 \
+                -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=24,subtitles=/tmp/yt_{{video_idea_id}}/captions.ass" \
+                -c:v libx264 -preset fast -crf 23 \
+                -c:a aac -b:a 128k \
+                -t $AUDIO_DUR \
+                /tmp/yt_{{video_idea_id}}/output.mp4
+
+      8. Verify the output:
+           ffprobe -v quiet -show_entries format=duration,size -of json \
+             /tmp/yt_{{video_idea_id}}/output.mp4
+
+      9. Output a summary including: output path, file size, duration, visuals type used, whether captions were burned in.
+         Format the last line as: OUTPUT_PATH=/tmp/yt_{{video_idea_id}}/output.mp4
+
+      10. PATCH Wintermute with the output video path and mark the idea as done:
+           curl -s -X PATCH {{wintermute_base_url}}/api/video-ideas/{{video_idea_id}} \
+             -H "Content-Type: application/json" \
+             -d "{\"videoPath\":\"/tmp/yt_{{video_idea_id}}/output.mp4\",\"status\":\"done\"}"
+         If the PATCH succeeds (HTTP 200), output: "CALLBACK: Wintermute updated with videoPath and status=done."
+         If it fails, output: "CALLBACK WARNING: Failed to update Wintermute — check manually."
+
+  - id: result
+    type: output
+    source: assemble_video
+
+edges:
+  - { from: { node: intake },                    to: { node: gather_context } }
+  - { from: { node: gather_context },            to: { node: write_script } }
+  - { from: { node: write_script },              to: { node: generate_visual_prompts } }
+  - { from: { node: write_script },              to: { node: voiceover } }
+  - { from: { node: voiceover },                 to: { node: generate_captions } }
+  - { from: { node: generate_visual_prompts },   to: { node: research_clips } }
+  - { from: { node: research_clips },            to: { node: generate_visuals } }
+  - { from: { node: generate_captions },         to: { node: assemble_video } }
+  - { from: { node: generate_visuals },          to: { node: assemble_video } }
+  - { from: { node: assemble_video },            to: { node: result } }

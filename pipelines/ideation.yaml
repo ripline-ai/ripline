@@ -1,0 +1,58 @@
+# Ideation Pipeline
+# Generates a batch of feature/project ideas given a topic and optional project context.
+#
+# Inputs:
+#   task           — topic or focus area for idea generation (optional)
+#   projectName    — name of the project to generate ideas for (optional)
+#   projectContext — README or other context about the project (optional)
+
+id: ideation
+name: Ideation
+entry: [intake]
+
+nodes:
+  - id: intake
+    type: input
+
+  - id: generate
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 120
+    prompt: |
+      You are a senior product and engineering thinker. Generate a list of 6-8 concrete, actionable feature ideas.
+
+      {{#if projectName}}
+      Project: {{projectName}}
+      {{/if}}
+      {{#if projectContext}}
+      Project context:
+      {{projectContext}}
+      {{/if}}
+      {{#if task}}
+      Focus area: {{task}}
+      {{/if}}
+
+      Generate ideas that are:
+      - Specific and implementable (not vague)
+      - Varied in scope (some quick wins, some bigger bets)
+      - Relevant to the project and focus area above
+      - Distinct from each other
+
+      Output ONLY a JSON array with no markdown fencing. Each item must have:
+      - "title": short, specific title (max 8 words)
+      - "description": 1-2 sentence summary of what the idea is
+
+      Example format:
+      [
+        { "title": "Add webhook support for run completion", "description": "Fire a configurable webhook URL when a pipeline run completes or errors, enabling external integrations without polling." },
+        { "title": "Run replay with input override", "description": "Re-run any historical run with modified inputs, preserving the original pipeline version and context." }
+      ]
+
+  - id: result
+    type: output
+    source: generate
+
+edges:
+  - { from: { node: intake },   to: { node: generate } }
+  - { from: { node: generate }, to: { node: result } }

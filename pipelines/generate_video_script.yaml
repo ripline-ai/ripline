@@ -1,0 +1,126 @@
+# Generate Video Script
+# Script-only pipeline — runs just the write_script step and saves the result
+# back to Wintermute via PATCH /api/video-ideas/:id.
+# Used by the "Generate Script" button on the YouTube idea cards.
+#
+# Inputs:
+#   video_idea_id      — Wintermute VideoIdea ID
+#   title              — video title
+#   hook               — opening hook sentence
+#   outline            — optional section breakdown
+#   channel_niche      — channel niche/topic area
+#   channel_tone       — tone (e.g. "educational, casual")
+#   target_audience    — who the video is for
+#   duration_seconds   — target video duration in seconds (default: 120)
+#   notes              — additional context (optional)
+#   narrator_perspective — e.g. "gossipy best friend" (optional)
+#   narrator_tone      — e.g. "dramatic and entertaining" (optional)
+#   narrator_style     — e.g. "short punchy sentences" (optional)
+#   catchphrases       — comma-separated phrases to weave in naturally (optional)
+#   content_warnings   — topics/spoilers to avoid (optional)
+#   wintermute_base_url — base URL for Wintermute API callbacks (default: http://localhost:3000)
+id: generate_video_script
+name: Generate Video Script
+entry: [intake]
+nodes:
+  - id: intake
+    type: input
+    description: >
+      video_idea_id: Wintermute VideoIdea ID.
+      title: video title.
+      hook: opening hook sentence.
+      outline: optional section breakdown.
+      channel_niche: channel niche/topic area.
+      channel_tone: tone (e.g. "educational, casual").
+      target_audience: who the video is for.
+      duration_seconds: target video duration in seconds (default: 120).
+      notes: additional context (optional).
+      narrator_perspective: narrator perspective e.g. "gossipy best friend" (optional).
+      narrator_tone: narrator tone e.g. "dramatic and entertaining" (optional).
+      narrator_style: narrator style e.g. "short punchy sentences" (optional).
+      catchphrases: comma-separated phrases to weave in naturally (optional).
+      content_warnings: topics/spoilers/content to avoid (optional).
+      wintermute_base_url: base URL for Wintermute API callbacks (default: http://localhost:3000).
+
+  - id: write_script
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 300
+    prompt: |
+      You are a professional YouTube scriptwriter for faceless channels.
+
+      Write a complete, production-ready narration script for this video.
+
+      Title: {{title}}
+      Opening Hook: {{hook}}
+      Channel Niche: {{channel_niche}}
+      Tone: {{channel_tone}}
+      Target Audience: {{target_audience}}
+      Outline / Section Breakdown:
+      {{outline}}
+      Target Duration: {{duration_seconds}} seconds
+
+      PRODUCTION NOTES (follow carefully):
+      {{notes}}
+
+      ## Narrator Voice
+      {{ narrator_perspective ? 'Perspective: ' + narrator_perspective : '' }}
+      {{ narrator_tone ? 'Tone: ' + narrator_tone : '' }}
+      {{ narrator_style ? 'Style: ' + narrator_style : '' }}
+      {{ catchphrases ? 'Catchphrases to weave in naturally: ' + catchphrases : '' }}
+      {{ content_warnings ? 'Avoid: ' + content_warnings : '' }}
+
+      ## Script Requirements
+
+      Structure the script as:
+      1. HOOK (first 15-30 seconds) — use the hook above verbatim or improve it
+      2. INTRO (brief context, 15-20 seconds)
+      3. MAIN CONTENT (3-5 sections based on the outline; add [SECTION: Title] markers)
+      4. OUTRO (call to action + subscribe ask, 15-20 seconds)
+
+      Rules:
+      - Write for spoken narration only — no on-screen text markers, no stage directions
+      - Short sentences. Punchy. Natural when read aloud.
+      - Target word count: {{duration_seconds}} × 2.3 ≈ {{ Math.round(duration_seconds * 2.3) }} words
+        (at ~150 wpm pacing). Scale the number of main sections accordingly:
+          60s  → ~138 words → 2 sections
+          90s  → ~207 words → 2-3 sections
+          120s → ~276 words → 3 sections
+          180s → ~414 words → 4 sections
+          300s → ~690 words → 5 sections
+      - Sound like a knowledgeable friend, not a corporate presenter
+      - Match the channel tone: {{channel_tone}}
+      - If narrator voice fields are set above, write entirely in that voice and perspective
+      - If catchphrases are provided, weave them in naturally at 2-3 points in the script
+
+      Output ONLY the narration script text. No headers, no meta-commentary.
+
+  - id: save_script
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /tmp
+    timeoutSeconds: 120
+    prompt: |
+      Perform exactly TWO steps in order — nothing else:
+
+      STEP 1: Use the Write tool to write the script text below to /tmp/script_{{video_idea_id}}.txt
+      The file contents must be exactly:
+      {{write_script.text}}
+
+      STEP 2: Use the Bash tool to run this exact command:
+      python3 -c "import json,urllib.request,urllib.error; f=open('/tmp/script_{{video_idea_id}}.txt'); script=f.read(); f.close(); payload=json.dumps({'script':script,'scriptStatus':'generated','status':'pending'}).encode(); req=urllib.request.Request('{{wintermute_base_url}}/api/video-ideas/{{video_idea_id}}',data=payload,headers={'Content-Type':'application/json'},method='PATCH'); resp=urllib.request.urlopen(req,timeout=15); print('SCRIPT SAVED: OK status='+str(resp.status))"
+
+      After both steps, output one line: the result from Step 2.
+      If Step 2 throws an exception, catch it and output: SCRIPT SAVE FAILED: <exception message>
+
+  - id: result
+    type: output
+    source: save_script
+
+edges:
+  - { from: { node: intake },       to: { node: write_script } }
+  - { from: { node: write_script }, to: { node: save_script } }
+  - { from: { node: save_script },  to: { node: result } }

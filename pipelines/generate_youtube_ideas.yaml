@@ -1,0 +1,237 @@
+# Generate YouTube Ideas
+# Research-driven idea generation pipeline for a YouTube channel.
+# Runs web searches to find trending topics, then generates channel-specific ideas,
+# then saves them back to Wintermute via POST /api/video-ideas.
+#
+# Inputs:
+#   channel_id         — Wintermute Channel ID
+#   channel_name       — channel name
+#   channel_niche      — e.g. "Real Housewives drama and tea"
+#   channel_tone       — e.g. "dramatic, gossipy, entertaining"
+#   target_audience    — e.g. "Real Housewives fans 25-45"
+#   format             — "both" | "shorts" | "longform" (default: "both")
+#   count              — number of ideas to generate (default: 10)
+#   topic_focus        — optional extra context, e.g. "focus on Season 10 drama"
+#   narrator_perspective — optional narrator perspective
+#   narrator_tone      — optional narrator tone
+#   narrator_style     — optional narrator style
+#   catchphrases       — optional comma-separated catchphrases
+#   content_warnings   — optional topics/content to avoid
+#   wintermute_base_url — base URL for Wintermute API callbacks (default: http://localhost:3000)
+id: generate_youtube_ideas
+name: Generate YouTube Ideas
+entry: [intake]
+nodes:
+  - id: intake
+    type: input
+    description: >
+      channel_id: Wintermute Channel ID.
+      channel_name: channel name.
+      channel_niche: niche/topic area e.g. "Real Housewives drama".
+      channel_tone: tone e.g. "dramatic, gossipy, entertaining".
+      target_audience: who the channel is for.
+      format: "both" | "shorts" | "longform" (default "both").
+      count: number of ideas to generate (default 10).
+      topic_focus: optional extra context for this generation run.
+      narrator_perspective: optional narrator voice perspective.
+      narrator_tone: optional narrator tone.
+      narrator_style: optional narrator style.
+      catchphrases: optional comma-separated catchphrases.
+      content_warnings: optional content to avoid.
+      wintermute_base_url: base URL for Wintermute API callbacks (default http://localhost:3000).
+
+  - id: research_trends
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 300
+    prompt: |
+      You are a YouTube content researcher. Your job is to find trending topics and
+      successful video formats for this channel niche.
+
+      Channel Niche: {{channel_niche}}
+      Target Audience: {{target_audience}}
+      Topic Focus (if any): {{topic_focus}}
+
+      Run the following web searches using the WebSearch tool and collect the results:
+
+      1. Search: "{{channel_niche}} trending 2025 YouTube"
+      2. Search: "{{channel_niche}} most viewed videos"
+      3. Search: "{{channel_niche}} drama news latest"
+      4. Search: "{{channel_niche}} YouTube channel titles hooks"
+
+      For each search, extract:
+      - Trending topics and events from the last 30 days
+      - Popular video titles and their approximate view counts (if visible)
+      - Recurring keywords, phrases, and hooks that appear across top videos
+      - Any specific events, drama, or news that is generating buzz
+
+      After running all searches, output a RESEARCH SUMMARY with:
+
+      ## Trending Topics
+      (list 5-10 specific, timely topics with brief explanations of why they're hot)
+
+      ## Popular Video Formats
+      (describe 3-5 video formats that perform well in this niche — e.g. "ranking episodes", "drama deep dives", "tea spills")
+
+      ## High-Performing Title Patterns
+      (list 5-8 title structures that appear frequently — e.g. "RANKED: Every [X] From Worst to Best", "The Real Story Behind [X]")
+
+      ## Trending Keywords & Hooks
+      (list 10-15 words/phrases that appear in top-performing content)
+
+      ## Breaking News / Drama
+      (any specific recent events, storylines, or drama that's generating conversation right now)
+
+  - id: generate_ideas
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 300
+    prompt: |
+      You are a YouTube content strategist. Using the research below, generate
+      {{count}} video ideas for this channel.
+
+      Channel: {{channel_name}}
+      Niche: {{channel_niche}}
+      Tone: {{channel_tone}}
+      Target Audience: {{target_audience}}
+      Format preference: {{format}}
+      Topic Focus: {{topic_focus}}
+
+      Narrator Voice:
+      {{ narrator_perspective ? '- Perspective: ' + narrator_perspective : '' }}
+      {{ narrator_tone ? '- Tone: ' + narrator_tone : '' }}
+      {{ narrator_style ? '- Style: ' + narrator_style : '' }}
+      {{ catchphrases ? '- Catchphrases: ' + catchphrases : '' }}
+      {{ content_warnings ? '- Avoid: ' + content_warnings : '' }}
+
+      ## Research Summary
+      {{research_trends.text}}
+
+      ## Your Task
+
+      Generate exactly {{count}} video ideas. Each idea must be grounded in the
+      research above — specifically tied to trending topics, popular formats, or
+      breaking drama identified in the research.
+
+      Format rules based on "{{format}}":
+      - "shorts": all ideas should be 30-90 second punchy concepts (aspect_ratio: "9:16")
+      - "longform": all ideas should be 3-15 minute deeper dives (aspect_ratio: "16:9")
+      - "both": mix of shorts and longform ideas
+
+      For each idea, write a title and hook that already sounds like this channel's voice.
+      If narrator tone/perspective/style are specified, make the title and hook feel authentic
+      to that voice — not generic.
+
+      Output a JSON array ONLY (no explanation, no markdown fences) with this structure:
+      [
+        {
+          "title": "punchy clickbait-style YouTube title",
+          "hook": "opening line that grabs attention in the first 3 seconds",
+          "outline": "• Point 1\n• Point 2\n• Point 3\n• Point 4",
+          "format": "shorts" | "longform",
+          "estimatedDuration": <seconds as integer>,
+          "trendReason": "1-2 sentence explanation of why this topic is timely right now",
+          "aspectRatio": "9:16" | "16:9"
+        },
+        ...
+      ]
+
+      Rules:
+      - estimatedDuration: shorts = 30-90, longform = 180-900
+      - aspectRatio: "9:16" for shorts, "16:9" for longform
+      - Every idea must connect to something from the research (trending topic, format, or drama)
+      - Titles should be clickbait but not misleading
+      - Hooks should be 1-2 sentences max, designed to stop the scroll
+      - Output ONLY the JSON array — no other text
+
+  - id: save_ideas
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /tmp
+    timeoutSeconds: 180
+    prompt: |
+      Save generated video ideas to the Wintermute API.
+
+      Wintermute base URL: {{wintermute_base_url}}
+      Channel ID: {{channel_id}}
+
+      Ideas JSON:
+      {{generate_ideas.text}}
+
+      Instructions:
+      1. Parse the JSON array of ideas from above.
+      2. For each idea, POST to {{wintermute_base_url}}/api/video-ideas with:
+         {
+           "channelId": "{{channel_id}}",
+           "title": <idea title>,
+           "hook": <idea hook>,
+           "outline": <idea outline>,
+           "aspectRatio": <idea aspectRatio>,
+           "duration": <idea estimatedDuration>
+         }
+
+      Use Python to do this efficiently:
+
+      python3 << 'PYEOF'
+      import json, urllib.request, urllib.error
+
+      ideas_text = """{{generate_ideas.text}}"""
+      base_url = "{{wintermute_base_url}}"
+      channel_id = "{{channel_id}}"
+
+      # Clean up the text in case there are markdown fences
+      text = ideas_text.strip()
+      if text.startswith("```"):
+          lines = text.split("\n")
+          text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+
+      ideas = json.loads(text)
+      saved = 0
+      failed = 0
+
+      for idea in ideas:
+          payload = {
+              "channelId": channel_id,
+              "title": idea.get("title", ""),
+              "hook": idea.get("hook", ""),
+              "outline": idea.get("outline", ""),
+              "aspectRatio": idea.get("aspectRatio", "16:9"),
+              "duration": idea.get("estimatedDuration", 120),
+          }
+          data = json.dumps(payload).encode("utf-8")
+          req = urllib.request.Request(
+              f"{base_url}/api/video-ideas",
+              data=data,
+              headers={"Content-Type": "application/json"},
+              method="POST"
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=10) as resp:
+                  if resp.status in (200, 201):
+                      saved += 1
+                  else:
+                      failed += 1
+                      print(f"WARN: unexpected status {resp.status} for idea: {idea.get('title')}")
+          except urllib.error.HTTPError as e:
+              failed += 1
+              print(f"ERROR saving '{idea.get('title')}': HTTP {e.code} {e.reason}")
+          except Exception as e:
+              failed += 1
+              print(f"ERROR saving '{idea.get('title')}': {e}")
+
+      print(f"SAVE COMPLETE: {saved} saved, {failed} failed out of {len(ideas)} ideas")
+      PYEOF
+
+  - id: result
+    type: output
+    source: save_ideas
+
+edges:
+  - { from: { node: intake },          to: { node: research_trends } }
+  - { from: { node: research_trends }, to: { node: generate_ideas } }
+  - { from: { node: generate_ideas },  to: { node: save_ideas } }
+  - { from: { node: save_ideas },      to: { node: result } }

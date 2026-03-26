@@ -1,0 +1,107 @@
+# Build From Plan
+# Fetches a planned Wintermute idea, extracts its stories, and implements them
+# sequentially via Claude Code agents, each committing to a feature branch.
+#
+# Inputs:
+#   idea_id     — Wintermute idea ID (required)
+#   branch_name — Git branch to commit to (required, e.g. feat/<idea-id>)
+#
+# Flow:
+#   intake → fetch_idea → parse_plan → story_loop → patch_complete → result
+
+id: build_from_plan
+name: Build From Plan
+entry: [intake]
+
+nodes:
+  - id: intake
+    type: input
+
+  # ── 1. Parse plan from inputs ─────────────────────────────────────────────
+  # Wintermute passes idea data directly as inputs — no HTTP fetch needed.
+  - id: parse_plan
+    type: transform
+    expression: |
+      (function() {
+        var stories = JSON.parse(inputs.stories_json || '[]');
+        return {
+          stories: stories,
+          idea: {
+            title: inputs.idea_title,
+            mvpScope: inputs.idea_mvp_scope
+          }
+        };
+      })()
+
+  # ── 4. Loop over stories sequentially ────────────────────────────────────
+  - id: story_loop
+    type: loop
+    collection: "JSON.parse(inputs.stories_json || '[]')"
+    itemVar: story
+    body:
+      entry:
+        - implement_story
+      nodes:
+        - id: implement_story
+          type: agent
+          runner: claude-code
+          mode: execute
+          dangerouslySkipPermissions: true
+          cwd: /home/openclaw
+          timeoutSeconds: 900
+          prompt: |
+            You are implementing a development story as part of a larger feature build.
+
+            ## Context
+            Idea: {{idea_title}}
+            Branch: {{branch_name}}
+            Idea ID: {{idea_id}}
+
+            ## Story to Implement
+            ID: {{loop.story.id}}
+            Title: {{loop.story.title}}
+            Description: {{loop.story.description}}
+            Acceptance Criteria:
+            {{(loop.story.acceptanceCriteria || []).map(function(c){return '- '+c}).join('\n')}}
+
+            ## Full Implementation Spec
+            {{idea_mvp_scope}}
+
+            ## Instructions
+            1. First, ensure you are on the correct branch. Run:
+               git -C <project-dir> checkout {{branch_name}} 2>/dev/null || git -C <project-dir> checkout -b {{branch_name}}
+               Replace <project-dir> with the project's local path (check the idea's projectId if needed, or look in ~/wintermute or ~/ripline).
+            2. Implement the story described above. Make focused, clean changes.
+            3. Commit your work with message: "{{loop.story.id}}: {{loop.story.title}}"
+            4. Output a brief summary of what was implemented (1-3 sentences).
+
+        - id: story_result
+          type: output
+          source: implement_story
+
+  # ── 5. Mark idea as done ──────────────────────────────────────────────────
+  - id: patch_complete
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 30
+    prompt: |
+      Run this exact command using the Bash tool:
+
+      curl -s -X PATCH http://localhost:3000/api/ideas/{{idea_id}} \
+        -H "Content-Type: application/json" \
+        -d '{"status":"done"}'
+
+      Output only the response JSON, nothing else.
+
+  - id: result
+    type: output
+    source: patch_complete
+
+edges:
+  - { from: { node: intake },        to: { node: parse_plan } }
+  - { from: { node: parse_plan },    to: { node: story_loop } }
+  - { from: { node: story_loop },    to: { node: patch_complete } }
+  - { from: { node: patch_complete }, to: { node: result } }

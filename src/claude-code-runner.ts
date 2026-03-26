@@ -36,6 +36,10 @@ const DEFAULT_EXECUTE_ALLOWED_TOOLS = [
   "Bash(git fetch *)",
   "Bash(find *)",
   "Bash(cat *)",
+  "Bash(curl *)",
+  "Bash(jq *)",
+  "Bash(python3 *)",
+  "WebFetch",
 ];
 
 export interface ClaudeCodeRunnerConfig {

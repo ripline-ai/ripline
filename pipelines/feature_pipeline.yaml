@@ -1,0 +1,390 @@
+# Feature Pipeline
+# Reads an idea from Wintermute, reads the linked project's codebase, generates
+# a detailed implementation spec, and writes it back to the idea via PATCH.
+#
+# Inputs:
+#   idea_id  — Wintermute idea ID (required)
+#   notes    — Optional freeform notes from the user (optional)
+#
+# Steps:
+#   1. Read idea from Wintermute
+#   2. Read linked project from Wintermute
+#   3. Explore project codebase (CLAUDE.md, README, git log, top-level structure)
+#   4. Generate implementation spec
+#   5. Write spec back to Wintermute (status → done, mvpScope updated with spec)
+#   6. Stub: trigger implementation subagent (placeholder)
+
+id: feature_pipeline
+name: Feature Pipeline (Idea → Spec)
+entry: [intake]
+
+nodes:
+  - id: intake
+    type: input
+
+  # ── 1. Read idea from Wintermute ──────────────────────────────────────────
+  - id: fetch_idea
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 30
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
+
+      curl -s http://localhost:3000/api/ideas/{{idea_id}}
+
+  - id: parse_idea
+    type: transform
+    expression: "(function(text) { var m = text.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1] : text.trim()); })(artifacts.fetch_idea.text)"
+
+  # ── 2. Read linked project from Wintermute ────────────────────────────────
+  - id: fetch_project
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 30
+    prompt: |
+      The idea below has a projectId field. If it has one, run:
+
+        curl -s http://localhost:3000/api/projects/<projectId>
+
+      If there is no projectId, run:
+
+        curl -s http://localhost:3000/api/projects
+
+      and pick the first project whose name or metadata.localPath appears most relevant to the idea title "{{parse_idea.title}}".
+
+      Idea JSON:
+      {{parse_idea}}
+
+      Output ONLY the raw JSON of a single project object — no explanation, no markdown fencing, no prose.
+
+  - id: parse_project
+    type: transform
+    expression: "(function(text) { var m = text.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); var raw = JSON.parse(m ? m[1] : text.trim()); var proj = Array.isArray(raw) ? raw[0] : raw; var localPath = (proj.metadata && proj.metadata.localPath) ? proj.metadata.localPath : '/home/openclaw/' + proj.name.toLowerCase(); var pipelinePath = (proj.metadata && proj.metadata.pipelinePath) ? proj.metadata.pipelinePath : null; var projectType = (proj.metadata && proj.metadata.type) ? proj.metadata.type : 'code'; return { projectId: proj.id, projectName: proj.name, localPath: localPath, pipelinePath: pipelinePath, projectType: projectType, description: proj.description || '' }; })(artifacts.fetch_project.text)"
+
+  # ── 3. Explore project context ────────────────────────────────────────────
+  - id: read_codebase
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 120
+    prompt: |
+      {{#if (eq parse_project.projectType "operations")}}
+      This is an operations project representing cross-cutting improvements to the overall OpenClaw stack. Read the vault's key reference files and produce a structured summary.
+
+      Run these commands and capture output (use bash):
+
+      1. cat {{parse_project.localPath}}/reference.md 2>/dev/null || echo "(no reference.md)"
+      2. cat {{parse_project.localPath}}/CLAUDE.md 2>/dev/null || echo "(no CLAUDE.md)"
+      3. find {{parse_project.localPath}}/Projects -maxdepth 2 -name "*.md" 2>/dev/null | head -40
+      4. For each markdown file found in Projects/ (up to 10), print its filename and contents:
+         for f in $(find {{parse_project.localPath}}/Projects -maxdepth 2 -name "*.md" 2>/dev/null | head -10); do echo "=== $f ==="; cat "$f"; echo; done
+
+      Produce a concise structured summary covering:
+      - The overall stack architecture (Ripline, Wintermute, YouTube pipeline, Obsidian vault)
+      - Current agent coordination patterns and workflows
+      - Existing project notes and decisions captured in Projects/
+      - Any documented pain points, roadmap items, or open questions
+
+      This summary will be used to generate a cross-cutting improvement spec for the stack.
+      {{else if (eq parse_project.projectType "pipeline-operation")}}
+      This is a pipeline-operation project, not a software codebase. Explore the pipeline and channel configs and produce a structured summary.
+
+      Run these commands and capture output (use bash):
+
+      1. find {{parse_project.pipelinePath}} -maxdepth 2 -name "*.yaml" -o -name "*.yml" 2>/dev/null | head -60
+      2. For each pipeline YAML found (up to 10), print its filename and first 30 lines:
+         for f in $(find {{parse_project.pipelinePath}} -maxdepth 2 -name "*.yaml" | head -10); do echo "=== $f ==="; head -30 "$f"; echo; done
+      3. find {{parse_project.localPath}} -maxdepth 3 2>/dev/null | head -80
+      4. For any config or markdown files in {{parse_project.localPath}}, print a brief excerpt.
+
+      Produce a concise structured summary covering:
+      - Pipeline names, their purpose, and key steps (from the YAML files)
+      - Channel configs and their structure (from localPath)
+      - Overall workflow: how content moves from idea to produced video
+
+      This summary will be used to generate pipeline or workflow improvement ideas.
+      {{else}}
+      Explore the codebase at {{parse_project.localPath}} and produce a structured summary.
+
+      Run these commands and capture output (use bash):
+
+      1. cat {{parse_project.localPath}}/CLAUDE.md 2>/dev/null || echo "(no CLAUDE.md)"
+      2. cat {{parse_project.localPath}}/README.md 2>/dev/null || echo "(no README.md)"
+      3. git -C {{parse_project.localPath}} log --oneline -15 2>/dev/null || echo "(no git log)"
+      4. find {{parse_project.localPath}} -maxdepth 2 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/.next/*' 2>/dev/null | head -80
+
+      Produce a concise structured summary covering:
+      - Project purpose and tech stack (from CLAUDE.md / README)
+      - Recent git activity (last 15 commits)
+      - Top-level directory structure
+
+      This summary will be used to generate an implementation spec.
+      {{/if}}
+
+  # ── 4. Generate implementation spec ──────────────────────────────────────
+  - id: generate_spec
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 300
+    prompt: |
+      {{#if (eq parse_project.projectType "operations")}}
+      You are a systems architect with deep knowledge of the OpenClaw stack. Write a detailed, actionable improvement spec for the following cross-cutting idea in the context of the overall stack described below.
+
+      ## Idea
+      Title: {{parse_idea.title}}
+      Description: {{parse_idea.description}}
+      {{#if parse_idea.rationale}}Why It's Beneficial: {{parse_idea.rationale}}{{/if}}
+      {{#if parse_idea.implementation}}How It Would Work: {{parse_idea.implementation}}{{/if}}
+      {{#if parse_idea.tradeoffs}}Tradeoffs: {{parse_idea.tradeoffs}}{{/if}}
+      {{#if parse_idea.competitiveEdge}}Competitive Edge: {{parse_idea.competitiveEdge}}{{/if}}
+      {{#if parse_idea.valueProposition}}Value Proposition: {{parse_idea.valueProposition}}{{/if}}
+      {{#if parse_idea.keyFeatures}}Key Features:
+      {{parse_idea.keyFeatures}}{{/if}}
+      {{#if parse_idea.mvpScope}}Original MVP Scope: {{parse_idea.mvpScope}}{{/if}}
+      {{#if notes}}User Notes: {{notes}}{{/if}}
+
+      ## Project
+      Name: {{parse_project.projectName}}
+      Vault Path: {{parse_project.localPath}}
+      Description: {{parse_project.description}}
+
+      ## Stack & Vault Summary
+      {{read_codebase.text}}
+
+      ---
+
+      Write the spec as a JSON object with these exact fields:
+
+      {
+        "description": "What the improvement is — 2-4 sentences",
+        "rationale": "Why this is beneficial — concrete value for the stack, ops, or developer experience. 2-5 sentences.",
+        "implementation": "How it would work — rough approach, which components to change, cross-project coordination needed. Use bullet points.",
+        "tradeoffs": "Honest drawbacks or risks — maintenance overhead, coordination complexity, scope creep risk. Use bullet points.",
+        "mvpScope": "Full detailed implementation spec in markdown covering: 1. Overview 2. Systems Affected 3. Architecture Changes 4. Files to Create or Modify 5. Agent Coordination Impact 6. Implementation Steps 7. Acceptance Criteria 8. Out of Scope",
+        "impactScore": <1-5 integer, where 5=transformative and 1=trivial>,
+        "effortScore": <1-5 integer, where 5=major multi-week effort and 1=trivial change>,
+        "tags": ["tag1", "tag2", "tag3"],
+        "stories": [
+          {
+            "id": "story-1",
+            "title": "Short title for this story",
+            "description": "What needs to be built or changed",
+            "acceptanceCriteria": ["criterion 1", "criterion 2"],
+            "dependsOn": [],
+            "order": 1
+          }
+        ]
+      }
+
+      The "stories" field is required. Break the implementation into 3-8 ordered stories that can each be completed in a single Claude Code session. Each story should be independently testable. Output ONLY the JSON object — no markdown fencing, no prose.
+      {{else if (eq parse_project.projectType "pipeline-operation")}}
+      You are a senior content pipeline architect. Write a detailed, actionable improvement spec for the following workflow idea in the context of the YouTube content pipeline described below.
+
+      ## Idea
+      Title: {{parse_idea.title}}
+      Description: {{parse_idea.description}}
+      {{#if parse_idea.rationale}}Why It's Beneficial: {{parse_idea.rationale}}{{/if}}
+      {{#if parse_idea.implementation}}How It Would Work: {{parse_idea.implementation}}{{/if}}
+      {{#if parse_idea.tradeoffs}}Tradeoffs: {{parse_idea.tradeoffs}}{{/if}}
+      {{#if parse_idea.competitiveEdge}}Competitive Edge: {{parse_idea.competitiveEdge}}{{/if}}
+      {{#if parse_idea.valueProposition}}Value Proposition: {{parse_idea.valueProposition}}{{/if}}
+      {{#if parse_idea.keyFeatures}}Key Features:
+      {{parse_idea.keyFeatures}}{{/if}}
+      {{#if parse_idea.mvpScope}}Original MVP Scope: {{parse_idea.mvpScope}}{{/if}}
+      {{#if notes}}User Notes: {{notes}}{{/if}}
+
+      ## Project
+      Name: {{parse_project.projectName}}
+      Pipelines Path: {{parse_project.pipelinePath}}
+      Channel Configs Path: {{parse_project.localPath}}
+      Description: {{parse_project.description}}
+
+      ## Pipeline & Channel Summary
+      {{read_codebase.text}}
+
+      ---
+
+      Write the spec as a JSON object with these exact fields:
+
+      {
+        "description": "What the improvement is — 2-4 sentences",
+        "rationale": "Why this is beneficial — concrete value for users, pipeline ops, or content quality. 2-5 sentences.",
+        "implementation": "How it would work — rough approach, which pipeline YAML files to change, new nodes or prompts needed, key config changes. Use bullet points.",
+        "tradeoffs": "Honest drawbacks or risks — maintenance overhead, edge cases, scope creep risk, dependencies. Use bullet points.",
+        "mvpScope": "Full detailed implementation spec in markdown covering: 1. Overview 2. Pipeline Impact 3. Channel Config Changes 4. New Pipeline Nodes or Steps 5. Data Flow 6. Implementation Steps 7. Acceptance Criteria 8. Out of Scope",
+        "impactScore": <1-5 integer, where 5=transformative and 1=trivial>,
+        "effortScore": <1-5 integer, where 5=major multi-week effort and 1=trivial change>,
+        "tags": ["tag1", "tag2", "tag3"],
+        "stories": [
+          {
+            "id": "story-1",
+            "title": "Short title for this story",
+            "description": "What needs to be built or changed",
+            "acceptanceCriteria": ["criterion 1", "criterion 2"],
+            "dependsOn": [],
+            "order": 1
+          }
+        ]
+      }
+
+      The "stories" field is required. Break the implementation into 3-8 ordered stories that can each be completed in a single Claude Code session. Each story should be independently testable. Output ONLY the JSON object — no markdown fencing, no prose.
+      {{else}}
+      You are a senior software architect. Write a detailed, actionable implementation spec for the following feature idea in the context of the codebase described below.
+
+      ## Idea
+      Title: {{parse_idea.title}}
+      Description: {{parse_idea.description}}
+      {{#if parse_idea.rationale}}Why It's Beneficial: {{parse_idea.rationale}}{{/if}}
+      {{#if parse_idea.implementation}}How It Would Work: {{parse_idea.implementation}}{{/if}}
+      {{#if parse_idea.tradeoffs}}Tradeoffs: {{parse_idea.tradeoffs}}{{/if}}
+      {{#if parse_idea.competitiveEdge}}Competitive Edge: {{parse_idea.competitiveEdge}}{{/if}}
+      {{#if parse_idea.valueProposition}}Value Proposition: {{parse_idea.valueProposition}}{{/if}}
+      {{#if parse_idea.keyFeatures}}Key Features:
+      {{parse_idea.keyFeatures}}{{/if}}
+      {{#if parse_idea.mvpScope}}Original MVP Scope: {{parse_idea.mvpScope}}{{/if}}
+      {{#if notes}}User Notes: {{notes}}{{/if}}
+
+      ## Project
+      Name: {{parse_project.projectName}}
+      Path: {{parse_project.localPath}}
+      Description: {{parse_project.description}}
+
+      ## Codebase Summary
+      {{read_codebase.text}}
+
+      ---
+
+      Write the spec as a JSON object with these exact fields:
+
+      {
+        "description": "What the feature is — 2-4 sentences",
+        "rationale": "Why this is beneficial — concrete value for users, the product, or ops. 2-5 sentences.",
+        "implementation": "How it would work — rough approach, key components to build or change, major dependencies. Use bullet points.",
+        "tradeoffs": "Honest drawbacks or risks — complexity, maintenance overhead, edge cases, what we give up. Use bullet points.",
+        "mvpScope": "Full detailed implementation spec in markdown covering: 1. Overview 2. Architecture 3. Files to Create or Modify 4. Data Models 5. API Endpoints 6. UI Changes 7. Implementation Steps 8. Acceptance Criteria 9. Out of Scope",
+        "impactScore": <1-5 integer, where 5=transformative and 1=trivial>,
+        "effortScore": <1-5 integer, where 5=major multi-week effort and 1=trivial change>,
+        "tags": ["tag1", "tag2", "tag3"],
+        "stories": [
+          {
+            "id": "story-1",
+            "title": "Short title for this story",
+            "description": "What needs to be built or changed",
+            "acceptanceCriteria": ["criterion 1", "criterion 2"],
+            "dependsOn": [],
+            "order": 1
+          }
+        ]
+      }
+
+      The "stories" field is required. Break the implementation into 3-8 ordered stories that can each be completed in a single Claude Code session. Each story should be independently testable. Output ONLY the JSON object — no markdown fencing, no prose.
+      {{/if}}
+
+  # ── 4b. Parse spec JSON ───────────────────────────────────────────────────
+  - id: parse_spec
+    type: transform
+    expression: "(function(text) { var t = text.trim(); var start = t.indexOf('{'); var end = t.lastIndexOf('}'); if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {} } var m = t.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1].trim() : t); })(artifacts.generate_spec.text)"
+
+  # ── 5. PATCH idea with spec ───────────────────────────────────────────────
+  # Fetches the parse_spec artifact from the Ripline run API at runtime to avoid
+  # embedding large spec content (which may contain implementation instructions)
+  # directly in the agent prompt, which caused Claude Code to abort.
+  - id: patch_idea
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 60
+    prompt: |
+      Run this exact Python script using the Bash tool:
+
+      python3 << 'PYEOF'
+      import json, subprocess, sys
+
+      idea_id = "{{idea_id}}"
+
+      # Get the idea to find the current runId
+      r = subprocess.run(
+          ["curl", "-s", f"http://localhost:3000/api/ideas/{idea_id}"],
+          capture_output=True, text=True
+      )
+      idea = json.loads(r.stdout)
+      run_id = idea.get("runId")
+      if not run_id:
+          print("ERROR: no runId on idea"); sys.exit(1)
+
+      # Get the run to find parse_spec artifact
+      r = subprocess.run(
+          ["curl", "-s", f"http://localhost:4001/runs/{run_id}"],
+          capture_output=True, text=True
+      )
+      run = json.loads(r.stdout)
+
+      # Extract parse_spec from completed steps
+      spec = None
+      for step in run.get("steps", []):
+          if step.get("nodeId") == "parse_spec" and step.get("status") == "completed":
+              spec = step.get("data", {}).get("artifactValue")
+              break
+
+      # Fallback: check cursor context
+      if spec is None:
+          spec = run.get("cursor", {}).get("context", {}).get("artifacts", {}).get("parse_spec")
+
+      if not spec:
+          print("ERROR: parse_spec artifact not found"); sys.exit(1)
+
+      spec["status"] = "specced"
+
+      # PATCH the idea
+      r = subprocess.run(
+          ["curl", "-s", "-X", "PATCH",
+           f"http://localhost:3000/api/ideas/{idea_id}",
+           "-H", "Content-Type: application/json",
+           "--data-binary", json.dumps(spec)],
+          capture_output=True, text=True
+      )
+      print(r.stdout)
+      PYEOF
+
+      After the script runs, use the Bash tool to echo "patch_idea complete" and stop.
+
+  # ── 6. Stub: trigger implementation subagent ──────────────────────────────
+  # This step is a placeholder. To enable automatic implementation, replace this
+  # agent stub with an enqueue node pointing to implement_story_openclaw.
+  - id: implementation_stub
+    type: agent
+    runner: claude-code
+    mode: plan
+    timeoutSeconds: 15
+    prompt: |
+      The spec for idea {{idea_id}} has been written to Wintermute with status "specced".
+      The plan is ready for review. Output only: "Pipeline complete. Spec written for {{idea_id}}."
+
+  - id: result
+    type: output
+    source: implementation_stub
+
+edges:
+  - { from: { node: intake },             to: { node: fetch_idea } }
+  - { from: { node: fetch_idea },         to: { node: parse_idea } }
+  - { from: { node: parse_idea },         to: { node: fetch_project } }
+  - { from: { node: fetch_project },      to: { node: parse_project } }
+  - { from: { node: parse_project },      to: { node: read_codebase } }
+  - { from: { node: read_codebase },      to: { node: generate_spec } }
+  - { from: { node: generate_spec },      to: { node: parse_spec } }
+  - { from: { node: parse_spec },         to: { node: patch_idea } }
+  - { from: { node: patch_idea },         to: { node: implementation_stub } }
+  - { from: { node: implementation_stub }, to: { node: result } }

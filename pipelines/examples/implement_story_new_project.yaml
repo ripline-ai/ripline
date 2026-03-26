@@ -1,0 +1,40 @@
+# Implement Story (New Project)
+# Invoked by build_new_app per story via enqueue (per-item).
+# Each task item carries: id, title, detail, projectRoot
+# The agent runs inside the project workspace and commits its work.
+id: implement_story_new_project
+name: Implement Story (New Project)
+entry: [task_in]
+
+nodes:
+  - id: task_in
+    type: input
+
+  - id: implement
+    type: agent
+    mode: execute
+    cwd: "{{ run.inputs.task.projectRoot }}"
+    timeoutSeconds: 600
+    prompt: |
+      Implement the following development story in this project. Write all necessary code changes, then commit your work with a clear descriptive message that references the story ID.
+
+      Story ID: {{task.id}}
+      Title: {{task.title}}
+
+      Details:
+      {{task.detail}}
+
+      Guidelines:
+      - Read existing code before editing so you understand the project structure
+      - Follow the conventions already established in the codebase
+      - Keep changes focused on this story only
+      - After implementing, run any available tests or linter
+      - Commit with: git add -A && git commit -m "feat({{task.id}}): {{task.title}}"
+
+  - id: result
+    type: output
+    source: implement
+
+edges:
+  - { from: { node: task_in },   to: { node: implement } }
+  - { from: { node: implement }, to: { node: result } }

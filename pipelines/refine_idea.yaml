@@ -1,0 +1,95 @@
+# Refine Idea Pipeline
+# Takes an existing Wintermute idea and a user prompt, runs a claude-code agent
+# to refine the idea fields, and patches the updated fields back.
+#
+# Inputs:
+#   idea_id  — Wintermute idea ID (required)
+#   prompt   — User refinement instruction (required)
+
+id: refine_idea
+name: Refine Idea
+entry: [intake]
+
+nodes:
+  - id: intake
+    type: input
+
+  # ── 1. Read idea from Wintermute ─────────────────────────────────────────
+  - id: fetch_idea
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 30
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
+
+      curl -s http://localhost:3000/api/ideas/{{idea_id}}
+
+  - id: parse_idea
+    type: transform
+    expression: "(function(text) { var t = text.trim(); var start = t.indexOf('{'); var end = t.lastIndexOf('}'); if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {} } var m = t.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1].trim() : t); })(artifacts.fetch_idea.text)"
+
+  # ── 2. Refine the idea fields ─────────────────────────────────────────────
+  - id: refine
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 120
+    prompt: |
+      Here is a feature idea:
+
+      Title: {{parse_idea.title}}
+      Description: {{parse_idea.description}}
+      Why It's Beneficial: {{parse_idea.rationale}}
+      How It Would Work: {{parse_idea.implementation}}
+      Tradeoffs: {{parse_idea.tradeoffs}}
+
+      Refinement request: {{prompt}}
+
+      Return the updated idea as a JSON object with keys: description, rationale, implementation, tradeoffs.
+      Only update sections that the refinement request is relevant to. Keep other sections unchanged.
+      Output ONLY valid JSON — no markdown fences, no prose.
+
+  - id: parse_refined
+    type: transform
+    expression: "(function(text) { var t = text.trim(); var start = t.indexOf('{'); var end = t.lastIndexOf('}'); if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {} } var m = t.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1].trim() : t); })(artifacts.refine.text)"
+
+  # ── 3. Patch updated fields back to Wintermute ───────────────────────────
+  - id: patch_idea
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 60
+    prompt: |
+      Write the following refined idea fields back to Wintermute for idea {{idea_id}}.
+
+      The refined fields object (only include fields that are present):
+      {{parse_refined}}
+
+      Build a JSON body containing only the fields present in the refined object above
+      (description, rationale, implementation, tradeoffs — only include those with values).
+      Properly JSON-escape all values.
+
+      Run (replacing <JSON_BODY> with the properly constructed and escaped JSON):
+
+      curl -s -X PATCH http://localhost:3000/api/ideas/{{idea_id}} \
+        -H "Content-Type: application/json" \
+        -d '<JSON_BODY>'
+
+      Output ONLY the raw JSON response from the server.
+
+  - id: result
+    type: output
+    source: patch_idea
+
+edges:
+  - { from: { node: intake },        to: { node: fetch_idea } }
+  - { from: { node: fetch_idea },    to: { node: parse_idea } }
+  - { from: { node: parse_idea },    to: { node: refine } }
+  - { from: { node: refine },        to: { node: parse_refined } }
+  - { from: { node: parse_refined }, to: { node: patch_idea } }
+  - { from: { node: patch_idea },    to: { node: result } }

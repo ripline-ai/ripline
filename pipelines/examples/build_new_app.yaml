@@ -1,0 +1,180 @@
+# Build New App (Idea → MVP)
+# Autonomous pipeline: generates an app idea, creates a Wintermute project,
+# initialises the workspace, specs the MVP, decomposes it into stories, and
+# implements each story in parallel via implement_story_new_project.
+# No inputs required — kick off with POST /pipelines/build_new_app/run {}
+id: build_new_app
+name: Build New App (Idea → MVP)
+entry: [intake]
+
+nodes:
+  - id: intake
+    type: input
+
+  # ── 1. Ideate ──────────────────────────────────────────────────────────────
+  - id: ideate
+    type: agent
+    mode: execute
+    timeoutSeconds: 120
+    prompt: |
+      Come up with a compelling idea for a small, focused web application. Be creative but practical — something genuinely useful that can be built as an MVP in a single focused session.
+
+      Output ONLY a valid JSON object — no markdown fencing, no explanation, no prose:
+      {
+        "name": "<short memorable app name, no spaces>",
+        "description": "<1-2 sentence description of what the app does and who it is for>",
+        "techStack": "<e.g. Next.js + TypeScript + Tailwind, or Express + React, etc.>",
+        "rationale": "<why this app is useful in 1-2 sentences>",
+        "features": ["<MVP feature 1>", "<MVP feature 2>", "<MVP feature 3>", "<MVP feature 4>", "<MVP feature 5>"]
+      }
+
+      Include 5-7 features. Each should be independently implementable in one coding session.
+
+  - id: parse_idea
+    type: transform
+    expression: "(function(text) { var m = text.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1] : text.trim()); })(artifacts.ideate.text)"
+
+  # ── 2. Create Wintermute project ──────────────────────────────────────────
+  - id: create_project
+    type: agent
+    mode: execute
+    timeoutSeconds: 60
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — nothing else, no explanation, no markdown fencing.
+
+      curl -s -X POST http://localhost:3000/api/projects \
+        -H "Content-Type: application/json" \
+        -d '{"name":"{{parse_idea.name}}","description":"{{parse_idea.description}}","status":"active"}'
+
+  - id: parse_project
+    type: transform
+    expression: "(function(text) { var m = text.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); var proj = JSON.parse(m ? m[1] : text.trim()); var workspacePath = '/home/openclaw/wintermute/data/projects/' + proj.id + '/workspace'; return { projectId: proj.id, projectName: proj.name, workspacePath: workspacePath }; })(artifacts.create_project.text)"
+
+  # ── 3. Write tech spec ────────────────────────────────────────────────────
+  - id: spec
+    type: agent
+    mode: execute
+    timeoutSeconds: 300
+    prompt: |
+      Write a detailed technical specification for the following web application.
+
+      Name: {{parse_idea.name}}
+      Description: {{parse_idea.description}}
+      Tech Stack: {{parse_idea.techStack}}
+
+      MVP Features:
+      {{parse_idea.features}}
+
+      Your spec must include:
+      1. Architecture overview
+      2. Data models / schemas
+      3. Key screens and user flows
+      4. API endpoints (if any)
+      5. Recommended file/folder structure
+
+      Be concrete and specific — this spec will guide implementation.
+
+  # ── 4. Initialise workspace ───────────────────────────────────────────────
+  - id: init_workspace
+    type: agent
+    mode: execute
+    timeoutSeconds: 600
+    prompt: |
+      Initialise a new project workspace for the app described below.
+
+      Workspace path: {{parse_project.workspacePath}}
+      App name: {{parse_idea.name}}
+      Tech stack: {{parse_idea.techStack}}
+      Description: {{parse_idea.description}}
+
+      Steps:
+      1. Create the directory: mkdir -p {{parse_project.workspacePath}}
+      2. cd into {{parse_project.workspacePath}}
+      3. Scaffold the project for the chosen tech stack. For example:
+         - Next.js + TypeScript: npx create-next-app@latest . --typescript --tailwind --eslint --app --no-src-dir --import-alias "@/*" --yes
+         - Express + React: npm init -y && npm install express react react-dom
+         - Plain Node: npm init -y
+         Adapt as needed for the actual tech stack.
+      4. Create a README.md with the app name, description, rationale, and a bulleted list of MVP features.
+      5. Run: git init && git add -A && git commit -m "chore: initial project scaffolding for {{parse_idea.name}}"
+
+      Tech spec for reference:
+      {{spec.text}}
+
+      Report what you did and confirm the workspace is ready.
+
+  # ── 5. Decompose into stories ─────────────────────────────────────────────
+  - id: decompose
+    type: agent
+    mode: execute
+    timeoutSeconds: 300
+    prompt: |
+      Based on the technical specification below, break the MVP into small, independently implementable development stories.
+      Each story should build a single coherent piece of functionality and be completable in one focused coding session.
+      Take into account the scaffolding already set up (described in the init output).
+
+      App: {{parse_idea.name}}
+      Tech Stack: {{parse_idea.techStack}}
+
+      Spec:
+      {{spec.text}}
+
+      Workspace init summary:
+      {{init_workspace.text}}
+
+  - id: queue
+    type: agent
+    mode: execute
+    timeoutSeconds: 120
+    prompt: |
+      Output ONLY a valid JSON array — no markdown fencing, no explanation, no prose.
+      Each element must have exactly these keys:
+        - id (string, e.g. "story-001")
+        - title (string, short)
+        - description (string, detailed enough to implement without further context)
+
+      Convert every story from the decomposition below into one array element:
+      {{decompose.text}}
+
+  - id: parse_tasks
+    type: transform
+    expression: "(function(text, workspacePath) { var m = text.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); var raw = JSON.parse(m ? m[1] : text.trim()); return raw.map(function(t, i) { return { id: String(t.id || ('story-' + String(i + 1).padStart(3, '0'))), title: t.title, detail: t.detail || t.description || '', projectRoot: workspacePath }; }); })(artifacts.queue.text, artifacts.parse_project.workspacePath)"
+
+  # ── 6. Implement stories in parallel ─────────────────────────────────────
+  - id: spawn
+    type: enqueue
+    pipelineId: implement_story_new_project
+    tasksSource: parse_tasks
+    mode: per-item
+
+  - id: collect
+    type: collect_children
+
+  # ── 7. Link Ripline profile to Wintermute project ─────────────────────────
+  - id: link_and_update
+    type: agent
+    mode: execute
+    timeoutSeconds: 30
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — nothing else, no explanation, no markdown fencing.
+
+      curl -s -X POST http://localhost:3000/api/projects/{{parse_project.projectId}}/ripline-profile
+
+  - id: result
+    type: output
+    source: collect
+
+edges:
+  - { from: { node: intake },         to: { node: ideate } }
+  - { from: { node: ideate },         to: { node: parse_idea } }
+  - { from: { node: parse_idea },     to: { node: create_project } }
+  - { from: { node: create_project }, to: { node: parse_project } }
+  - { from: { node: parse_project },  to: { node: spec } }
+  - { from: { node: spec },           to: { node: init_workspace } }
+  - { from: { node: init_workspace }, to: { node: decompose } }
+  - { from: { node: decompose },      to: { node: queue } }
+  - { from: { node: queue },          to: { node: parse_tasks } }
+  - { from: { node: parse_tasks },    to: { node: spawn } }
+  - { from: { node: spawn },          to: { node: collect } }
+  - { from: { node: collect },        to: { node: link_and_update } }
+  - { from: { node: link_and_update }, to: { node: result } }

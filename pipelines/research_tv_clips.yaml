@@ -1,0 +1,176 @@
+# Research TV Clips
+# Given a video concept and a show slug, searches the Wintermute media index to find
+# relevant clips, then extracts them using ffmpeg.
+#
+# Inputs:
+#   concept              — video topic / concept to find clips for
+#   show_slug            — indexed show slug (e.g. "real-housewives-of-new-york-city")
+#   wintermute_base_url  — base URL for Wintermute API (default: http://localhost:3000)
+#   max_clips            — max number of clips to extract (default: 5)
+id: research_tv_clips
+name: Research TV Clips
+entry: [intake]
+nodes:
+  - id: intake
+    type: input
+    description: >
+      concept: video topic / concept to find clips for.
+      show_slug: indexed show slug (e.g. "real-housewives-of-new-york-city").
+      wintermute_base_url: base URL for Wintermute API (default: http://localhost:3000).
+      max_clips: max number of clips to extract (default: 5).
+
+  - id: fetch_episodes
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 60
+    prompt: |
+      Fetch the episode list for show "{{show_slug}}" from the Wintermute media index.
+
+      Wintermute base URL: {{wintermute_base_url}}
+
+      Run this command:
+        curl -s "{{wintermute_base_url}}/api/media-index?show={{show_slug}}"
+
+      If the response contains a "error" field, output: FETCH_FAILED: <error message>
+      Otherwise, output the full JSON response as-is.
+
+  - id: identify_episodes
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 120
+    prompt: |
+      You are a TV clip researcher. Identify the most relevant episodes for finding clips
+      about the concept: "{{concept}}"
+
+      Show: {{show_slug}}
+
+      Show data:
+      {{fetch_episodes.text}}
+
+      CAST/SEASON FILTER — MANDATORY: If the concept mentions a specific cast member, only
+      consider episodes from seasons where that person was actually on the show. Use your
+      knowledge of the show's cast history to determine which seasons they appeared in, then
+      cross-reference the episodeId season number (format sXXeXX) to verify. For example, if
+      someone joined in Season 8, do not select any episode with s01–s07 in its episodeId.
+
+      Review the episode titles and summaries above. Select up to 5 episode IDs that are
+      most likely to contain footage relevant to "{{concept}}", applying the cast filter above.
+
+      Output ONLY a JSON array of episode IDs, for example:
+      ["show-slug-s08e03", "show-slug-s09e07"]
+
+      No explanation, just the JSON array.
+
+  - id: search_subtitles
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 120
+    prompt: |
+      Search for subtitle segments related to "{{concept}}" in the indexed show.
+
+      Wintermute base URL: {{wintermute_base_url}}
+      Show slug: {{show_slug}}
+
+      Extract 3-5 keywords from the concept "{{concept}}" and search for each:
+
+      For each keyword, run:
+        curl -s "{{wintermute_base_url}}/api/media-index/search?show={{show_slug}}&q=<keyword>&limit=10"
+
+      Collect all results and output them as a combined JSON array.
+      If no results found, output: []
+
+  - id: select_clips
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 180
+    prompt: |
+      You are a TV clip researcher selecting the best clips for a YouTube video.
+
+      Concept: "{{concept}}"
+      Show: {{show_slug}}
+
+      Relevant episodes identified:
+      {{identify_episodes.text}}
+
+      Subtitle search results:
+      {{search_subtitles.text}}
+
+      CAST/SEASON FILTER — MANDATORY: If the concept mentions a specific cast member, only
+      select clips from episodes/seasons where that person was actually on the show. Use your
+      knowledge of the show's cast history to determine their tenure, then verify against the
+      episodeId season number (format sXXeXX, e.g., s08e04 = Season 8). Reject any clip from
+      a season that predates or postdates that person's time on the show.
+
+      After applying the cast/season filter, select the best {{max_clips}} clip candidates.
+      For each clip, provide:
+      - episodeId: the episode ID string
+      - startSeconds: clip start time in seconds (subtract 2-3s from the subtitle timestamp for context)
+      - endSeconds: clip end time in seconds (add 5-10s after the relevant dialogue)
+      - relevanceReason: 1-2 sentences explaining why this clip is relevant
+      - subtitleContext: the key dialogue text
+
+      Also fetch the videoPath for each episode by checking the show data from earlier.
+      Include videoPath in each clip object.
+
+      Output ONLY a valid JSON array of clip objects. Example format:
+      [
+        {
+          "episodeId": "real-housewives-of-new-jersey-s08e03",
+          "startSeconds": 245,
+          "endSeconds": 275,
+          "relevanceReason": "Margaret Josephs discusses the topic directly",
+          "subtitleContext": "I can't believe she did that at the table",
+          "videoPath": "/mnt/merged-media/tv/Show/Season 8/episode.mkv"
+        }
+      ]
+
+  - id: extract_clips
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /tmp
+    timeoutSeconds: 600
+    prompt: |
+      Extract video clips using the Wintermute API.
+
+      Wintermute base URL: {{wintermute_base_url}}
+
+      Clip candidates JSON:
+      {{select_clips.text}}
+
+      For each clip in the JSON array above:
+      1. Parse the episodeId, startSeconds, endSeconds, and videoPath
+      2. Create an outputName from the episodeId and startSeconds (e.g., "show-s01e03-245")
+      3. POST to {{wintermute_base_url}}/api/media-index/extract-clip with:
+         {
+           "videoPath": "<videoPath>",
+           "startSeconds": <startSeconds>,
+           "endSeconds": <endSeconds>,
+           "outputName": "<outputName>"
+         }
+      4. Collect the clipPath from each response
+
+      Use curl for each request:
+        curl -s -X POST "{{wintermute_base_url}}/api/media-index/extract-clip" \
+          -H "Content-Type: application/json" \
+          -d '{"videoPath": "...", "startSeconds": ..., "endSeconds": ..., "outputName": "..."}'
+
+      After all extractions, output a JSON array of extracted clip paths:
+      ["path/to/clip1.mp4", "path/to/clip2.mp4", ...]
+
+  - id: result
+    type: output
+    source: extract_clips
+
+edges:
+  - { from: { node: intake },           to: { node: fetch_episodes } }
+  - { from: { node: fetch_episodes },   to: { node: identify_episodes } }
+  - { from: { node: identify_episodes }, to: { node: search_subtitles } }
+  - { from: { node: search_subtitles }, to: { node: select_clips } }
+  - { from: { node: select_clips },     to: { node: extract_clips } }
+  - { from: { node: extract_clips },    to: { node: result } }

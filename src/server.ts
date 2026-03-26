@@ -56,11 +56,11 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
   const store = new PipelineRunStore(runsDir);
   await store.init();
 
+  const claudeCodeRunner = config.claudeCodeRunner;
   const agentRunner =
     process.env.RIPLINE_AGENT_RUNNER === "stub"
       ? stubAgentRunner
-      : (config.agentRunner ?? stubAgentRunner);
-  const claudeCodeRunner = config.claudeCodeRunner;
+      : (config.agentRunner ?? claudeCodeRunner ?? stubAgentRunner);
   const agentDefinitions =
     config.agentDefinitions ?? loadAgentDefinitionsFromFile(config.pipelinesDir) ?? undefined;
   const skillsRegistry =

@@ -49,7 +49,7 @@ export async function executeEnqueue(
   if (mode === "batch") {
     const runIdOut = await queue.enqueue(
       pipelineId,
-      { tasks },
+      { ...context.inputs, tasks },
       { parentRunId: runId, queueMode: "batch" }
     );
     childRunIds.push(runIdOut as string);
@@ -57,7 +57,7 @@ export async function executeEnqueue(
     for (const task of tasks) {
       const runIdOut = await queue.enqueue(
         pipelineId,
-        { task },
+        { ...context.inputs, task },
         { parentRunId: runId, taskId: task.id, queueMode: "per-item" }
       );
       childRunIds.push(runIdOut as string);
