@@ -48,6 +48,8 @@ export type ServerConfig = PipelinePluginConfig & {
   skillsRegistry?: SkillsRegistry;
   /** Directory containing per-skill markdown files. Defaults to ~/.ripline/skills. */
   skillsDir?: string;
+  /** Per-queue concurrency overrides. Key = queue name, value = worker count. */
+  queueConcurrencies?: Record<string, number>;
 };
 
 export async function createApp(config: ServerConfig): Promise<FastifyInstance> {
@@ -68,13 +70,15 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
   const skillsDir = config.skillsDir ?? resolveSkillsDir({ homedir: os.homedir() });
   const maxConcurrency = config.maxConcurrency ?? 0;
   const queue = createRunQueue(store);
+  const hasQueues = config.queueConcurrencies && Object.keys(config.queueConcurrencies).length > 0;
   const scheduler =
-    maxConcurrency > 0
+    maxConcurrency > 0 || hasQueues
       ? createScheduler({
           store,
           queue,
           registry,
           maxConcurrency,
+          ...(hasQueues && { queueConcurrencies: config.queueConcurrencies }),
           agentRunner,
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
           ...(agentDefinitions !== undefined && { agentDefinitions }),
@@ -98,24 +102,6 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       await reply.status(401).send({ error: "Unauthorized", message: "Missing or invalid Authorization" });
     }
   }
-
-  /** GET /pipelines/:id - single pipeline definition */
-  fastify.get<{ Params: { id: string } }>("/pipelines/:id", {
-    preHandler: requireAuth,
-    handler: async (request, reply) => {
-      const entry = await registry.get(request.params.id);
-      if (!entry) {
-        return reply.status(404).send({ error: "Not Found", message: `Pipeline ${request.params.id} not found` });
-      }
-      return reply.send({
-        id: entry.definition.id,
-        name: entry.definition.name,
-        ...(entry.definition.tags && { tags: entry.definition.tags }),
-        nodes: entry.definition.nodes,
-        edges: entry.definition.edges,
-      });
-    },
-  });
 
   /** GET /pipelines - list definitions (id, name, tags) */
   fastify.get("/pipelines", {
@@ -158,7 +144,8 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         const body = (request.body as { inputs?: Record<string, unknown>; env?: Record<string, string> }) ?? {};
         const inputs = body.inputs ?? {};
         if (scheduler) {
-          const runId = await queue.enqueue(request.params.id, inputs);
+          const queueName = entry.definition.queue ?? "default";
+          const runId = await queue.enqueue(request.params.id, inputs, { queueName });
           return reply.status(202).send({ runId });
         }
         const runLog = createLogger({ sink: createRunScopedFileSink(runsDir) });

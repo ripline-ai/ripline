@@ -5,6 +5,8 @@ export type EnqueueOptions = {
   parentRunId?: string;
   taskId?: string;
   queueMode?: QueueMode;
+  /** Named queue this run belongs to. Defaults to "default". */
+  queueName?: string;
 };
 
 export type RunQueue = {
@@ -14,8 +16,12 @@ export type RunQueue = {
     inputs: Record<string, unknown>,
     options?: EnqueueOptions
   ): Promise<string | string[]>;
-  /** Claim the next pending run (FIFO), set status to running, return record or null. */
-  claimNext(): Promise<PipelineRunRecord | null>;
+  /**
+   * Claim the next pending run (FIFO), set status to running, return record or null.
+   * When queueName is provided, only claim runs from that queue.
+   * Runs whose queueName is undefined or missing fall back to the "default" queue.
+   */
+  claimNext(queueName?: string): Promise<PipelineRunRecord | null>;
   /** Number of runs with status pending. */
   depth(): Promise<number>;
 };
@@ -33,6 +39,7 @@ export function createRunQueue(store: RunStore): RunQueue {
         ...(options?.parentRunId !== undefined && { parentRunId: options.parentRunId }),
         ...(options?.taskId !== undefined && { taskId: options.taskId }),
         ...(options?.queueMode !== undefined && { queueMode: options.queueMode }),
+        ...(options?.queueName !== undefined && { queueName: options.queueName }),
       });
       if (options?.parentRunId) {
         const parent = await store.load(options.parentRunId);
@@ -44,9 +51,13 @@ export function createRunQueue(store: RunStore): RunQueue {
       return record.id;
     },
 
-    async claimNext(): Promise<PipelineRunRecord | null> {
+    async claimNext(queueName?: string): Promise<PipelineRunRecord | null> {
       const pending = await store.list({ status: "pending" });
-      for (const candidate of pending) {
+      // Filter candidates to this worker's queue.
+      // A run with no queueName (or queueName === undefined) is treated as "default".
+      const effectiveQueue = queueName ?? "default";
+      const candidates = pending.filter((r) => (r.queueName ?? "default") === effectiveQueue);
+      for (const candidate of candidates) {
         if (await store.claimRun(candidate.id)) {
           // Re-load to get the saved "running" record with updated timestamp
           return await store.load(candidate.id) ?? candidate;

@@ -10,6 +10,8 @@ export type RunStoreCreateParams = {
   parentRunId?: string;
   taskId?: string;
   queueMode?: QueueMode;
+  /** Named queue this run belongs to. Defaults to "default". */
+  queueName?: string;
 };
 
 export type RunStoreCursor = {
@@ -72,6 +74,7 @@ export class PipelineRunStore implements RunStore {
       ...(params.parentRunId !== undefined && { parentRunId: params.parentRunId }),
       ...(params.taskId !== undefined && { taskId: params.taskId }),
       ...(params.queueMode !== undefined && { queueMode: params.queueMode as QueueMode }),
+      ...(params.queueName !== undefined && { queueName: params.queueName }),
       childRunIds: [],
       status: "pending",
       startedAt: now,

@@ -240,6 +240,8 @@ export type PipelineDefinition = {
   contracts?: PipelineContracts;
   tags?: string[];
   metadata?: Record<string, unknown>;
+  /** Named queue this pipeline belongs to. Defaults to "default". */
+  queue?: string;
 };
 
 export type PipelineRegistryEntry = {
@@ -275,6 +277,8 @@ export type PipelineRunRecord = {
   taskId?: string;
   /** When this run was created by an enqueue node. */
   queueMode?: QueueMode;
+  /** Named queue this run belongs to (from pipeline definition). Defaults to "default". */
+  queueName?: string;
   childRunIds: string[];
   status: PipelineRunStatus;
   startedAt: number;

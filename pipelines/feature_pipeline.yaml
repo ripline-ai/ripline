@@ -16,6 +16,7 @@
 
 id: feature_pipeline
 name: Feature Pipeline (Idea → Spec)
+queue: spec
 entry: [intake]
 
 nodes:

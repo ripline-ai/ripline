@@ -12,6 +12,8 @@ export type SchedulerConfig = {
   queue: RunQueue;
   registry: { get(id: string): Promise<PipelineRegistryEntry | null> };
   maxConcurrency: number;
+  /** Per-queue concurrency overrides. Key = queue name, value = concurrency limit. */
+  queueConcurrencies?: Record<string, number>;
   agentRunner?: AgentRunner;
   claudeCodeRunner?: AgentRunner;
   /** Named agent definitions (from ripline.config.json or profile). */
@@ -43,6 +45,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
     queue,
     registry,
     maxConcurrency,
+    queueConcurrencies,
     agentRunner,
     claudeCodeRunner,
     agentDefinitions,
@@ -56,9 +59,9 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
   const durations: number[] = [];
   let completedRunsCount = 0;
 
-  async function worker(): Promise<void> {
+  async function worker(queueName: string): Promise<void> {
     while (!stopped) {
-      const record = await queue.claimNext();
+      const record = await queue.claimNext(queueName);
       if (!record) {
         await new Promise((r) => setTimeout(r, pollIntervalMs));
         continue;
@@ -202,8 +205,23 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
           console.log(`[scheduler] recovered ${count} orphaned running run(s) → pending`);
         }
       }).catch(() => {});
-      for (let i = 0; i < maxConcurrency; i++) {
-        workers.push(worker());
+
+      // Build the effective per-queue concurrency map.
+      // maxConcurrency sets concurrency for the "default" queue (backwards compat).
+      // queueConcurrencies allows overriding per named queue.
+      const effectiveConcurrencies: Map<string, number> = new Map();
+      effectiveConcurrencies.set("default", maxConcurrency);
+      if (queueConcurrencies) {
+        for (const [name, concurrency] of Object.entries(queueConcurrencies)) {
+          effectiveConcurrencies.set(name, concurrency);
+        }
+      }
+
+      for (const [queueName, concurrency] of effectiveConcurrencies) {
+        console.log(`[scheduler] queue "${queueName}": ${concurrency} worker(s)`);
+        for (let i = 0; i < concurrency; i++) {
+          workers.push(worker(queueName));
+        }
       }
     },
 

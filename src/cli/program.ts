@@ -47,6 +47,30 @@ function collectEnv(value: string, acc: string[]): string[] {
   return acc;
 }
 
+function collectQueue(value: string, acc: string[]): string[] {
+  acc.push(value);
+  return acc;
+}
+
+function parseQueueConcurrencies(flags: string[]): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const flag of flags) {
+    const idx = flag.lastIndexOf(":");
+    if (idx <= 0) {
+      console.error(`Invalid --queue value "${flag}": expected format <name>:<concurrency>`);
+      process.exit(1);
+    }
+    const name = flag.slice(0, idx).trim();
+    const concurrency = parseInt(flag.slice(idx + 1), 10);
+    if (!name || isNaN(concurrency) || concurrency < 1) {
+      console.error(`Invalid --queue value "${flag}": name must be non-empty and concurrency must be a positive integer`);
+      process.exit(1);
+    }
+    result[name] = concurrency;
+  }
+  return result;
+}
+
 export function createRiplineCliProgram(options: RiplineCliOptions = {}): Command {
   const program = new Command("ripline");
   const defaultRunsDir = options.defaults?.runsDir ?? path.join(process.cwd(), ".ripline", "runs");
@@ -546,7 +570,8 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
     .option("--port <number>", "Port (default: 4001)", "4001")
     .option("--pipelines-dir <path>", "Pipelines directory", defaultPipelinesDir)
     .option("--runs-dir <path>", "Run state directory (or set RIPLINE_RUNS_DIR)", defaultRunsDir)
-    .option("--max-concurrency <n>", "Max concurrent pipeline runs (0 = inline; default 1)", "1")
+    .option("--max-concurrency <n>", "Max concurrent pipeline runs for the default queue (0 = inline; default 1)", "1")
+    .option("--queue <name:concurrency>", "Per-queue concurrency (repeatable). E.g. --queue spec:3 --queue build:1", collectQueue, [])
     .option("--auth-token <token>", "Optional bearer token for API auth")
     .option("--agent-provider <provider>", "Standalone agent: ollama | openai | anthropic")
     .option("--agent-model <model>", "Standalone agent model")
@@ -554,6 +579,8 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
     .action(async (opts) => {
       const port = parseInt(opts.port, 10);
       const maxConcurrency = Math.max(0, parseInt(opts.maxConcurrency, 10) || 0);
+      const queueFlags: string[] = opts.queue ?? [];
+      const queueConcurrencies = queueFlags.length > 0 ? parseQueueConcurrencies(queueFlags) : undefined;
       const pipelinesDir = path.resolve(process.cwd(), opts.pipelinesDir ?? defaultPipelinesDir);
       const runsDirRaw = opts.runsDir ?? process.env.RIPLINE_RUNS_DIR ?? defaultRunsDir;
       const runsDir = path.isAbsolute(runsDirRaw) ? path.resolve(runsDirRaw) : path.join(process.cwd(), runsDirRaw);
@@ -571,7 +598,12 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       console.log(chalk.cyan(`Starting HTTP server on port ${port}`));
       console.log(chalk.gray(`  pipelines: ${pipelinesDir}`));
       console.log(chalk.gray(`  runs: ${runsDir}`));
-      console.log(chalk.gray(`  maxConcurrency: ${maxConcurrency}`));
+      console.log(chalk.gray(`  maxConcurrency (default queue): ${maxConcurrency}`));
+      if (queueConcurrencies) {
+        for (const [name, n] of Object.entries(queueConcurrencies)) {
+          console.log(chalk.gray(`  queue "${name}": ${n} worker(s)`));
+        }
+      }
       if (opts.authToken) console.log(chalk.gray("  auth: Bearer token required"));
       if (agentRunner) console.log(chalk.gray("  agent: LLM runner (standalone)"));
       if (claudeCodeRunner) console.log(chalk.gray("  agent: Claude Code runner (standalone)"));
@@ -580,6 +612,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         runsDir,
         httpPort: port,
         maxConcurrency,
+        ...(queueConcurrencies !== undefined && { queueConcurrencies }),
         ...(opts.authToken && { authToken: opts.authToken }),
         ...(agentRunner && { agentRunner }),
         ...(claudeCodeRunner && { claudeCodeRunner }),

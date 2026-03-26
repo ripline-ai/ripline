@@ -11,6 +11,7 @@
 
 id: build_from_plan
 name: Build From Plan
+queue: build
 entry: [intake]
 
 nodes:
