@@ -221,6 +221,7 @@ export const pipelineDefinitionSchema = z
       })
       .optional(),
     tags: z.array(z.string()).optional(),
+    queue: z.string().optional(),
     metadata: z.record(z.string(), z.any()).optional(),
   })
   .superRefine((value, ctx) => {
