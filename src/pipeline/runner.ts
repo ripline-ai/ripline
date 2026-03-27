@@ -15,6 +15,8 @@ import { PipelineRunStore } from "../run-store.js";
 import type { RunQueue } from "../run-queue.js";
 import type { Logger } from "../log.js";
 import { validateOutputContract } from "../lib/contract-validate.js";
+import { EventBus } from "../event-bus.js";
+import type { RunEvent } from "../event-bus.js";
 import { executeNode } from "./executors/index.js";
 import type { AgentRunner } from "./executors/index.js";
 
@@ -196,6 +198,7 @@ export class DeterministicRunner extends EventEmitter {
       await this.store.save(record);
       startIndex = 0;
       this.emit("run.started", record);
+      this.emitBusEvent("run.started", record);
     } else if (options.resumeRunId) {
       const loaded = await this.store.load(options.resumeRunId);
       if (!loaded) throw new Error(`Run not found: ${options.resumeRunId}`);
@@ -234,6 +237,7 @@ export class DeterministicRunner extends EventEmitter {
       delete record.error;
       await this.store.save(record);
       this.emit("run.started", record);
+      this.emitBusEvent("run.started", record);
     } else {
       record = await this.store.createRun({
         pipelineId: this.definition.id,
@@ -254,6 +258,7 @@ export class DeterministicRunner extends EventEmitter {
       await this.store.save(record);
       startIndex = 0;
       this.emit("run.started", record);
+      this.emitBusEvent("run.started", record);
     }
 
     const steps = record.steps;
@@ -275,6 +280,7 @@ export class DeterministicRunner extends EventEmitter {
 
       const startedEvent = { nodeId, nodeType: node.type, at: startedAt } as NodeStartedEvent;
       this.emit("node.started", startedEvent);
+      this.emitBusEvent("node.started", record, nodeId);
       if (!this.runnerOptions.quiet) {
         console.log(`[${new Date(startedAt).toISOString()}] node.started ${nodeId} (${node.type})`);
       }
@@ -373,6 +379,7 @@ export class DeterministicRunner extends EventEmitter {
               at: step.finishedAt,
               artifactSummary: `${nodeResult.childRunIds.length} child run(s) enqueued`,
             } as NodeCompletedEvent);
+            this.emitBusEvent("node.completed", record, nodeId);
             if (!this.runnerOptions.quiet) {
               console.log(
                 `[${new Date(step.finishedAt!).toISOString()}] node.completed ${nodeId} (${node.type}) ${nodeResult.childRunIds.length} child run(s) enqueued; paused until complete`
@@ -394,6 +401,7 @@ export class DeterministicRunner extends EventEmitter {
           artifactSummary,
         } as NodeCompletedEvent;
         this.emit("node.completed", completedEvent);
+        this.emitBusEvent("node.completed", record, nodeId);
         if (!this.runnerOptions.quiet) {
           const summary = artifactSummary ? ` ${artifactSummary}` : "";
           console.log(`[${new Date(finishedAt).toISOString()}] node.completed ${nodeId} (${node.type})${summary}`);
@@ -421,6 +429,8 @@ export class DeterministicRunner extends EventEmitter {
           error: step.error,
         } as NodeErroredEvent;
         this.emit("node.errored", erroredEvent);
+        this.emitBusEvent("node.errored", record, nodeId);
+        this.emitBusEvent("run.errored", record);
         if (!this.runnerOptions.quiet) {
           console.error(`[${new Date(finishedAt).toISOString()}] node.errored ${nodeId} (${node.type}) ${step.error}`);
         }
@@ -432,6 +442,7 @@ export class DeterministicRunner extends EventEmitter {
     }
 
     await this.store.completeRun(record, context.outputs);
+    this.emitBusEvent("run.completed", record);
 
     if (context.outPath) {
       await fs.mkdir(path.dirname(context.outPath), { recursive: true });
@@ -475,6 +486,22 @@ export class DeterministicRunner extends EventEmitter {
           )
         : context.artifacts;
     return { inputs: context.inputs, artifacts, env: context.env };
+  }
+
+  private emitBusEvent(
+    event: RunEvent["event"],
+    record: PipelineRunRecord,
+    nodeId?: string
+  ): void {
+    const busEvent: RunEvent = {
+      event,
+      runId: record.id,
+      pipelineId: record.pipelineId,
+      status: record.status,
+      timestamp: Date.now(),
+      ...(nodeId !== undefined && { nodeId }),
+    };
+    EventBus.getInstance().emitRunEvent(busEvent);
   }
 
   private artifactSize(value: unknown): number {
