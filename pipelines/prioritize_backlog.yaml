@@ -1,0 +1,224 @@
+# Prioritize Backlog Pipeline
+# Fetches all open ideas and bugs from Wintermute, scores and ranks them using
+# weighted factors, writes back updated priorities, and produces a report.
+# Input: stage ("staging" | "production", default "production")
+id: prioritize_backlog
+name: Prioritize Backlog
+description: >
+  Agent-maintained backlog prioritization. Fetches open ideas and bugs,
+  evaluates each on impact/effort ratio, transitive block count, bug severity,
+  staleness, and blocked status, then writes back stack-ranked priorities and
+  a markdown report to the Obsidian vault.
+entry: [intake]
+
+contracts:
+  input:
+    type: object
+    properties:
+      stage:
+        type: string
+        enum: [staging, production]
+        default: production
+
+nodes:
+  - id: intake
+    type: input
+
+  # Resolve Wintermute base URL and Obsidian vault path from stage
+  - id: resolve_config
+    type: transform
+    expression: |
+      (function() {
+        var stage = (inputs.stage || 'production').toLowerCase();
+        var port = stage === 'staging' ? 3001 : 3000;
+        var vault = stage === 'staging'
+          ? '/home/openclaw/obsidian-staging'
+          : '/home/openclaw/obsidian';
+        return {
+          stage: stage,
+          apiBase: 'http://localhost:' + port,
+          vaultPath: vault,
+          reportPath: vault + '/Operations/prioritization-report.md'
+        };
+      })()
+
+  # Fetch all open ideas and bugs from the Wintermute API
+  - id: fetch_backlog
+    type: agent
+    runner: claude-code
+    mode: execute
+    model: claude-haiku-4-5
+    timeoutSeconds: 120
+    prompt: |
+      Fetch the current backlog from the Wintermute API at {{ resolve_config.apiBase }}.
+
+      Run these two curl commands and output ONLY a single JSON object (no markdown fencing, no commentary):
+
+      1. Fetch all ideas:  curl -s {{ resolve_config.apiBase }}/api/ideas
+      2. Fetch open bugs:  curl -s "{{ resolve_config.apiBase }}/api/bugs?status=open"
+
+      Output format — a single raw JSON object:
+      {
+        "ideas": [ ...array from ideas endpoint... ],
+        "bugs": [ ...array from bugs endpoint... ]
+      }
+
+      IMPORTANT: Output ONLY the JSON. No explanation, no markdown fences.
+
+  # Parse the fetched data
+  - id: parse_backlog
+    type: transform
+    expression: |
+      (function(text) {
+        var m = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        return JSON.parse(m ? m[1] : text.trim());
+      })(artifacts.fetch_backlog.text)
+
+  # Use Claude to evaluate and rank every item
+  - id: prioritize
+    type: agent
+    runner: claude-code
+    mode: plan
+    model: claude-sonnet-4-6
+    timeoutSeconds: 300
+    prompt: |
+      You are a backlog prioritization agent. Analyze the following items and produce a
+      stack-ranked JSON array with composite scores.
+
+      ## Backlog Data
+      {{ JSON.stringify(artifacts.parse_backlog) }}
+
+      ## Scoring Factors (weights)
+      For each item, evaluate these factors on a 0-100 sub-scale then combine:
+
+      1. **Impact / Effort ratio** (weight 0.30)
+         - For ideas: use impactScore and effortScore if available. High impact + low effort = high score.
+         - For bugs: critical/high severity = high impact; estimate effort from diagnosis/proposedFix complexity.
+
+      2. **Transitive block count** (weight 0.25)
+         - Ideas that transitively block many others score higher.
+         - Use the transitiveBlockCount or blocks fields. Bugs get 0 here unless linked to a blocking idea.
+
+      3. **Bug severity** (weight 0.20)
+         - critical=100, high=75, medium=50, low=25. Ideas get a baseline of 40.
+
+      4. **Staleness** (weight 0.15)
+         - Items not updated in a long time score higher (they need attention).
+         - Score = min(100, daysSinceUpdate * 2). Use updatedAt or createdAt.
+
+      5. **Blocked status penalty** (weight 0.10)
+         - Items that ARE blocked (isBlocked=true or have non-empty blockedBy) get 0.
+         - Unblocked items get 100.
+
+      Composite score = (factor1 * 0.30) + (factor2 * 0.25) + (factor3 * 0.20) + (factor4 * 0.15) + (factor5 * 0.10)
+
+      ## Output Requirements
+      Output ONLY a raw JSON array (no markdown fencing, no explanation). Each element:
+      {
+        "id": "<item id>",
+        "type": "idea" | "bug",
+        "title": "<title>",
+        "compositeScore": <number 0-100, rounded to 1 decimal>,
+        "rank": <1-based integer>,
+        "factors": {
+          "impactEffort": <0-100>,
+          "blockCount": <0-100>,
+          "severity": <0-100>,
+          "staleness": <0-100>,
+          "blockedPenalty": <0-100>
+        },
+        "reasoning": "<1-2 sentence explanation for top-10 items, empty string otherwise>"
+      }
+
+      Sort by compositeScore descending. Assign rank = position in sorted order (1 = highest priority).
+      IMPORTANT: Output ONLY the JSON array.
+
+  # Parse ranked results
+  - id: parse_rankings
+    type: transform
+    expression: |
+      (function(text) {
+        var m = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        return JSON.parse(m ? m[1] : text.trim());
+      })(artifacts.prioritize.text)
+
+  # Write priorities back via bulk-priority endpoints and generate the report
+  - id: apply_and_report
+    type: agent
+    runner: claude-code
+    mode: execute
+    model: claude-haiku-4-5
+    timeoutSeconds: 180
+    prompt: |
+      You have a ranked backlog. Write the priorities back to the Wintermute API and
+      generate a prioritization report.
+
+      ## Configuration
+      - API base: {{ resolve_config.apiBase }}
+      - Report path: {{ resolve_config.reportPath }}
+      - Stage: {{ resolve_config.stage }}
+
+      ## Ranked Items
+      {{ JSON.stringify(artifacts.parse_rankings) }}
+
+      ## Step 1 — Write priorities back
+
+      Separate the items by type. For ideas, call:
+        curl -s -X POST {{ resolve_config.apiBase }}/api/ideas/bulk-priority \
+          -H "Content-Type: application/json" \
+          -d '<JSON array of {id, priority} where priority = rank (integer, 1 = highest)>'
+
+      For bugs, call:
+        curl -s -X POST {{ resolve_config.apiBase }}/api/bugs/bulk-priority \
+          -H "Content-Type: application/json" \
+          -d '<JSON array of {id, priority} where priority = rank (integer, 1 = highest)>'
+
+      Print the response from each call.
+
+      ## Step 2 — Write prioritization report
+
+      Ensure the directory exists: mkdir -p "$(dirname '{{ resolve_config.reportPath }}')"
+
+      Write a markdown file to {{ resolve_config.reportPath }} with this structure:
+
+      ```
+      # Backlog Prioritization Report
+      **Generated:** <current ISO date>
+      **Stage:** {{ resolve_config.stage }}
+      **Total items ranked:** <count>
+
+      ## Top 10 — Detailed Reasoning
+      For each of the top 10 items, write:
+      ### <rank>. [<type>] <title>
+      - **Score:** <compositeScore>/100
+      - **Impact/Effort:** <score> | **Block Count:** <score> | **Severity:** <score> | **Staleness:** <score> | **Blocked:** <score>
+      - **Reasoning:** <the reasoning string>
+
+      ## Full Ranking
+      | Rank | Type | ID | Title | Score |
+      |------|------|----|-------|-------|
+      ... one row per item ...
+
+      ## Scoring Methodology
+      - Impact/Effort ratio (30%)
+      - Transitive block count (25%)
+      - Bug severity (20%)
+      - Staleness (15%)
+      - Blocked status penalty (10%)
+      ```
+
+      After writing the file, output "DONE" and the number of ideas and bugs updated.
+
+  - id: result
+    type: output
+    source: apply_and_report
+    path: prioritization.result
+
+edges:
+  - { from: { node: intake },         to: { node: resolve_config } }
+  - { from: { node: resolve_config },  to: { node: fetch_backlog } }
+  - { from: { node: fetch_backlog },   to: { node: parse_backlog } }
+  - { from: { node: parse_backlog },   to: { node: prioritize } }
+  - { from: { node: prioritize },      to: { node: parse_rankings } }
+  - { from: { node: parse_rankings },  to: { node: apply_and_report } }
+  - { from: { node: apply_and_report }, to: { node: result } }
