@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { McpServerConfig } from "./types.js";
 import type { AgentResult, AgentRunner } from "./pipeline/executors/agent.js";
+import { stripAnsi, extractLastJson } from "./stdout-parser.js";
 
 const PLAN_MODE_DENY_TOOLS = ["Write", "Edit", "MultiEdit"];
 const MAX_TURNS_CEILING_EXECUTE = 200;
@@ -306,7 +307,18 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
           throw new Error("Claude Code runner: no result message received");
         }
 
+        // Clean ANSI escape codes from result text unconditionally
+        resultText = stripAnsi(resultText);
+
         if (outputFormat === "json") {
+          // Try to extract a valid JSON object even if surrounded by noise
+          const extracted = extractLastJson(resultText);
+          if (extracted !== undefined) {
+            resultText = extracted;
+          } else {
+            // Fall back to trimmed text and let the parse check fail with a clear message
+            resultText = resultText.trim();
+          }
           try {
             JSON.parse(resultText);
           } catch {
