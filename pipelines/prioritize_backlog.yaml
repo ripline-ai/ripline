@@ -49,23 +49,25 @@ nodes:
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /home/openclaw
-    model: claude-haiku-4-5
     timeoutSeconds: 120
     prompt: |
-      Fetch the current backlog from the Wintermute API at {{ resolve_config.apiBase }}.
+      Run this exact Python script using the Bash tool:
 
-      Run these two curl commands and output ONLY a single JSON object (no markdown fencing, no commentary):
+      python3 << 'PYEOF'
+      import json, subprocess
 
-      1. Fetch all ideas:  curl -s {{ resolve_config.apiBase }}/api/ideas
-      2. Fetch open bugs:  curl -s "{{ resolve_config.apiBase }}/api/bugs?status=open"
+      api_base = "{{ resolve_config.apiBase }}"
 
-      Output format — a single raw JSON object:
-      {
-        "ideas": [ ...array from ideas endpoint... ],
-        "bugs": [ ...array from bugs endpoint... ]
-      }
+      ideas_r = subprocess.run(["curl", "-s", f"{api_base}/api/ideas"], capture_output=True, text=True)
+      bugs_r  = subprocess.run(["curl", "-s", f"{api_base}/api/bugs?status=open"], capture_output=True, text=True)
 
-      IMPORTANT: Output ONLY the JSON. No explanation, no markdown fences.
+      ideas = json.loads(ideas_r.stdout)
+      bugs  = json.loads(bugs_r.stdout)
+
+      print(json.dumps({"ideas": ideas, "bugs": bugs}))
+      PYEOF
+
+      Output ONLY the raw JSON that the script prints. No explanation, no markdown fences.
 
   # Parse the fetched data
   - id: parse_backlog
@@ -165,7 +167,6 @@ nodes:
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /home/openclaw
-    model: claude-haiku-4-5
     timeoutSeconds: 180
     prompt: |
       You have a ranked backlog. Write the priorities back to the Wintermute API and
