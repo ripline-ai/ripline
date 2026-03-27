@@ -33,10 +33,23 @@ export type SchedulerMetrics = {
   completedRunsCount?: number;
 };
 
+export type QueueMetrics = {
+  depth: number;
+  activeWorkers: number;
+  maxConcurrency: number;
+  completedRunsCount: number;
+  avgDurationMs?: number;
+};
+
+export type DetailedSchedulerMetrics = SchedulerMetrics & {
+  queues: Record<string, QueueMetrics>;
+};
+
 export type Scheduler = {
   start(): void;
   stop(): void;
   getMetrics(): Promise<SchedulerMetrics>;
+  getDetailedMetrics(): Promise<DetailedSchedulerMetrics>;
 };
 
 export function createScheduler(config: SchedulerConfig): Scheduler {
@@ -55,9 +68,12 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
   } = config;
 
   let stopped = false;
-  let activeWorkers = 0;
-  const durations: number[] = [];
-  let completedRunsCount = 0;
+  // Per-queue metrics tracking
+  const activeWorkersPerQueue: Map<string, number> = new Map();
+  const durationsPerQueue: Map<string, number[]> = new Map();
+  const completedRunsPerQueue: Map<string, number> = new Map();
+  // Stored so getDetailedMetrics can read concurrency config
+  let effectiveConcurrencies: Map<string, number> = new Map();
 
   async function worker(queueName: string): Promise<void> {
     while (!stopped) {
@@ -66,7 +82,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
         await new Promise((r) => setTimeout(r, pollIntervalMs));
         continue;
       }
-      activeWorkers++;
+      activeWorkersPerQueue.set(queueName, (activeWorkersPerQueue.get(queueName) ?? 0) + 1);
       const startMs = Date.now();
       try {
         const entry = await registry.get(record.pipelineId);
@@ -99,8 +115,9 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
             ? { resumeRunId: record.id }
             : { startRunId: record.id }
         );
-        completedRunsCount++;
-        durations.push(Date.now() - startMs);
+        completedRunsPerQueue.set(queueName, (completedRunsPerQueue.get(queueName) ?? 0) + 1);
+        if (!durationsPerQueue.has(queueName)) durationsPerQueue.set(queueName, []);
+        durationsPerQueue.get(queueName)!.push(Date.now() - startMs);
 
         const completedRecord = await store.load(record.id);
         const childFinished = completedRecord?.parentRunId && (completedRecord.status === "completed" || completedRecord.status === "errored");
@@ -189,7 +206,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
           }
         }
       } finally {
-        activeWorkers--;
+        activeWorkersPerQueue.set(queueName, Math.max(0, (activeWorkersPerQueue.get(queueName) ?? 1) - 1));
       }
     }
   }
@@ -209,7 +226,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
       // Build the effective per-queue concurrency map.
       // maxConcurrency sets concurrency for the "default" queue (backwards compat).
       // queueConcurrencies allows overriding per named queue.
-      const effectiveConcurrencies: Map<string, number> = new Map();
+      effectiveConcurrencies = new Map();
       effectiveConcurrencies.set("default", maxConcurrency);
       if (queueConcurrencies) {
         for (const [name, concurrency] of Object.entries(queueConcurrencies)) {
@@ -231,16 +248,54 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
 
     async getMetrics(): Promise<SchedulerMetrics> {
       const queueDepth = await queue.depth();
+      // Aggregate from per-queue maps for backward compatibility
+      let totalActiveWorkers = 0;
+      for (const count of activeWorkersPerQueue.values()) totalActiveWorkers += count;
+      let totalCompleted = 0;
+      for (const count of completedRunsPerQueue.values()) totalCompleted += count;
+      const allDurations: number[] = [];
+      for (const d of durationsPerQueue.values()) allDurations.push(...d);
+
       const result: SchedulerMetrics = {
         queueDepth,
-        activeWorkers,
-        completedRunsCount,
+        activeWorkers: totalActiveWorkers,
+        completedRunsCount: totalCompleted,
       };
-      if (durations.length > 0) {
+      if (allDurations.length > 0) {
         result.avgDurationMs =
-          durations.reduce((a, b) => a + b, 0) / durations.length;
+          allDurations.reduce((a, b) => a + b, 0) / allDurations.length;
       }
       return result;
+    },
+
+    async getDetailedMetrics(): Promise<DetailedSchedulerMetrics> {
+      const base = await this.getMetrics();
+      const depthMap = await queue.depthByQueue();
+      const queues: Record<string, QueueMetrics> = {};
+
+      // Build entries for every known queue (from concurrency config + any queue with depth)
+      const allQueueNames = new Set<string>();
+      for (const name of effectiveConcurrencies.keys()) allQueueNames.add(name);
+      for (const name of depthMap.keys()) allQueueNames.add(name);
+      for (const name of activeWorkersPerQueue.keys()) allQueueNames.add(name);
+      for (const name of completedRunsPerQueue.keys()) allQueueNames.add(name);
+
+      for (const name of allQueueNames) {
+        const qDurations = durationsPerQueue.get(name) ?? [];
+        const completed = completedRunsPerQueue.get(name) ?? 0;
+        const qm: QueueMetrics = {
+          depth: depthMap.get(name) ?? 0,
+          activeWorkers: activeWorkersPerQueue.get(name) ?? 0,
+          maxConcurrency: effectiveConcurrencies.get(name) ?? 0,
+          completedRunsCount: completed,
+        };
+        if (qDurations.length > 0) {
+          qm.avgDurationMs = qDurations.reduce((a, b) => a + b, 0) / qDurations.length;
+        }
+        queues[name] = qm;
+      }
+
+      return { ...base, queues };
     },
   };
 }

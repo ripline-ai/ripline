@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MemoryRunStore } from "../src/run-store-memory.js";
 import { createRunQueue } from "../src/run-queue.js";
 import { createScheduler } from "../src/scheduler.js";
+import type { DetailedSchedulerMetrics } from "../src/scheduler.js";
 import { DeterministicRunner } from "../src/pipeline/runner.js";
 import type { PipelineDefinition } from "../src/types.js";
 import type { AgentRunner } from "../src/pipeline/executors/agent.js";
@@ -252,5 +253,91 @@ describe("Scheduler", () => {
     expect(completed).toHaveLength(1);
     expect(errored).toHaveLength(1);
     expect(errored[0]?.error).toContain("intentional fail");
+  });
+
+  it("getDetailedMetrics returns per-queue breakdown with multiple queues", async () => {
+    const store = new MemoryRunStore();
+    const queue = createRunQueue(store);
+
+    // Enqueue runs into different queues
+    await queue.enqueue("minimal", {});                         // default queue
+    await queue.enqueue("minimal", {});                         // default queue
+    await queue.enqueue("minimal", {}, { queueName: "build" }); // build queue
+    await queue.enqueue("minimal", {}, { queueName: "build" }); // build queue
+    await queue.enqueue("minimal", {}, { queueName: "build" }); // build queue
+
+    const scheduler = createScheduler({
+      store,
+      queue,
+      registry: stubRegistry,
+      maxConcurrency: 1,
+      queueConcurrencies: { build: 2 },
+      agentRunner: noopAgent,
+    });
+
+    scheduler.start();
+    await new Promise((r) => setTimeout(r, 200));
+    scheduler.stop();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // All runs should have completed
+    const allRuns = await store.list();
+    const completedRuns = allRuns.filter((r) => r.status === "completed");
+    expect(completedRuns.length).toBe(5);
+
+    // Check detailed metrics
+    const detailed = await scheduler.getDetailedMetrics();
+
+    // Aggregate fields remain backward compatible
+    expect(detailed.queueDepth).toBe(0);
+    expect(detailed.activeWorkers).toBe(0);
+    expect(detailed.completedRunsCount).toBe(5);
+    expect(typeof detailed.avgDurationMs).toBe("number");
+
+    // Per-queue breakdown
+    expect(detailed.queues).toBeDefined();
+    expect(detailed.queues["default"]).toBeDefined();
+    expect(detailed.queues["build"]).toBeDefined();
+
+    // Default queue: 1 concurrency, 2 completed
+    expect(detailed.queues["default"].maxConcurrency).toBe(1);
+    expect(detailed.queues["default"].completedRunsCount).toBe(2);
+    expect(detailed.queues["default"].activeWorkers).toBe(0);
+    expect(detailed.queues["default"].depth).toBe(0);
+
+    // Build queue: 2 concurrency, 3 completed
+    expect(detailed.queues["build"].maxConcurrency).toBe(2);
+    expect(detailed.queues["build"].completedRunsCount).toBe(3);
+    expect(detailed.queues["build"].activeWorkers).toBe(0);
+    expect(detailed.queues["build"].depth).toBe(0);
+  });
+
+  it("getMetrics remains backward compatible with per-queue tracking", async () => {
+    const store = new MemoryRunStore();
+    const queue = createRunQueue(store);
+    await queue.enqueue("minimal", {});
+    await queue.enqueue("minimal", {}, { queueName: "build" });
+
+    const scheduler = createScheduler({
+      store,
+      queue,
+      registry: stubRegistry,
+      maxConcurrency: 1,
+      queueConcurrencies: { build: 1 },
+      agentRunner: noopAgent,
+    });
+
+    scheduler.start();
+    await new Promise((r) => setTimeout(r, 100));
+    scheduler.stop();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const m = await scheduler.getMetrics();
+    expect(m.queueDepth).toBe(0);
+    expect(m.activeWorkers).toBe(0);
+    expect(m.completedRunsCount).toBe(2);
+    expect(typeof m.avgDurationMs).toBe("number");
+    // Should not have queues property on basic metrics
+    expect((m as any).queues).toBeUndefined();
   });
 });

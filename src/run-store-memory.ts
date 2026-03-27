@@ -16,6 +16,7 @@ export class MemoryRunStore implements RunStore {
       ...(params.parentRunId !== undefined && { parentRunId: params.parentRunId }),
       ...(params.taskId !== undefined && { taskId: params.taskId }),
       ...(params.queueMode !== undefined && { queueMode: params.queueMode }),
+      ...(params.queueName !== undefined && { queueName: params.queueName }),
       childRunIds: [],
       status: "pending",
       startedAt: now,

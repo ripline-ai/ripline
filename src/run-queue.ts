@@ -24,6 +24,8 @@ export type RunQueue = {
   claimNext(queueName?: string): Promise<PipelineRunRecord | null>;
   /** Number of runs with status pending. */
   depth(): Promise<number>;
+  /** Pending counts grouped by queue name. */
+  depthByQueue(): Promise<Map<string, number>>;
 };
 
 export function createRunQueue(store: RunStore): RunQueue {
@@ -69,6 +71,16 @@ export function createRunQueue(store: RunStore): RunQueue {
     async depth(): Promise<number> {
       const pending = await store.list({ status: "pending" });
       return pending.length;
+    },
+
+    async depthByQueue(): Promise<Map<string, number>> {
+      const pending = await store.list({ status: "pending" });
+      const counts = new Map<string, number>();
+      for (const run of pending) {
+        const name = run.queueName ?? "default";
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+      return counts;
     },
   };
 }

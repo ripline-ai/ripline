@@ -54,4 +54,29 @@ describe("RunQueue", () => {
     await queue.claimNext();
     expect(await queue.depth()).toBe(1);
   });
+
+  it("depthByQueue returns per-queue pending counts", async () => {
+    const { queue } = makeQueue();
+    // Empty queues
+    const empty = await queue.depthByQueue();
+    expect(empty.size).toBe(0);
+
+    // Enqueue into different queues
+    await queue.enqueue("p1", {}, { queueName: "build" });
+    await queue.enqueue("p2", {}, { queueName: "build" });
+    await queue.enqueue("p3", {}, { queueName: "spec" });
+    await queue.enqueue("p4", {}); // default queue
+
+    const counts = await queue.depthByQueue();
+    expect(counts.get("build")).toBe(2);
+    expect(counts.get("spec")).toBe(1);
+    expect(counts.get("default")).toBe(1);
+
+    // Claim from build queue reduces its count
+    await queue.claimNext("build");
+    const after = await queue.depthByQueue();
+    expect(after.get("build")).toBe(1);
+    expect(after.get("spec")).toBe(1);
+    expect(after.get("default")).toBe(1);
+  });
 });
