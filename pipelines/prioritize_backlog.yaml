@@ -195,12 +195,12 @@ nodes:
       Separate the items by type. For ideas, call:
         curl -s -X POST {{ resolve_config.apiBase }}/api/ideas/bulk-priority \
           -H "Content-Type: application/json" \
-          -d '<JSON array of {id, priority} where priority = rank (integer, 1 = highest)>'
+          -d '<JSON array of {id, priority} where priority = compositeScore (0-100 float, higher = more important)>'
 
       For bugs, call:
         curl -s -X POST {{ resolve_config.apiBase }}/api/bugs/bulk-priority \
           -H "Content-Type: application/json" \
-          -d '<JSON array of {id, priority} where priority = rank (integer, 1 = highest)>'
+          -d '<JSON array of {id, priority} where priority = compositeScore (0-100 float, higher = more important)>'
 
       Print the response from each call.
 
