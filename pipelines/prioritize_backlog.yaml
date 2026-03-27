@@ -100,7 +100,7 @@ nodes:
       stack-ranked JSON array with composite scores.
 
       ## Backlog Data
-      {{ JSON.stringify(artifacts.parse_backlog) }}
+      {{parse_backlog}}
 
       ## Stability — Prefer Minimal Re-ordering
       Items include a `lastRankedAt` timestamp and their current `priority` (rank).
@@ -188,7 +188,7 @@ nodes:
       - Stage: {{ resolve_config.stage }}
 
       ## Ranked Items
-      {{ JSON.stringify(artifacts.parse_rankings) }}
+      {{parse_rankings}}
 
       ## Step 1 — Write priorities back
 
