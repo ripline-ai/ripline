@@ -61,8 +61,15 @@ nodes:
       ideas_r = subprocess.run(["curl", "-s", f"{api_base}/api/ideas"], capture_output=True, text=True)
       bugs_r  = subprocess.run(["curl", "-s", f"{api_base}/api/bugs?status=open"], capture_output=True, text=True)
 
-      ideas = json.loads(ideas_r.stdout)
-      bugs  = json.loads(bugs_r.stdout)
+      ideas_raw = json.loads(ideas_r.stdout)
+      bugs_raw  = json.loads(bugs_r.stdout)
+
+      # Trim to only the fields needed for ranking — keeps payload small
+      idea_fields = ["id","title","status","impactScore","effortScore","priority","priorityLocked","lastRankedAt","updatedAt","createdAt","tags","projectId","blocks","blockedBy"]
+      bug_fields  = ["id","title","status","severity","priority","priorityLocked","lastRankedAt","updatedAt","createdAt","projectId"]
+
+      ideas = [{k: i.get(k) for k in idea_fields} for i in (ideas_raw if isinstance(ideas_raw, list) else [])]
+      bugs  = [{k: b.get(k) for k in bug_fields}  for b in (bugs_raw  if isinstance(bugs_raw,  list) else [])]
 
       print(json.dumps({"ideas": ideas, "bugs": bugs}))
       PYEOF
@@ -74,8 +81,11 @@ nodes:
     type: transform
     expression: |
       (function(text) {
-        var m = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        return JSON.parse(m ? m[1] : text.trim());
+        var t = text.trim();
+        var start = t.indexOf('{'); var end = t.lastIndexOf('}');
+        if (start !== -1 && end > start) { try { return JSON.parse(t.slice(start, end+1)); } catch(e) {} }
+        var m = t.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        return JSON.parse(m ? m[1].trim() : t);
       })(artifacts.fetch_backlog.text)
 
   # Use Claude to evaluate and rank every item
