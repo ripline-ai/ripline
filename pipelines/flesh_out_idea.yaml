@@ -8,6 +8,7 @@
 
 id: flesh_out_idea
 name: Flesh Out Idea
+queue: spec
 entry: [intake]
 
 nodes:
@@ -115,6 +116,62 @@ nodes:
       - Top-level directory structure
       {{/if}}
 
+  # ── 3b. Analyze whether the idea should be decomposed ────────────────────
+  - id: analyze_decomposition
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 120
+    prompt: |
+      You are a senior product architect. Analyze whether the following idea is a compound idea that should be split into smaller, independent ideas.
+
+      ## Idea
+      Title: {{parse_idea.title}}
+      Description: {{parse_idea.description}}
+      {{#if parse_idea.rationale}}Rationale: {{parse_idea.rationale}}{{/if}}
+
+      ## Project Context
+      Project: {{parse_project.projectName}}
+      Description: {{parse_project.description}}
+      {{read_context.text}}
+
+      ---
+
+      ## Analysis Guidelines
+
+      Apply a CONSERVATIVE bias — only recommend splitting when:
+      - The idea clearly targets DIFFERENT systems or subsystems (e.g., frontend vs backend vs pipeline)
+      - The sub-parts have meaningfully different timelines or priorities
+      - The sub-parts could be implemented and delivered independently with standalone value
+      - Combining them creates confusion about scope, ownership, or acceptance criteria
+
+      Do NOT recommend splitting when:
+      - The parts are tightly coupled steps of a single workflow
+      - Splitting would create sub-ideas that have no standalone value
+      - The idea is simply large but cohesive
+
+      Produce a JSON object with these exact fields:
+
+      {
+        "shouldSplit": <boolean — true only if the idea clearly contains independent concerns>,
+        "confidence": <number 0-1 — how confident you are in the recommendation>,
+        "reasoning": "<1-3 sentences explaining why or why not to split>",
+        "subIdeas": [
+          {
+            "title": "<proposed sub-idea title>",
+            "description": "<1-2 sentence description>"
+          }
+        ]
+      }
+
+      If shouldSplit is false, subIdeas should be an empty array.
+
+      Output ONLY the JSON object — no markdown fencing, no prose.
+
+  - id: parse_decomposition
+    type: transform
+    expression: "(function(text) { var t = text.trim(); var start = t.indexOf('{'); var end = t.lastIndexOf('}'); if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {} } var m = t.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1].trim() : t); })(artifacts.analyze_decomposition.text)"
+
   # ── 4. Generate full structured idea ─────────────────────────────────────
   - id: generate_idea
     type: agent
@@ -204,7 +261,9 @@ edges:
   - { from: { node: parse_idea },      to: { node: fetch_project } }
   - { from: { node: fetch_project },   to: { node: parse_project } }
   - { from: { node: parse_project },   to: { node: read_context } }
-  - { from: { node: read_context },    to: { node: generate_idea } }
+  - { from: { node: read_context },            to: { node: analyze_decomposition } }
+  - { from: { node: analyze_decomposition },   to: { node: parse_decomposition } }
+  - { from: { node: parse_decomposition },     to: { node: generate_idea } }
   - { from: { node: generate_idea },   to: { node: parse_generated } }
   - { from: { node: parse_generated }, to: { node: patch_idea } }
   - { from: { node: patch_idea },      to: { node: result } }
