@@ -112,6 +112,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         id: d.id,
         name: d.name,
         tags: d.tags,
+        queue: d.queue,
         nodeCount: Array.isArray(d.nodes) ? d.nodes.length : 0,
         edgeCount: Array.isArray(d.edges) ? d.edges.length : 0,
       }));
@@ -273,7 +274,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     fastify.get("/metrics", {
       preHandler: requireAuth,
       handler: async (_request, reply) => {
-        const metrics = await scheduler.getMetrics();
+        const metrics = await scheduler.getDetailedMetrics();
         return reply.send(metrics);
       },
     });
