@@ -47,6 +47,8 @@ nodes:
     type: agent
     runner: claude-code
     mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
     model: claude-haiku-4-5
     timeoutSeconds: 120
     prompt: |
@@ -161,6 +163,8 @@ nodes:
     type: agent
     runner: claude-code
     mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
     model: claude-haiku-4-5
     timeoutSeconds: 180
     prompt: |
