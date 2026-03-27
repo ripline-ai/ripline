@@ -8,6 +8,9 @@
 # Inputs:
 #   idea_id        — Wintermute idea ID (required)
 #   includeStories — Boolean, default true. When false, stories are omitted.
+#   stage    — "production" or "staging" (default: "production")
+#              production → localhost:3000 (Wintermute), localhost:4001 (Ripline)
+#              staging    → localhost:3001 (Wintermute), localhost:4002 (Ripline)
 
 id: spec_idea
 name: Spec Idea (Unified)
@@ -17,6 +20,10 @@ entry: [intake]
 nodes:
   - id: intake
     type: input
+
+  - id: resolve_urls
+    type: transform
+    expression: "(function() { var s = (inputs.stage || 'production').toLowerCase(); var wp = s === 'staging' ? 3001 : 3000; var rp = s === 'staging' ? 4002 : 4001; return { wintermute_url: 'http://localhost:' + wp, ripline_url: 'http://localhost:' + rp }; })()"
 
   # ── 1. Read idea from Wintermute ─────────────────────────────────────────
   - id: fetch_idea
@@ -29,7 +36,7 @@ nodes:
     prompt: |
       Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
 
-      curl -s http://localhost:3000/api/ideas/{{idea_id}}
+      curl -s {{resolve_urls.wintermute_url}}/api/ideas/{{idea_id}}
 
   - id: parse_idea
     type: transform
@@ -46,11 +53,11 @@ nodes:
     prompt: |
       The idea below has a projectId field. If it has one, run:
 
-        curl -s http://localhost:3000/api/projects/<projectId>
+        curl -s {{resolve_urls.wintermute_url}}/api/projects/<projectId>
 
       If there is no projectId, run:
 
-        curl -s http://localhost:3000/api/projects
+        curl -s {{resolve_urls.wintermute_url}}/api/projects
 
       and pick the first project whose name or metadata.localPath appears most relevant to the idea title "{{parse_idea.title}}".
 
@@ -332,7 +339,7 @@ nodes:
 
       r = subprocess.run(
           ["curl", "-s", "-X", "PATCH",
-           f"http://localhost:3000/api/ideas/{idea_id}",
+           f"{{resolve_urls.wintermute_url}}/api/ideas/{idea_id}",
            "-H", "Content-Type: application/json",
            "--data-binary", json.dumps(body)],
           capture_output=True, text=True
@@ -356,7 +363,8 @@ nodes:
     source: delegation
 
 edges:
-  - { from: { node: intake },         to: { node: fetch_idea } }
+  - { from: { node: intake },         to: { node: resolve_urls } }
+  - { from: { node: resolve_urls }, to: { node: fetch_idea } }
   - { from: { node: fetch_idea },     to: { node: parse_idea } }
   - { from: { node: parse_idea },     to: { node: fetch_project } }
   - { from: { node: fetch_project },  to: { node: parse_project } }

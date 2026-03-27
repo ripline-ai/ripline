@@ -5,6 +5,9 @@
 # Inputs:
 #   idea_id     — Wintermute idea ID (required)
 #   branch_name — Git branch to commit to (required, e.g. feat/<idea-id>)
+#   stage    — "production" or "staging" (default: "production")
+#              production → localhost:3000 (Wintermute), localhost:4001 (Ripline)
+#              staging    → localhost:3001 (Wintermute), localhost:4002 (Ripline)
 #
 # Flow:
 #   intake → fetch_idea → parse_plan → story_loop → patch_complete → result
@@ -17,6 +20,10 @@ entry: [intake]
 nodes:
   - id: intake
     type: input
+
+  - id: resolve_urls
+    type: transform
+    expression: "(function() { var s = (inputs.stage || 'production').toLowerCase(); var wp = s === 'staging' ? 3001 : 3000; var rp = s === 'staging' ? 4002 : 4001; return { wintermute_url: 'http://localhost:' + wp, ripline_url: 'http://localhost:' + rp }; })()"
 
   # ── 1. Parse plan from inputs ─────────────────────────────────────────────
   # Wintermute passes idea data directly as inputs — no HTTP fetch needed.
@@ -92,7 +99,7 @@ nodes:
       Run these exact commands using the Bash tool, one at a time:
 
       1. Find the project directory by checking the idea's projectId:
-         curl -s http://localhost:3000/api/ideas/{{idea_id}} | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('projectId',''))"
+         curl -s {{resolve_urls.wintermute_url}}/api/ideas/{{idea_id}} | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('projectId',''))"
 
       2. Based on the projectId, determine the project directory:
          - project_wintermute or wintermute → /home/openclaw/wintermute
@@ -118,7 +125,7 @@ nodes:
     prompt: |
       Run this exact command using the Bash tool:
 
-      curl -s -X PATCH http://localhost:3000/api/ideas/{{idea_id}} \
+      curl -s -X PATCH {{resolve_urls.wintermute_url}}/api/ideas/{{idea_id}} \
         -H "Content-Type: application/json" \
         -d '{"status":"done"}'
 
@@ -129,7 +136,8 @@ nodes:
     source: patch_complete
 
 edges:
-  - { from: { node: intake },         to: { node: parse_plan } }
+  - { from: { node: intake },         to: { node: resolve_urls } }
+  - { from: { node: resolve_urls }, to: { node: parse_plan } }
   - { from: { node: parse_plan },     to: { node: story_loop } }
   - { from: { node: story_loop },     to: { node: merge_to_master } }
   - { from: { node: merge_to_master }, to: { node: patch_complete } }

@@ -18,6 +18,9 @@
 #   catchphrases       — optional comma-separated catchphrases
 #   content_warnings   — optional topics/content to avoid
 #   wintermute_base_url — base URL for Wintermute API callbacks (default: http://localhost:3000)
+#   stage    — "production" or "staging" (default: "production")
+#              production → localhost:3000 (Wintermute), localhost:4001 (Ripline)
+#              staging    → localhost:3001 (Wintermute), localhost:4002 (Ripline)
 id: generate_youtube_ideas
 name: Generate YouTube Ideas
 entry: [intake]
@@ -39,6 +42,11 @@ nodes:
       catchphrases: optional comma-separated catchphrases.
       content_warnings: optional content to avoid.
       wintermute_base_url: base URL for Wintermute API callbacks (default http://localhost:3000).
+      stage: "production" or "staging" (default: "production").
+
+  - id: resolve_urls
+    type: transform
+    expression: "(function() { var s = (inputs.stage || 'production').toLowerCase(); var wp = s === 'staging' ? 3001 : 3000; var rp = s === 'staging' ? 4002 : 4001; return { wintermute_url: inputs.wintermute_base_url || ('http://localhost:' + wp), ripline_url: inputs.ripline_base_url || ('http://localhost:' + rp) }; })()"
 
   - id: research_trends
     type: agent
@@ -156,7 +164,7 @@ nodes:
     prompt: |
       Save generated video ideas to the Wintermute API.
 
-      Wintermute base URL: {{wintermute_base_url}}
+      Wintermute base URL: {{resolve_urls.wintermute_url}}
       Channel ID: {{channel_id}}
 
       Ideas JSON:
@@ -164,7 +172,7 @@ nodes:
 
       Instructions:
       1. Parse the JSON array of ideas from above.
-      2. For each idea, POST to {{wintermute_base_url}}/api/video-ideas with:
+      2. For each idea, POST to {{resolve_urls.wintermute_url}}/api/video-ideas with:
          {
            "channelId": "{{channel_id}}",
            "title": <idea title>,
@@ -180,7 +188,7 @@ nodes:
       import json, urllib.request, urllib.error
 
       ideas_text = """{{generate_ideas.text}}"""
-      base_url = "{{wintermute_base_url}}"
+      base_url = "{{resolve_urls.wintermute_url}}"
       channel_id = "{{channel_id}}"
 
       # Clean up the text in case there are markdown fences
@@ -231,7 +239,8 @@ nodes:
     source: save_ideas
 
 edges:
-  - { from: { node: intake },          to: { node: research_trends } }
+  - { from: { node: intake },          to: { node: resolve_urls } }
+  - { from: { node: resolve_urls },  to: { node: research_trends } }
   - { from: { node: research_trends }, to: { node: generate_ideas } }
   - { from: { node: generate_ideas },  to: { node: save_ideas } }
   - { from: { node: save_ideas },      to: { node: result } }

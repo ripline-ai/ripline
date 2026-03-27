@@ -5,6 +5,9 @@
 #
 # Inputs:
 #   bug_id — Wintermute bug ID (required)
+#   stage    — "production" or "staging" (default: "production")
+#              production → localhost:3000 (Wintermute), localhost:4001 (Ripline)
+#              staging    → localhost:3001 (Wintermute), localhost:4002 (Ripline)
 #
 # Flow:
 #   intake → fetch_bug → parse_bug → fetch_project → parse_project
@@ -18,6 +21,10 @@ nodes:
   - id: intake
     type: input
 
+  - id: resolve_urls
+    type: transform
+    expression: "(function() { var s = (inputs.stage || 'production').toLowerCase(); var wp = s === 'staging' ? 3001 : 3000; var rp = s === 'staging' ? 4002 : 4001; return { wintermute_url: 'http://localhost:' + wp, ripline_url: 'http://localhost:' + rp }; })()"
+
   # ── 1. Fetch bug from Wintermute ─────────────────────────────────────────
   - id: fetch_bug
     type: agent
@@ -29,7 +36,7 @@ nodes:
     prompt: |
       Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
 
-      curl -s http://localhost:3000/api/bugs/{{bug_id}}
+      curl -s {{resolve_urls.wintermute_url}}/api/bugs/{{bug_id}}
 
   - id: parse_bug
     type: transform
@@ -46,11 +53,11 @@ nodes:
     prompt: |
       The bug below may have a projectId field. If it does, run:
 
-        curl -s http://localhost:3000/api/projects/<projectId>
+        curl -s {{resolve_urls.wintermute_url}}/api/projects/<projectId>
 
       If there is no projectId, run:
 
-        curl -s http://localhost:3000/api/projects
+        curl -s {{resolve_urls.wintermute_url}}/api/projects
 
       and pick the single project whose name or metadata.localPath appears most relevant to the bug title "{{parse_bug.title}}".
 
@@ -126,7 +133,7 @@ nodes:
 
       Build a JSON body with these fields and run:
 
-      curl -s -X PATCH http://localhost:3000/api/bugs/{{bug_id}} \
+      curl -s -X PATCH {{resolve_urls.wintermute_url}}/api/bugs/{{bug_id}} \
         -H "Content-Type: application/json" \
         -d '<JSON_BODY>'
 
@@ -142,7 +149,8 @@ nodes:
     source: patch_bug
 
 edges:
-  - { from: { node: intake },        to: { node: fetch_bug } }
+  - { from: { node: intake },        to: { node: resolve_urls } }
+  - { from: { node: resolve_urls }, to: { node: fetch_bug } }
   - { from: { node: fetch_bug },     to: { node: parse_bug } }
   - { from: { node: parse_bug },     to: { node: fetch_project } }
   - { from: { node: fetch_project }, to: { node: parse_project } }

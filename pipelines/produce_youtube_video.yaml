@@ -27,6 +27,10 @@
 #   (build.envato.com) covers marketplace purchases only, not Elements subscriptions.
 #   No ENVATO_API_KEY step is implemented. If Envato ever opens a public Elements API,
 #   add a step between Runway/Kling and DALL-E that searches/downloads stock clips.
+#
+#   stage    — "production" or "staging" (default: "production")
+#              production → localhost:3000 (Wintermute), localhost:4001 (Ripline)
+#              staging    → localhost:3001 (Wintermute), localhost:4002 (Ripline)
 id: produce_youtube_video
 name: Produce YouTube Video
 entry: [intake]
@@ -59,6 +63,11 @@ nodes:
       captions_enabled: "true" | "false" (default: "true"). If "true", generate and burn captions.
       channel_vault_path: absolute path to the channel vault directory (e.g. /home/openclaw/obsidian/Channels/{name}/). Optional — enables vault integration.
       idea_vault_path: absolute path to the idea file (e.g. /home/openclaw/obsidian/Channels/{name}/ideas/{id}-{slug}.md). Optional — enables vault script read/write.
+      stage: "production" or "staging" (default: "production").
+
+  - id: resolve_urls
+    type: transform
+    expression: "(function() { var s = (inputs.stage || 'production').toLowerCase(); var wp = s === 'staging' ? 3001 : 3000; var rp = s === 'staging' ? 4002 : 4001; return { wintermute_url: inputs.wintermute_base_url || ('http://localhost:' + wp), ripline_url: inputs.ripline_base_url || ('http://localhost:' + rp) }; })()"
 
   - id: gather_context
     type: agent
@@ -312,7 +321,7 @@ nodes:
 
       Voice ID: {{voice_id}}
       Captions enabled: {{captions_enabled}}
-      Wintermute base URL: {{wintermute_base_url}}
+      Wintermute base URL: {{resolve_urls.wintermute_url}}
 
       Instructions:
       1. If voice_id is non-empty:
@@ -323,7 +332,7 @@ nodes:
          - Call the Wintermute TTS proxy (no API key required — auth is handled server-side):
          - If captions_enabled is "true":
            * Run:
-             curl -s -X POST "{{wintermute_base_url}}/api/tts" \
+             curl -s -X POST "{{resolve_urls.wintermute_url}}/api/tts" \
                -H "Content-Type: application/json" \
                -d '{"voiceId":"<voice_id>","text":"<cleaned script>","withTimestamps":true}' \
                -o /tmp/yt_{{video_idea_id}}/tts_response.json
@@ -337,7 +346,7 @@ nodes:
            * Output: TIMESTAMPS_AVAILABLE=true
          - If captions_enabled is NOT "true":
            * Run:
-             curl -s -X POST "{{wintermute_base_url}}/api/tts" \
+             curl -s -X POST "{{resolve_urls.wintermute_url}}/api/tts" \
                -H "Content-Type: application/json" \
                -d '{"voiceId":"<voice_id>","text":"<cleaned script>","withTimestamps":false}' \
                -o /tmp/yt_{{video_idea_id}}/voiceover.mp3
@@ -460,7 +469,7 @@ nodes:
       Show slugs (JSON array): {{show_slugs}}
       Show slug (legacy fallback): {{show_slug}}
       Video concept: {{video_concept}}
-      Wintermute base URL: {{wintermute_base_url}}
+      Wintermute base URL: {{resolve_urls.wintermute_url}}
       Output directory: /tmp/yt_{{video_idea_id}}/visuals/
 
       Channel vault path: {{channel_vault_path}}
@@ -494,13 +503,13 @@ nodes:
       all indexed shows — that will return clips from wrong franchises and ruin the video.
 
       For each show slug resolved in STEP 2, make one request:
-        curl -s -X POST "{{wintermute_base_url}}/api/media-index/research-clips" \
+        curl -s -X POST "{{resolve_urls.wintermute_url}}/api/media-index/research-clips" \
           -H "Content-Type: application/json" \
           -d '{"concept": "{{video_concept}}", "showSlugs": ["<slug>"], "maxClips": 7}'
 
       If the API does not accept a "showSlugs" parameter (i.e., results come back from
       the wrong show), fall back to per-slug requests using the "show" query param:
-        curl -s "{{wintermute_base_url}}/api/media-index/research-clips?show=<slug>" \
+        curl -s "{{resolve_urls.wintermute_url}}/api/media-index/research-clips?show=<slug>" \
           -X POST -H "Content-Type: application/json" \
           -d '{"concept": "{{video_concept}}", "maxClips": 7}'
 
@@ -547,8 +556,8 @@ nodes:
 
       For each selected candidate (max 7):
       1. Derive outputName from episodeId and startSeconds (e.g. "show-s01e03-245")
-      2. POST to {{wintermute_base_url}}/api/media-index/extract-clip:
-           curl -s -X POST "{{wintermute_base_url}}/api/media-index/extract-clip" \
+      2. POST to {{resolve_urls.wintermute_url}}/api/media-index/extract-clip:
+           curl -s -X POST "{{resolve_urls.wintermute_url}}/api/media-index/extract-clip" \
              -H "Content-Type: application/json" \
              -d '{"videoPath": "<videoPath>", "startSeconds": <startSeconds>, "endSeconds": <endSeconds>, "outputName": "<outputName>"}'
       3. Collect the clipPath from each response
@@ -583,7 +592,7 @@ nodes:
       {{generate_visual_prompts.text}}
 
       Output directory: /tmp/yt_{{video_idea_id}}/visuals/
-      Wintermute base URL: {{wintermute_base_url}}
+      Wintermute base URL: {{resolve_urls.wintermute_url}}
       Visual style override: {{visual_style}}
       Aspect ratio: {{aspect_ratio}}
       (16:9 → width=1920 height=1080; 9:16 → width=1080 height=1920)
@@ -643,7 +652,7 @@ nodes:
       For each section prompt, BEFORE generating, check the video library cache:
         For each section N (0-indexed):
           - Use the video_prompt field as the lookup prompt
-          - Call POST {{wintermute_base_url}}/api/video-library/lookup
+          - Call POST {{resolve_urls.wintermute_url}}/api/video-library/lookup
             Body: { "prompt": "<video_prompt from the section>", "aspectRatio": "{{aspect_ratio}}" }
           - If the response has clip.filePath and matchType is "exact" or "fuzzy":
             - Copy or symlink the cached file to /tmp/yt_{{video_idea_id}}/visuals/section_<N>.mp4
@@ -768,7 +777,7 @@ nodes:
 
       For each newly generated clip (NOT cached ones):
         - Determine file path, duration, dimensions from the file
-        - Call POST {{wintermute_base_url}}/api/video-library
+        - Call POST {{resolve_urls.wintermute_url}}/api/video-library
           Body:
             {
               "prompt": "<video_prompt used for this section>",
@@ -956,7 +965,7 @@ nodes:
          Format the last line as: OUTPUT_PATH=/tmp/yt_{{video_idea_id}}/output.mp4
 
       10. PATCH Wintermute with the output video path and mark the idea as done:
-           curl -s -X PATCH {{wintermute_base_url}}/api/video-ideas/{{video_idea_id}} \
+           curl -s -X PATCH {{resolve_urls.wintermute_url}}/api/video-ideas/{{video_idea_id}} \
              -H "Content-Type: application/json" \
              -d "{\"videoPath\":\"/tmp/yt_{{video_idea_id}}/output.mp4\",\"status\":\"done\"}"
          If the PATCH succeeds (HTTP 200), output: "CALLBACK: Wintermute updated with videoPath and status=done."
@@ -967,7 +976,8 @@ nodes:
     source: assemble_video
 
 edges:
-  - { from: { node: intake },                    to: { node: gather_context } }
+  - { from: { node: intake },                    to: { node: resolve_urls } }
+  - { from: { node: resolve_urls },             to: { node: gather_context } }
   - { from: { node: gather_context },            to: { node: write_script } }
   - { from: { node: write_script },              to: { node: generate_visual_prompts } }
   - { from: { node: write_script },              to: { node: voiceover } }

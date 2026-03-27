@@ -19,6 +19,9 @@
 #   catchphrases       — comma-separated phrases to weave in naturally (optional)
 #   content_warnings   — topics/spoilers to avoid (optional)
 #   wintermute_base_url — base URL for Wintermute API callbacks (default: http://localhost:3000)
+#   stage    — "production" or "staging" (default: "production")
+#              production → localhost:3000 (Wintermute), localhost:4001 (Ripline)
+#              staging    → localhost:3001 (Wintermute), localhost:4002 (Ripline)
 id: generate_video_script
 name: Generate Video Script
 entry: [intake]
@@ -41,6 +44,11 @@ nodes:
       catchphrases: comma-separated phrases to weave in naturally (optional).
       content_warnings: topics/spoilers/content to avoid (optional).
       wintermute_base_url: base URL for Wintermute API callbacks (default: http://localhost:3000).
+      stage: "production" or "staging" (default: "production").
+
+  - id: resolve_urls
+    type: transform
+    expression: "(function() { var s = (inputs.stage || 'production').toLowerCase(); var wp = s === 'staging' ? 3001 : 3000; var rp = s === 'staging' ? 4002 : 4001; return { wintermute_url: inputs.wintermute_base_url || ('http://localhost:' + wp), ripline_url: inputs.ripline_base_url || ('http://localhost:' + rp) }; })()"
 
   - id: write_script
     type: agent
@@ -111,7 +119,7 @@ nodes:
       {{write_script.text}}
 
       STEP 2: Use the Bash tool to run this exact command:
-      python3 -c "import json,urllib.request,urllib.error; f=open('/tmp/script_{{video_idea_id}}.txt'); script=f.read(); f.close(); payload=json.dumps({'script':script,'scriptStatus':'generated','status':'pending'}).encode(); req=urllib.request.Request('{{wintermute_base_url}}/api/video-ideas/{{video_idea_id}}',data=payload,headers={'Content-Type':'application/json'},method='PATCH'); resp=urllib.request.urlopen(req,timeout=15); print('SCRIPT SAVED: OK status='+str(resp.status))"
+      python3 -c "import json,urllib.request,urllib.error; f=open('/tmp/script_{{video_idea_id}}.txt'); script=f.read(); f.close(); payload=json.dumps({'script':script,'scriptStatus':'generated','status':'pending'}).encode(); req=urllib.request.Request('{{resolve_urls.wintermute_url}}/api/video-ideas/{{video_idea_id}}',data=payload,headers={'Content-Type':'application/json'},method='PATCH'); resp=urllib.request.urlopen(req,timeout=15); print('SCRIPT SAVED: OK status='+str(resp.status))"
 
       After both steps, output one line: the result from Step 2.
       If Step 2 throws an exception, catch it and output: SCRIPT SAVE FAILED: <exception message>
@@ -121,6 +129,7 @@ nodes:
     source: save_script
 
 edges:
-  - { from: { node: intake },       to: { node: write_script } }
+  - { from: { node: intake },       to: { node: resolve_urls } }
+  - { from: { node: resolve_urls }, to: { node: write_script } }
   - { from: { node: write_script }, to: { node: save_script } }
   - { from: { node: save_script },  to: { node: result } }

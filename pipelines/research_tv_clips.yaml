@@ -7,6 +7,9 @@
 #   show_slug            — indexed show slug (e.g. "real-housewives-of-new-york-city")
 #   wintermute_base_url  — base URL for Wintermute API (default: http://localhost:3000)
 #   max_clips            — max number of clips to extract (default: 5)
+#   stage    — "production" or "staging" (default: "production")
+#              production → localhost:3000 (Wintermute), localhost:4001 (Ripline)
+#              staging    → localhost:3001 (Wintermute), localhost:4002 (Ripline)
 id: research_tv_clips
 name: Research TV Clips
 entry: [intake]
@@ -18,6 +21,11 @@ nodes:
       show_slug: indexed show slug (e.g. "real-housewives-of-new-york-city").
       wintermute_base_url: base URL for Wintermute API (default: http://localhost:3000).
       max_clips: max number of clips to extract (default: 5).
+      stage: "production" or "staging" (default: "production").
+
+  - id: resolve_urls
+    type: transform
+    expression: "(function() { var s = (inputs.stage || 'production').toLowerCase(); var wp = s === 'staging' ? 3001 : 3000; var rp = s === 'staging' ? 4002 : 4001; return { wintermute_url: inputs.wintermute_base_url || ('http://localhost:' + wp), ripline_url: inputs.ripline_base_url || ('http://localhost:' + rp) }; })()"
 
   - id: fetch_episodes
     type: agent
@@ -27,10 +35,10 @@ nodes:
     prompt: |
       Fetch the episode list for show "{{show_slug}}" from the Wintermute media index.
 
-      Wintermute base URL: {{wintermute_base_url}}
+      Wintermute base URL: {{resolve_urls.wintermute_url}}
 
       Run this command:
-        curl -s "{{wintermute_base_url}}/api/media-index?show={{show_slug}}"
+        curl -s "{{resolve_urls.wintermute_url}}/api/media-index?show={{show_slug}}"
 
       If the response contains a "error" field, output: FETCH_FAILED: <error message>
       Otherwise, output the full JSON response as-is.
@@ -71,13 +79,13 @@ nodes:
     prompt: |
       Search for subtitle segments related to "{{concept}}" in the indexed show.
 
-      Wintermute base URL: {{wintermute_base_url}}
+      Wintermute base URL: {{resolve_urls.wintermute_url}}
       Show slug: {{show_slug}}
 
       Extract 3-5 keywords from the concept "{{concept}}" and search for each:
 
       For each keyword, run:
-        curl -s "{{wintermute_base_url}}/api/media-index/search?show={{show_slug}}&q=<keyword>&limit=10"
+        curl -s "{{resolve_urls.wintermute_url}}/api/media-index/search?show={{show_slug}}&q=<keyword>&limit=10"
 
       Collect all results and output them as a combined JSON array.
       If no results found, output: []
@@ -138,7 +146,7 @@ nodes:
     prompt: |
       Extract video clips using the Wintermute API.
 
-      Wintermute base URL: {{wintermute_base_url}}
+      Wintermute base URL: {{resolve_urls.wintermute_url}}
 
       Clip candidates JSON:
       {{select_clips.text}}
@@ -146,7 +154,7 @@ nodes:
       For each clip in the JSON array above:
       1. Parse the episodeId, startSeconds, endSeconds, and videoPath
       2. Create an outputName from the episodeId and startSeconds (e.g., "show-s01e03-245")
-      3. POST to {{wintermute_base_url}}/api/media-index/extract-clip with:
+      3. POST to {{resolve_urls.wintermute_url}}/api/media-index/extract-clip with:
          {
            "videoPath": "<videoPath>",
            "startSeconds": <startSeconds>,
@@ -156,7 +164,7 @@ nodes:
       4. Collect the clipPath from each response
 
       Use curl for each request:
-        curl -s -X POST "{{wintermute_base_url}}/api/media-index/extract-clip" \
+        curl -s -X POST "{{resolve_urls.wintermute_url}}/api/media-index/extract-clip" \
           -H "Content-Type: application/json" \
           -d '{"videoPath": "...", "startSeconds": ..., "endSeconds": ..., "outputName": "..."}'
 
@@ -168,7 +176,8 @@ nodes:
     source: extract_clips
 
 edges:
-  - { from: { node: intake },           to: { node: fetch_episodes } }
+  - { from: { node: intake },           to: { node: resolve_urls } }
+  - { from: { node: resolve_urls },   to: { node: fetch_episodes } }
   - { from: { node: fetch_episodes },   to: { node: identify_episodes } }
   - { from: { node: identify_episodes }, to: { node: search_subtitles } }
   - { from: { node: search_subtitles }, to: { node: select_clips } }

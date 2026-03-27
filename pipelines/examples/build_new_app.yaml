@@ -3,6 +3,11 @@
 # initialises the workspace, specs the MVP, decomposes it into stories, and
 # implements each story in parallel via implement_story_new_project.
 # No inputs required — kick off with POST /pipelines/build_new_app/run {}
+#
+# Inputs:
+#   stage    — "production" or "staging" (default: "production")
+#              production → localhost:3000 (Wintermute), localhost:4001 (Ripline)
+#              staging    → localhost:3001 (Wintermute), localhost:4002 (Ripline)
 id: build_new_app
 name: Build New App (Idea → MVP)
 entry: [intake]
@@ -10,6 +15,10 @@ entry: [intake]
 nodes:
   - id: intake
     type: input
+
+  - id: resolve_urls
+    type: transform
+    expression: "(function() { var s = (inputs.stage || 'production').toLowerCase(); var wp = s === 'staging' ? 3001 : 3000; var rp = s === 'staging' ? 4002 : 4001; return { wintermute_url: 'http://localhost:' + wp, ripline_url: 'http://localhost:' + rp }; })()"
 
   # ── 1. Ideate ──────────────────────────────────────────────────────────────
   - id: ideate
@@ -42,7 +51,7 @@ nodes:
     prompt: |
       Run the following curl command exactly as written. Output ONLY the raw JSON response — nothing else, no explanation, no markdown fencing.
 
-      curl -s -X POST http://localhost:3000/api/projects \
+      curl -s -X POST {{resolve_urls.wintermute_url}}/api/projects \
         -H "Content-Type: application/json" \
         -d '{"name":"{{parse_idea.name}}","description":"{{parse_idea.description}}","status":"active"}'
 
@@ -158,14 +167,15 @@ nodes:
     prompt: |
       Run the following curl command exactly as written. Output ONLY the raw JSON response — nothing else, no explanation, no markdown fencing.
 
-      curl -s -X POST http://localhost:3000/api/projects/{{parse_project.projectId}}/ripline-profile
+      curl -s -X POST {{resolve_urls.wintermute_url}}/api/projects/{{parse_project.projectId}}/ripline-profile
 
   - id: result
     type: output
     source: collect
 
 edges:
-  - { from: { node: intake },         to: { node: ideate } }
+  - { from: { node: intake },         to: { node: resolve_urls } }
+  - { from: { node: resolve_urls }, to: { node: ideate } }
   - { from: { node: ideate },         to: { node: parse_idea } }
   - { from: { node: parse_idea },     to: { node: create_project } }
   - { from: { node: create_project }, to: { node: parse_project } }
