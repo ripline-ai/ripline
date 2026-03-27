@@ -20,6 +20,7 @@ import { DeterministicRunner } from "./pipeline/runner.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
 import { loadAgentDefinitionsFromFile, loadSkillsRegistryFromFile } from "./agent-runner-config.js";
 import { listProfiles, loadProfile } from "./profiles.js";
+import { WebhookDispatcher } from "./webhook-dispatcher.js";
 import YAML from "yaml";
 
 const DEFAULT_RUNS_DIR = ".ripline/runs";
@@ -89,6 +90,8 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       : null;
   if (scheduler) scheduler.start();
 
+  const webhookDispatcher = new WebhookDispatcher(store);
+
   const fastify = Fastify({ logger: false });
 
   await fastify.register(cors, { origin: true });
@@ -134,7 +137,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
   });
 
   /** POST /pipelines/:id/run - enqueue run (when scheduler active) or run inline */
-  fastify.post<{ Params: { id: string }; Body: { inputs?: Record<string, unknown>; env?: Record<string, string> } }>(
+  fastify.post<{ Params: { id: string }; Body: { inputs?: Record<string, unknown>; env?: Record<string, string>; webhook_url?: string } }>(
     "/pipelines/:id/run",
     {
       preHandler: requireAuth,
@@ -143,11 +146,12 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         if (!entry) {
           return reply.status(404).send({ error: "Not Found", message: `Pipeline ${request.params.id} not found` });
         }
-        const body = (request.body as { inputs?: Record<string, unknown>; env?: Record<string, string> }) ?? {};
+        const body = (request.body as { inputs?: Record<string, unknown>; env?: Record<string, string>; webhook_url?: string }) ?? {};
         const inputs = body.inputs ?? {};
+        const webhookUrl = typeof body.webhook_url === "string" ? body.webhook_url : undefined;
         if (scheduler) {
           const queueName = entry.definition.queue ?? "default";
-          const runId = await queue.enqueue(request.params.id, inputs, { queueName });
+          const runId = await queue.enqueue(request.params.id, inputs, { queueName, ...(webhookUrl !== undefined && { webhook_url: webhookUrl }) });
           return reply.status(202).send({ runId });
         }
         const runLog = createLogger({ sink: createRunScopedFileSink(runsDir) });
@@ -163,7 +167,13 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           skillsDir,
         });
         const runIdPromise = new Promise<string>((resolve) => {
-          runner.once("run.started", (record: PipelineRunRecord) => resolve(record.id));
+          runner.once("run.started", async (record: PipelineRunRecord) => {
+            if (webhookUrl) {
+              record.webhook_url = webhookUrl;
+              await store.save(record);
+            }
+            resolve(record.id);
+          });
         });
         runner.run({
           inputs,
@@ -281,9 +291,10 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     });
   }
 
-  /** Hook close to stop scheduler */
+  /** Hook close to stop scheduler and webhook dispatcher */
   fastify.addHook("onClose", async () => {
     if (scheduler) scheduler.stop();
+    webhookDispatcher.stop();
   });
 
   /** Load run with one retry on JSON parse failure (e.g. read during atomic rename). */

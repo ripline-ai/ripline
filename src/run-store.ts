@@ -12,6 +12,8 @@ export type RunStoreCreateParams = {
   queueMode?: QueueMode;
   /** Named queue this run belongs to. Defaults to "default". */
   queueName?: string;
+  /** Optional webhook URL to receive push notifications on run completion/error. */
+  webhook_url?: string;
 };
 
 export type RunStoreCursor = {
@@ -75,6 +77,7 @@ export class PipelineRunStore implements RunStore {
       ...(params.taskId !== undefined && { taskId: params.taskId }),
       ...(params.queueMode !== undefined && { queueMode: params.queueMode as QueueMode }),
       ...(params.queueName !== undefined && { queueName: params.queueName }),
+      ...(params.webhook_url !== undefined && { webhook_url: params.webhook_url }),
       childRunIds: [],
       status: "pending",
       startedAt: now,

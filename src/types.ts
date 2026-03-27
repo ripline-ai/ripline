@@ -296,4 +296,6 @@ export type PipelineRunRecord = {
   };
   steps: PipelineRunStep[];
   error?: string;
+  /** Optional webhook URL to receive push notifications on run completion/error. */
+  webhook_url?: string;
 };

@@ -7,6 +7,8 @@ export type EnqueueOptions = {
   queueMode?: QueueMode;
   /** Named queue this run belongs to. Defaults to "default". */
   queueName?: string;
+  /** Optional webhook URL to receive push notifications on run completion/error. */
+  webhook_url?: string;
 };
 
 export type RunQueue = {
@@ -42,6 +44,7 @@ export function createRunQueue(store: RunStore): RunQueue {
         ...(options?.taskId !== undefined && { taskId: options.taskId }),
         ...(options?.queueMode !== undefined && { queueMode: options.queueMode }),
         ...(options?.queueName !== undefined && { queueName: options.queueName }),
+        ...(options?.webhook_url !== undefined && { webhook_url: options.webhook_url }),
       });
       if (options?.parentRunId) {
         const parent = await store.load(options.parentRunId);
