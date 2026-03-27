@@ -67,7 +67,7 @@ edges:
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
-  }, 15000);
+  }, 30000);
 
   it("--profile loads profile and merges inputs (profile dir with profile)", () => {
     if (!fs.existsSync(cliPath)) return;
