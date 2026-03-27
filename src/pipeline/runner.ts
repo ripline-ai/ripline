@@ -17,6 +17,8 @@ import type { Logger } from "../log.js";
 import { validateOutputContract } from "../lib/contract-validate.js";
 import { executeNode } from "./executors/index.js";
 import type { AgentRunner } from "./executors/index.js";
+import { emitActivity, flushActivityBuffer } from "../activity-emitter.js";
+import type { ActivityEvent } from "../types/activity.js";
 
 export type RunContext = {
   inputs: Record<string, unknown>;
@@ -89,6 +91,31 @@ export class DeterministicRunner extends EventEmitter {
     const runsDir = path.resolve(options.runsDir ?? DEFAULT_RUNS_DIR);
     this.store = options.store ?? new PipelineRunStore(runsDir);
     this.nodeById = new Map(definition.nodes.map((n) => [n.id, n]));
+  }
+
+  /** Build and fire-and-forget an activity event to Wintermute. */
+  private emitActivityEvent(
+    runId: string,
+    nodeId: string,
+    nodeName: string | undefined,
+    action: string,
+    status: ActivityEvent["status"],
+    summary: string,
+    extra?: { durationMs?: number; error?: string },
+  ): void {
+    const event: ActivityEvent = {
+      id: randomUUID(),
+      timestamp: new Date().toISOString(),
+      source: "ripline",
+      sourceId: runId,
+      project: this.definition.name ?? this.definition.id,
+      action,
+      status,
+      summary,
+      ...(extra?.durationMs !== undefined && { details: `duration_ms=${extra.durationMs}` }),
+      ...(extra?.error !== undefined && { details: extra.error }),
+    };
+    emitActivity(event);
   }
 
   /**
@@ -256,6 +283,9 @@ export class DeterministicRunner extends EventEmitter {
       this.emit("run.started", record);
     }
 
+    // Flush any buffered activity events from previous runs (fire-and-forget).
+    flushActivityBuffer().catch(() => {});
+
     const steps = record.steps;
 
     for (let i = startIndex; i < order.length; i++) {
@@ -275,6 +305,10 @@ export class DeterministicRunner extends EventEmitter {
 
       const startedEvent = { nodeId, nodeType: node.type, at: startedAt } as NodeStartedEvent;
       this.emit("node.started", startedEvent);
+      this.emitActivityEvent(
+        record.id, nodeId, node.name, "node_start", "started",
+        `Node ${node.name ?? nodeId} (${node.type}) started`,
+      );
       if (!this.runnerOptions.quiet) {
         console.log(`[${new Date(startedAt).toISOString()}] node.started ${nodeId} (${node.type})`);
       }
@@ -373,6 +407,11 @@ export class DeterministicRunner extends EventEmitter {
               at: step.finishedAt,
               artifactSummary: `${nodeResult.childRunIds.length} child run(s) enqueued`,
             } as NodeCompletedEvent);
+            this.emitActivityEvent(
+              record.id, nodeId, node.name, "node_complete", "success",
+              `Node ${node.name ?? nodeId} (${node.type}) completed — ${nodeResult.childRunIds.length} child run(s) enqueued`,
+              { durationMs: step.finishedAt! - startedAt },
+            );
             if (!this.runnerOptions.quiet) {
               console.log(
                 `[${new Date(step.finishedAt!).toISOString()}] node.completed ${nodeId} (${node.type}) ${nodeResult.childRunIds.length} child run(s) enqueued; paused until complete`
@@ -394,6 +433,11 @@ export class DeterministicRunner extends EventEmitter {
           artifactSummary,
         } as NodeCompletedEvent;
         this.emit("node.completed", completedEvent);
+        this.emitActivityEvent(
+          record.id, nodeId, node.name, "node_complete", "success",
+          `Node ${node.name ?? nodeId} (${node.type}) completed`,
+          { durationMs: finishedAt - startedAt },
+        );
         if (!this.runnerOptions.quiet) {
           const summary = artifactSummary ? ` ${artifactSummary}` : "";
           console.log(`[${new Date(finishedAt).toISOString()}] node.completed ${nodeId} (${node.type})${summary}`);
@@ -421,6 +465,11 @@ export class DeterministicRunner extends EventEmitter {
           error: step.error,
         } as NodeErroredEvent;
         this.emit("node.errored", erroredEvent);
+        this.emitActivityEvent(
+          record.id, nodeId, node.name, "node_error", "error",
+          `Node ${node.name ?? nodeId} (${node.type}) errored`,
+          { error: step.error },
+        );
         if (!this.runnerOptions.quiet) {
           console.error(`[${new Date(finishedAt).toISOString()}] node.errored ${nodeId} (${node.type}) ${step.error}`);
         }
