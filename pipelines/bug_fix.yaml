@@ -1,0 +1,211 @@
+id: bug_fix
+name: Bug Fix Pipeline (Fetch → Triage → Fix → Verify → Stage → Promote)
+queue: build
+entry: [intake]
+nodes:
+  - id: intake
+    type: input
+
+  # ── 1. Fetch bug from Wintermute ─────────────────────────────────────────
+  - id: fetch_bug
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 90
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
+
+      curl -s http://localhost:3000/api/bugs/{{bug_id}}
+
+  - id: parse_bug
+    type: transform
+    expression: "(function(text) { var t = text.trim(); var start = t.indexOf('{'); var end = t.lastIndexOf('}'); if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {} } var m = t.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1].trim() : t); })(artifacts.fetch_bug.text)"
+
+  # ── 2. Triage ─────────────────────────────────────────────────────────────
+  - id: pm_triage
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw/wintermute
+    timeoutSeconds: 300
+    prompt: |
+      QA has filed a bug report. Triage it from a product perspective and produce a clear brief for engineering.
+
+      Bug Report:
+      ID: {{parse_bug.id}}
+      Title: {{parse_bug.title}}
+      Description: {{parse_bug.description}}
+      Severity: {{parse_bug.severity}}
+
+      1. Confirm it is a real product issue (vs. won't-fix or out-of-scope)
+      2. Assign priority: P1 (blocking), P2 (important), P3 (nice-to-fix)
+      3. Add product context that helps engineering fix it correctly
+      4. Write clear, testable acceptance criteria for the fix
+
+      Output a structured engineering brief:
+      - Priority, title, product context, acceptance criteria
+      - Call out any won't-fix decisions and why
+
+  # ── 3. Fix ────────────────────────────────────────────────────────────────
+  - id: fix
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 1800
+    prompt: |
+      Fix the following bug. Work in the relevant project directory.
+
+      Bug ID: {{parse_bug.id}}
+      Title: {{parse_bug.title}}
+      Description: {{parse_bug.description}}
+
+      Engineering brief from triage:
+      {{pm_triage.text}}
+
+      Steps:
+      1. Identify the affected files and root cause
+      2. Write a failing test that reproduces the bug (TDD — no exceptions)
+      3. Implement the fix
+      4. Confirm the test passes
+      5. Run the full test suite and confirm nothing new is broken
+      6. Commit with message: fix: <bug title> [<bug-id>]
+
+      Output a summary: what was fixed, which files changed, test results.
+
+  # ── 4. Build verification (unit tests only) ───────────────────────────────
+  - id: build_verify
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw/wintermute
+    timeoutSeconds: 600
+    prompt: |
+      Run a full build and unit-test verification after the bug fix.
+
+      Fix summary:
+      {{fix.text}}
+
+      Run these commands using the Bash tool:
+      1. cd /home/openclaw/wintermute && npm run build 2>&1 | tail -20
+      2. cd /home/openclaw/wintermute && npm test -- --passWithNoTests --testPathIgnorePatterns=e2e 2>&1 | tail -30
+
+      Report clearly: pass/fail, and what (if anything) required additional fixes.
+
+  # ── 5. Reload staging ────────────────────────────────────────────────────
+  - id: reload_staging
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 120
+    prompt: |
+      Sync the production vault to staging, then reload both staging services so they
+      pick up the freshly-built code. Use the Bash tool to run these three commands:
+
+      1. ~/wintermute/scripts/vault-sync
+      2. /home/openclaw/.npm-global/bin/pm2 reload wintermute-staging
+      3. /home/openclaw/.npm-global/bin/pm2 reload ripline-staging
+
+      Output "staging ready" when all three succeed, or report the error and stop.
+
+  # ── 6. E2E smoke test against staging ────────────────────────────────────
+  - id: verify_staging
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw/wintermute
+    timeoutSeconds: 300
+    prompt: |
+      Run the e2e smoke tests against the staging stack to verify the fix end-to-end
+      before promoting to production.
+
+      Use the Bash tool:
+
+        cd /home/openclaw/wintermute && \
+          WINTERMUTE_URL=http://localhost:3001 RIPLINE_URL=http://localhost:4002 \
+          npx jest tests/e2e/smoke-consolidated-flow.test.ts --no-coverage 2>&1 | tail -30
+
+      If all tests pass, output "staging verified — ready to promote".
+      If any tests fail, output "STAGING VERIFICATION FAILED" followed by the failure
+      details. Do not proceed — the pipeline will continue to the promote step but
+      promote will see this failure and refuse to reload production.
+
+  # ── 7. Patch bug status to fixed ─────────────────────────────────────────
+  - id: patch_bug
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 90
+    prompt: |
+      Run this Python script using the Bash tool:
+
+      python3 << 'PYEOF'
+      import json, subprocess
+
+      bug_id = "{{bug_id}}"
+      body = {"status": "fixed"}
+
+      r = subprocess.run(
+          ["curl", "-s", "-X", "PATCH",
+           f"http://localhost:3000/api/bugs/{bug_id}",
+           "-H", "Content-Type: application/json",
+           "-d", json.dumps(body)],
+          capture_output=True, text=True
+      )
+      print(r.stdout)
+      PYEOF
+
+      After the script runs, echo "patch_bug complete" and stop.
+
+  # ── 8. Promote to production ──────────────────────────────────────────────
+  - id: promote
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 300
+    prompt: |
+      Check the staging verification result, then promote to production if it passed.
+
+      Staging result:
+      {{verify_staging.text}}
+
+      If the staging result contains "STAGING VERIFICATION FAILED", output
+      "promote: ABORTED — staging verification failed, production NOT reloaded"
+      and stop. Do not run any further commands.
+
+      Otherwise, run the promote script using the Bash tool:
+
+        ~/wintermute/bin/promote
+
+      If it exits 0, output "promote: success — production reloaded".
+      If it exits non-zero, output "promote: FAILED — production NOT reloaded"
+      followed by the script output.
+      Do not attempt to fix failures — just report them.
+
+  - id: result
+    type: output
+    source: promote
+
+edges:
+  - { from: { node: intake },          to: { node: fetch_bug } }
+  - { from: { node: fetch_bug },       to: { node: parse_bug } }
+  - { from: { node: parse_bug },       to: { node: pm_triage } }
+  - { from: { node: pm_triage },       to: { node: fix } }
+  - { from: { node: fix },             to: { node: build_verify } }
+  - { from: { node: build_verify },    to: { node: reload_staging } }
+  - { from: { node: reload_staging },  to: { node: verify_staging } }
+  - { from: { node: verify_staging },  to: { node: patch_bug } }
+  - { from: { node: patch_bug },       to: { node: promote } }
+  - { from: { node: promote },         to: { node: result } }
