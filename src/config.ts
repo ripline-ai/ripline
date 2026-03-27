@@ -3,6 +3,34 @@ import path from "node:path";
 import os from "node:os";
 import type { RiplineUserConfig } from "./types.js";
 
+/* ── Stage-aware configuration ──────────────────────────────────────── */
+
+export type Stage = "production" | "staging";
+
+export interface StageConfig {
+  /** The stage name (production or staging). */
+  stage: Stage;
+  /** HTTP port for Ripline to listen on. */
+  port: number;
+  /** Wintermute base URL (no trailing slash). */
+  wintermuteBaseUrl: string;
+}
+
+const STAGE_MAP: Record<Stage, { port: number; wintermuteBaseUrl: string }> = {
+  production: { port: 4001, wintermuteBaseUrl: "http://localhost:3000" },
+  staging:    { port: 4002, wintermuteBaseUrl: "http://localhost:3001" },
+};
+
+/**
+ * Resolve port and wintermuteBaseUrl from the STAGE environment variable.
+ * Accepted values: "production", "staging". Unset or unrecognised defaults to production.
+ */
+export function resolveStageConfig(env?: Record<string, string | undefined>): StageConfig {
+  const raw = (env ?? process.env).STAGE;
+  const stage: Stage = raw === "staging" ? "staging" : "production";
+  return { stage, ...STAGE_MAP[stage] };
+}
+
 /**
  * Expand leading ~ to homedir. Other occurrences of ~ are left unchanged.
  */

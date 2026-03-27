@@ -8,7 +8,7 @@ import Fastify, {
 import cors from "@fastify/cors";
 import os from "node:os";
 import type { AgentDefinition, SkillsRegistry, PipelinePluginConfig } from "./types.js";
-import { resolveSkillsDir } from "./config.js";
+import { resolveSkillsDir, resolveStageConfig } from "./config.js";
 import type { PipelineRunRecord } from "./types.js";
 import { PipelineRegistry } from "./registry.js";
 import { PipelineRunStore } from "./run-store.js";
@@ -668,7 +668,8 @@ export type StartServerOptions = ServerConfig & {
 
 /** Start the HTTP server. Used by the plugin when running standalone. */
 export async function startServer(options: StartServerOptions): Promise<{ close: () => Promise<void> }> {
-  const port = options.httpPort ?? options.port ?? 4001;
+  const stageConfig = resolveStageConfig();
+  const port = options.httpPort ?? options.port ?? stageConfig.port;
   const app = await createApp(options);
   await app.listen({ port, host: "0.0.0.0" });
   return {

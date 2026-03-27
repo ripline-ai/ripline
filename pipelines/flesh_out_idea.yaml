@@ -172,6 +172,21 @@ nodes:
     type: transform
     expression: "(function(text) { var t = text.trim(); var start = t.indexOf('{'); var end = t.lastIndexOf('}'); if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {} } var m = t.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1].trim() : t); })(artifacts.analyze_decomposition.text)"
 
+  # ── 3c. Propose split (placeholder) — logs sub-ideas to artifacts ────────
+  - id: propose_split
+    type: transform
+    expression: |
+      (function(d) {
+        var proposal = {
+          originalTitle: artifacts.parse_idea.title,
+          shouldSplit: d.shouldSplit,
+          confidence: d.confidence,
+          reasoning: d.reasoning,
+          subIdeas: d.subIdeas
+        };
+        return proposal;
+      })(artifacts.parse_decomposition)
+
   # ── 4. Generate full structured idea ─────────────────────────────────────
   - id: generate_idea
     type: agent
@@ -263,7 +278,14 @@ edges:
   - { from: { node: parse_project },   to: { node: read_context } }
   - { from: { node: read_context },            to: { node: analyze_decomposition } }
   - { from: { node: analyze_decomposition },   to: { node: parse_decomposition } }
-  - { from: { node: parse_decomposition },     to: { node: generate_idea } }
+  # Conditional branching: compound ideas route through propose_split first
+  - from: { node: parse_decomposition }
+    to: { node: propose_split }
+    when: "artifacts.parse_decomposition.shouldSplit === true && artifacts.parse_decomposition.confidence >= 0.7"
+  - from: { node: parse_decomposition }
+    to: { node: generate_idea }
+    when: "!(artifacts.parse_decomposition.shouldSplit === true && artifacts.parse_decomposition.confidence >= 0.7)"
+  - { from: { node: propose_split },              to: { node: generate_idea } }
   - { from: { node: generate_idea },   to: { node: parse_generated } }
   - { from: { node: parse_generated }, to: { node: patch_idea } }
   - { from: { node: patch_idea },      to: { node: result } }

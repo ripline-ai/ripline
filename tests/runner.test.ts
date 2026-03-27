@@ -343,6 +343,116 @@ describe("DeterministicRunner", () => {
       expect(failedRun?.error).toMatch(/contract|schema|valid|count/i);
     });
 
+    it("skips node when all incoming edges have falsy `when` conditions", async () => {
+      const def: PipelineDefinition = {
+        id: "when-skip-test",
+        entry: ["a"],
+        nodes: [
+          { id: "a", type: "input" },
+          { id: "b", type: "transform", expression: "({ flag: false })" },
+          { id: "skippable", type: "transform", expression: "({ ran: true })" },
+          { id: "d", type: "output", path: "out", source: "b" },
+        ],
+        edges: [
+          { from: { node: "a" }, to: { node: "b" } },
+          { from: { node: "b" }, to: { node: "skippable" }, when: "artifacts.b.flag === true" },
+          { from: { node: "skippable" }, to: { node: "d" } },
+          { from: { node: "b" }, to: { node: "d" } },
+        ],
+      };
+      const { MemoryRunStore } = await import("../src/run-store-memory.js");
+      const store = new MemoryRunStore();
+      const runner = new DeterministicRunner(def, { store });
+      const record = await runner.run({ inputs: {} });
+      expect(record.status).toBe("completed");
+      const skippableStep = record.steps.find((s) => s.nodeId === "skippable");
+      expect(skippableStep?.status).toBe("skipped");
+    });
+
+    it("executes node when incoming edge `when` condition is truthy", async () => {
+      const def: PipelineDefinition = {
+        id: "when-exec-test",
+        entry: ["a"],
+        nodes: [
+          { id: "a", type: "input" },
+          { id: "b", type: "transform", expression: "({ flag: true, confidence: 0.9 })" },
+          { id: "conditional", type: "transform", expression: "({ executed: true })" },
+          { id: "d", type: "output", path: "out", source: "conditional" },
+        ],
+        edges: [
+          { from: { node: "a" }, to: { node: "b" } },
+          { from: { node: "b" }, to: { node: "conditional" }, when: "artifacts.b.flag === true && artifacts.b.confidence >= 0.7" },
+          { from: { node: "conditional" }, to: { node: "d" } },
+        ],
+      };
+      const { MemoryRunStore } = await import("../src/run-store-memory.js");
+      const store = new MemoryRunStore();
+      const runner = new DeterministicRunner(def, { store });
+      const record = await runner.run({ inputs: {} });
+      expect(record.status).toBe("completed");
+      const conditionalStep = record.steps.find((s) => s.nodeId === "conditional");
+      expect(conditionalStep?.status).toBe("completed");
+    });
+
+    it("conditional branching routes compound idea to propose_split and focused idea to generate_idea directly", async () => {
+      // Simulates the flesh_out_idea branching pattern
+      const def: PipelineDefinition = {
+        id: "branching-test",
+        entry: ["start"],
+        nodes: [
+          { id: "start", type: "input" },
+          { id: "decomp", type: "transform", expression: "({ shouldSplit: true, confidence: 0.85, subIdeas: [{title: 'Sub A'}] })" },
+          { id: "propose_split", type: "transform", expression: "({ proposal: artifacts.decomp })" },
+          { id: "generate", type: "transform", expression: "({ generated: true })" },
+          { id: "out", type: "output", path: "result", source: "generate" },
+        ],
+        edges: [
+          { from: { node: "start" }, to: { node: "decomp" } },
+          { from: { node: "decomp" }, to: { node: "propose_split" }, when: "artifacts.decomp.shouldSplit === true && artifacts.decomp.confidence >= 0.7" },
+          { from: { node: "decomp" }, to: { node: "generate" }, when: "!(artifacts.decomp.shouldSplit === true && artifacts.decomp.confidence >= 0.7)" },
+          { from: { node: "propose_split" }, to: { node: "generate" } },
+          { from: { node: "generate" }, to: { node: "out" } },
+        ],
+      };
+      const { MemoryRunStore } = await import("../src/run-store-memory.js");
+      const store = new MemoryRunStore();
+      const runner = new DeterministicRunner(def, { store });
+      const record = await runner.run({ inputs: {} });
+      expect(record.status).toBe("completed");
+      // propose_split should have executed (compound idea)
+      expect(record.steps.find((s) => s.nodeId === "propose_split")?.status).toBe("completed");
+    });
+
+    it("conditional branching skips propose_split for focused idea", async () => {
+      const def: PipelineDefinition = {
+        id: "branching-skip-test",
+        entry: ["start"],
+        nodes: [
+          { id: "start", type: "input" },
+          { id: "decomp", type: "transform", expression: "({ shouldSplit: false, confidence: 0.3, subIdeas: [] })" },
+          { id: "propose_split", type: "transform", expression: "({ proposal: artifacts.decomp })" },
+          { id: "generate", type: "transform", expression: "({ generated: true })" },
+          { id: "out", type: "output", path: "result", source: "generate" },
+        ],
+        edges: [
+          { from: { node: "start" }, to: { node: "decomp" } },
+          { from: { node: "decomp" }, to: { node: "propose_split" }, when: "artifacts.decomp.shouldSplit === true && artifacts.decomp.confidence >= 0.7" },
+          { from: { node: "decomp" }, to: { node: "generate" }, when: "!(artifacts.decomp.shouldSplit === true && artifacts.decomp.confidence >= 0.7)" },
+          { from: { node: "propose_split" }, to: { node: "generate" } },
+          { from: { node: "generate" }, to: { node: "out" } },
+        ],
+      };
+      const { MemoryRunStore } = await import("../src/run-store-memory.js");
+      const store = new MemoryRunStore();
+      const runner = new DeterministicRunner(def, { store });
+      const record = await runner.run({ inputs: {} });
+      expect(record.status).toBe("completed");
+      // propose_split should be skipped (focused idea)
+      expect(record.steps.find((s) => s.nodeId === "propose_split")?.status).toBe("skipped");
+      // generate should still run
+      expect(record.steps.find((s) => s.nodeId === "generate")?.status).toBe("completed");
+    });
+
     it("enqueue node creates child runs and pauses parent until children complete", async () => {
       const parentDef: PipelineDefinition = {
         id: "parent-with-enqueue",

@@ -9,8 +9,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ActivityEvent } from "./types/activity.js";
+import { resolveStageConfig } from "./config.js";
 
-const DEFAULT_WINTERMUTE_URL = "http://localhost:3000";
+const DEFAULT_WINTERMUTE_URL = resolveStageConfig().wintermuteBaseUrl;
 const ACTIVITY_ENDPOINT = "/api/activity";
 const POST_TIMEOUT_MS = 3000;
 

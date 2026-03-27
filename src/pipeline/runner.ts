@@ -6,6 +6,7 @@ import type {
   AgentDefinition,
   SkillsRegistry,
   PipelineDefinition,
+  PipelineEdge,
   PipelineNode,
   PipelineRunRecord,
   PipelineRunStep,
@@ -21,6 +22,7 @@ import { executeNode } from "./executors/index.js";
 import type { AgentRunner } from "./executors/index.js";
 import { emitActivity, flushActivityBuffer } from "../activity-emitter.js";
 import type { ActivityEvent } from "../types/activity.js";
+import { evaluateExpression } from "../expression.js";
 
 export type RunContext = {
   inputs: Record<string, unknown>;
@@ -292,6 +294,7 @@ export class DeterministicRunner extends EventEmitter {
     flushActivityBuffer().catch(() => {});
 
     const steps = record.steps;
+    const skippedNodes = new Set<string>();
 
     for (let i = startIndex; i < order.length; i++) {
       const nodeId = order[i]!;
@@ -300,6 +303,21 @@ export class DeterministicRunner extends EventEmitter {
       const startedAt = Date.now();
 
       if (step.status === "completed" || step.status === "skipped") {
+        if (step.status === "skipped") skippedNodes.add(nodeId);
+        continue;
+      }
+
+      // Evaluate `when` conditions on incoming edges; skip if none are truthy.
+      if (!this.shouldExecuteNode(nodeId, context, skippedNodes)) {
+        step.status = "skipped";
+        step.startedAt = startedAt;
+        step.finishedAt = startedAt;
+        skippedNodes.add(nodeId);
+        record.updatedAt = Date.now();
+        await this.store.save(record);
+        if (!this.runnerOptions.quiet) {
+          console.log(`[${new Date(startedAt).toISOString()}] node.skipped ${nodeId} (${node.type}) — when condition not met`);
+        }
         continue;
       }
 
@@ -551,6 +569,51 @@ export class DeterministicRunner extends EventEmitter {
       ...(nodeId !== undefined && { nodeId }),
     };
     EventBus.getInstance().emitRunEvent(busEvent);
+  }
+
+  /**
+   * Evaluate whether a node should be executed based on `when` conditions on its
+   * incoming edges.  Rules:
+   *   - If NO incoming edge has a `when` clause, the node is reachable (return true).
+   *   - If at least one incoming edge has a truthy `when`, the node is reachable.
+   *   - If ALL incoming edges carry `when` clauses and none are truthy, skip (return false).
+   *   - Edges whose source node was skipped are ignored (treated as non-existent).
+   */
+  private shouldExecuteNode(
+    nodeId: string,
+    context: RunContext,
+    skippedNodes: Set<string>,
+  ): boolean {
+    const incomingEdges: PipelineEdge[] = this.definition.edges.filter(
+      (e) => e.to.node === nodeId && !skippedNodes.has(e.from.node),
+    );
+    // No incoming edges (entry node) — always execute.
+    if (incomingEdges.length === 0) return true;
+
+    const conditionalEdges = incomingEdges.filter((e) => e.when != null && e.when.trim() !== "");
+    const unconditionalEdges = incomingEdges.filter((e) => e.when == null || e.when.trim() === "");
+
+    // If there are any unconditional edges from non-skipped sources, always execute.
+    if (unconditionalEdges.length > 0) return true;
+    // No conditional edges at all — always execute.
+    if (conditionalEdges.length === 0) return true;
+
+    const evalContext: Record<string, unknown> = {
+      inputs: context.inputs,
+      artifacts: context.artifacts,
+      env: context.env,
+      ...context.artifacts,
+    };
+
+    for (const edge of conditionalEdges) {
+      try {
+        const result = evaluateExpression(edge.when!, evalContext);
+        if (result) return true;
+      } catch {
+        // Expression error → treat as falsy.
+      }
+    }
+    return false;
   }
 
   private artifactSize(value: unknown): number {
