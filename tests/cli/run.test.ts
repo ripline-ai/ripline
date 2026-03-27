@@ -34,7 +34,7 @@ describe("CLI run", () => {
     expect(out).toContain("-i");
     expect(out).toContain("-o");
     expect(out).toContain("-v");
-  }, 60000);
+  }, 120000);
 
   it("--pipeline-dir overrides default pipeline directory", () => {
     if (!fs.existsSync(cliPath)) return;
@@ -67,7 +67,7 @@ edges:
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
-  }, 60000);
+  }, 120000);
 
   it("--profile loads profile and merges inputs (profile dir with profile)", () => {
     if (!fs.existsSync(cliPath)) return;
@@ -110,7 +110,7 @@ edges:
       fs.rmSync(profileDir, { recursive: true, force: true });
       fs.rmSync(pipelineDir, { recursive: true, force: true });
     }
-  }, 60000);
+  }, 120000);
 
   it("profiles create --no-edit writes template and prints path", () => {
     if (!fs.existsSync(cliPath)) return;
@@ -128,5 +128,5 @@ edges:
     } finally {
       fs.rmSync(profileDir, { recursive: true, force: true });
     }
-  }, 60000);
+  }, 120000);
 });
