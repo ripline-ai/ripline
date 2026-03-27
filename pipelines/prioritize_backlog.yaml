@@ -88,6 +88,20 @@ nodes:
       ## Backlog Data
       {{ JSON.stringify(artifacts.parse_backlog) }}
 
+      ## Stability — Prefer Minimal Re-ordering
+      Items include a `lastRankedAt` timestamp and their current `priority` (rank).
+      **Only significantly re-order items whose inputs have materially changed** since
+      `lastRankedAt` — e.g., status changed, scores updated, dependencies added/resolved,
+      or the item is brand-new (no `lastRankedAt`).
+      For items whose relevant inputs are unchanged since last ranking, **preserve their
+      current relative order** unless a new/changed item must be inserted between them.
+      This ensures that running the pipeline twice with no underlying changes produces
+      an identical ordering.
+
+      Items with `priorityLocked: true` will be skipped by the write-back endpoint, but
+      you should still include them in the output at their current rank position so the
+      ordering is complete.
+
       ## Scoring Factors (weights)
       For each item, evaluate these factors on a 0-100 sub-scale then combine:
 
