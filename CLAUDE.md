@@ -50,7 +50,33 @@ Edges are always explicit. No implicit fall-through.
 
 Nodes can use `runner: claude-code` with `mode: plan` (read-only) or `mode: execute`. Configure `cwd` per node. Set `RIPLINE_LOG_CONFIG=1` to log runner config at startup.
 
-## HTTP API (port 4001)
+## Staging / Production
+
+The `STAGE` env var selects the environment. Unset defaults to production.
+
+| Stage | Port | Wintermute URL | Runs dir |
+|-------|------|----------------|----------|
+| production | 4001 | `http://localhost:3000` | `.ripline/runs/` |
+| staging | 4002 | `http://localhost:3001` | `.ripline/runs-staging/` |
+
+Both stages share the same pipeline definitions (`~/.ripline/pipelines`).
+
+**PM2 process names:** `ripline-prod` (watch off), `ripline-staging` (watch on — auto-restarts on code changes).
+
+See `~/ripline/ecosystem.config.js` for full PM2 config.
+
+### Targeting a stage
+
+```bash
+STAGE=staging node dist/cli/run.js serve    # Start staging server on :4002
+STAGE=production node dist/cli/run.js serve # Start production server on :4001 (default)
+```
+
+Pipelines automatically talk to the matching Wintermute instance based on stage.
+
+## HTTP API
+
+Default port: **4001** (production) / **4002** (staging).
 
 ```
 POST /pipelines/:id/runs     ← start a run
@@ -62,7 +88,15 @@ GET  /pipelines/metrics      ← Prometheus-style metrics
 
 ## Env vars
 
-`RIPLINE_AGENT_PROVIDER` (ollama/openai/anthropic), `RIPLINE_AGENT_MODEL`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `RIPLINE_RUNS_DIR`, `RIPLINE_LOG_CONFIG`
+| Variable | Purpose |
+|----------|---------|
+| `STAGE` | `production` (default) or `staging` — selects port and Wintermute URL |
+| `RIPLINE_AGENT_PROVIDER` | LLM provider: ollama / openai / anthropic |
+| `RIPLINE_AGENT_MODEL` | Model name for agent nodes |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `RIPLINE_RUNS_DIR` | Override runs directory |
+| `RIPLINE_LOG_CONFIG` | Set to `1` to log runner config at startup |
 
 ## Run data
 
@@ -74,6 +108,21 @@ Resume with `--resume <runId>`. Exit code 0 = success, non-zero = failure.
 ## Testing
 
 ```bash
-npm test          # Jest
-npm run check     # tsc
+npm test                        # Vitest — unit + integration tests
+npm run check                   # tsc type-check
 ```
+
+Key test files:
+- `tests/config-stage.test.ts` — validates stage config resolution (ports, URLs)
+- `tests/integration-staging.test.ts` — staging port 4002 and wintermuteBaseUrl
+
+### Promote workflow
+
+The promote script (`~/wintermute/bin/promote`) runs `npm test` in both `~/wintermute` and `~/ripline`. If all tests pass, it does a zero-downtime `pm2 reload` of `ripline-prod` and `wintermute-prod`.
+
+```bash
+~/wintermute/bin/promote            # Test then reload production
+~/wintermute/bin/promote --dry-run  # Test only, no reload
+```
+
+**Gate checks:** promote exits non-zero if any test suite fails — production is never reloaded on failure.
