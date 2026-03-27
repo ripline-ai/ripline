@@ -12,6 +12,7 @@ import { resolveSkillsDir } from "./config.js";
 import type { PipelineRunRecord } from "./types.js";
 import { PipelineRegistry } from "./registry.js";
 import { PipelineRunStore } from "./run-store.js";
+import { EventBus, type RunEvent } from "./event-bus.js";
 import { createRunQueue } from "./run-queue.js";
 import { createScheduler } from "./scheduler.js";
 import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "./log.js";
@@ -608,6 +609,42 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         }
       }, LOG_POLL_MS);
       request.raw.on("close", () => clearInterval(interval));
+    },
+  });
+
+  /** GET /events - global SSE stream of EventBus run events */
+  fastify.get<{
+    Querystring: { pipelineId?: string; status?: string };
+  }>("/events", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const { pipelineId, status } = request.query;
+
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+
+      const bus = EventBus.getInstance();
+
+      const listener = (evt: RunEvent) => {
+        if (pipelineId && evt.pipelineId !== pipelineId) return;
+        if (status && evt.status !== status) return;
+        reply.raw.write(`data: ${JSON.stringify(evt)}\n\n`);
+      };
+
+      bus.on("run-event", listener);
+
+      // Keepalive comment every 15 seconds
+      const keepalive = setInterval(() => {
+        reply.raw.write(": keepalive\n\n");
+      }, 15_000);
+
+      request.raw.on("close", () => {
+        bus.removeListener("run-event", listener);
+        clearInterval(keepalive);
+      });
     },
   });
 
