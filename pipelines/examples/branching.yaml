@@ -1,0 +1,176 @@
+# =============================================================================
+# Branching Demo Pipeline
+# =============================================================================
+#
+# This example exercises every branching feature in a single pipeline:
+#
+#   1. SWITCH NODE — routes by category (billing, support, or unknown)
+#   2. DEFAULT PATH — unrecognized categories fall through to "unknown" port
+#   3. ON_ERROR EDGE — agent failures route to a fallback transform
+#   4. LOOP WITH EXIT CONDITION — iterates support steps, exits early when done
+#
+# Run examples (via HTTP):
+#   Billing (happy):    {"inputs":{"category":"billing","task":"refund request"}}
+#   Billing (error):    agent runner throws → routed to error_fallback
+#   Support:            {"inputs":{"category":"support","items":["check_status","resolve_issue"]}}
+#   Support early exit: {"inputs":{"category":"support","items":["resolved","extra"]}}
+#   Unknown category:   {"inputs":{"category":"shipping","task":"where is my order?"}}
+# =============================================================================
+
+id: branching_demo
+name: Branching Demo Pipeline
+description: >
+  Demonstrates all first-class branching features working together:
+  switch routing, default paths, on_error handling, and loops with exit
+  conditions.
+
+entry: [intake]
+
+nodes:
+  # ---------------------------------------------------------------------------
+  # Entry point — accepts category, task, and optional items array
+  # ---------------------------------------------------------------------------
+  - id: intake
+    type: input
+    description: >
+      Provide: category (billing | support | <anything else>), task (string),
+      and optional items (array of strings for the support loop).
+
+  # ---------------------------------------------------------------------------
+  # PATTERN 1: Switch node — category-based routing
+  #
+  # The expression evaluates inputs.category and matches against declared case
+  # keys. Each case key becomes a port name used on outgoing edges.
+  # ---------------------------------------------------------------------------
+  - id: router
+    type: switch
+    expression: "inputs.category"
+    cases:
+      billing: {}     # port "billing"  — routes to billing_agent
+      support: {}     # port "support"  — routes to support_loop
+      unknown: {}     # port "unknown"  — catches everything else (via default)
+    # PATTERN 2: Default port — when the expression result doesn't match any
+    # case key, the switch activates this port instead of throwing an error.
+    default: unknown
+
+  # ---------------------------------------------------------------------------
+  # BILLING BRANCH — agent node with on_error fallback
+  # ---------------------------------------------------------------------------
+
+  # PATTERN 3: Agent node — may fail (timeout, API error, etc.)
+  - id: billing_agent
+    type: agent
+    prompt: "Handle this billing inquiry concisely: {{inputs.task}}"
+
+  # Fallback transform — activated ONLY when billing_agent errors.
+  # The on_error mechanism stores error details in artifacts.__error, which
+  # this node reads to produce a graceful fallback response.
+  - id: error_fallback
+    type: transform
+    expression: >
+      ({ text: 'We could not process your billing request automatically. Error: ' +
+         (artifacts.__error ? artifacts.__error.message : 'unknown') +
+         '. A support ticket has been created for follow-up.' })
+
+  # ---------------------------------------------------------------------------
+  # SUPPORT BRANCH — loop with exit condition
+  # ---------------------------------------------------------------------------
+
+  # PATTERN 4: Loop node — iterates over a collection with early exit.
+  #
+  # - collection: evaluates to an array (falls back to default steps)
+  # - itemVar: exposes current item as loop.step
+  # - exitCondition: checked AFTER each iteration; breaks when truthy
+  # - maxIterations: safety cap to prevent runaway loops
+  # - body: inline nodes executed each iteration
+  - id: support_loop
+    type: loop
+    collection: "inputs.items || ['check_status', 'verify_account', 'resolve_issue']"
+    itemVar: step
+    exitCondition: >
+      loop.step === 'resolved' ||
+      (loop.results.length > 0 && loop.results.some(function(r) { return r && r.done; }))
+    maxIterations: 10
+    body:
+      entry: [process_step]
+      nodes:
+        - id: process_step
+          type: transform
+          # Each iteration produces a result object. Setting done=true on
+          # 'resolve_issue' triggers the exit condition on the next check.
+          expression: >
+            ({ step: loop.step,
+               done: loop.step === 'resolve_issue',
+               message: 'Processed support step: ' + loop.step })
+
+  # ---------------------------------------------------------------------------
+  # DEFAULT / UNKNOWN BRANCH
+  # ---------------------------------------------------------------------------
+
+  # Handles any category not matched by the switch cases. Because the switch
+  # node's `default` field points to the "unknown" port, unrecognized values
+  # like "shipping" or "returns" land here.
+  - id: unknown_handler
+    type: transform
+    expression: >
+      ({ text: 'Unrecognized category: "' + (inputs.category || 'none') +
+         '". Valid categories are: billing, support.' })
+
+  # ---------------------------------------------------------------------------
+  # CONVERGENCE — all branches merge here
+  # ---------------------------------------------------------------------------
+
+  # Selects whichever branch produced a result. Only one branch is active per
+  # run, so at most one artifact will be present.
+  - id: format_response
+    type: transform
+    expression: >
+      artifacts.billing_agent
+        ? ({ source: 'billing', response: artifacts.billing_agent.text })
+        : artifacts.error_fallback
+          ? ({ source: 'billing_error', response: artifacts.error_fallback.text })
+          : artifacts.support_loop
+            ? ({ source: 'support',
+                 response: 'Completed ' + artifacts.support_loop.length + ' support steps',
+                 steps: artifacts.support_loop })
+            : artifacts.unknown_handler
+              ? ({ source: 'unknown', response: artifacts.unknown_handler.text })
+              : ({ source: 'none', response: 'No branch executed' })
+
+  - id: final_output
+    type: output
+    source: format_response
+    path: result
+
+edges:
+  # --- Entry to switch ---------------------------------------------------------
+  - { from: { node: intake }, to: { node: router } }
+
+  # --- Switch port routing -----------------------------------------------------
+  # Each edge's from.port must match a declared case key in the switch node.
+  - { from: { node: router, port: billing }, to: { node: billing_agent } }
+  - { from: { node: router, port: support }, to: { node: support_loop } }
+  - { from: { node: router, port: unknown }, to: { node: unknown_handler } }
+
+  # --- Billing happy path → convergence ----------------------------------------
+  - { from: { node: billing_agent }, to: { node: format_response } }
+
+  # --- PATTERN 3: on_error edge ------------------------------------------------
+  # When billing_agent throws, the runner stores the error in artifacts.__error
+  # and activates error_fallback instead of failing the entire run.
+  - { from: { node: billing_agent }, to: { node: error_fallback }, on_error: true }
+
+  # Guard edge: this conditional edge gives error_fallback a non-on_error
+  # incoming edge so the runner doesn't treat it as an entry node. It only
+  # evaluates to true when __error is present (i.e., when on_error fired).
+  - { from: { node: billing_agent }, to: { node: error_fallback }, when: "!!artifacts.__error" }
+
+  # Error fallback → convergence
+  - { from: { node: error_fallback }, to: { node: format_response } }
+
+  # --- Support and unknown → convergence ---------------------------------------
+  - { from: { node: support_loop }, to: { node: format_response } }
+  - { from: { node: unknown_handler }, to: { node: format_response } }
+
+  # --- Final output ------------------------------------------------------------
+  - { from: { node: format_response }, to: { node: final_output } }
