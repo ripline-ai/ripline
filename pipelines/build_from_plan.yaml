@@ -9,7 +9,8 @@
 #
 # Flow:
 #   intake → parse_plan → story_loop → write_tests → build_verify
-#          → reload_staging → verify_staging → patch_complete → promote → result
+#          → reload_staging → verify_staging → patch_complete
+#          → create_tech_debt_items → promote → result
 
 id: build_from_plan
 name: Build From Plan
@@ -254,6 +255,57 @@ nodes:
       "ERROR: PATCH failed with HTTP <status>: <body>" and stop.
       Otherwise output only the response JSON, nothing else.
 
+  # ── 7b. Create tech-debt follow-up items ─────────────────────────────────
+  # Reads the idea's techDebt field, parses each bullet into a separate idea,
+  # POSTs each to /api/ideas, and PATCHes the created IDs back to the source.
+  # No-ops gracefully if techDebt is empty; logs errors but never throws.
+  - id: create_tech_debt_items
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 180
+    prompt: |
+      Create tech-debt follow-up items from the source idea's techDebt field.
+
+      ## Source Idea
+      ID: {{idea_id}}
+      Title: {{idea_title}}
+      Project ID: {{project_id}}
+      Wintermute URL: {{wintermute_base_url}}
+
+      ## Instructions
+      1. Fetch the source idea to get its techDebt field:
+         curl -s {{wintermute_base_url}}/api/ideas/{{idea_id}}
+
+      2. Parse the techDebt field. It is a markdown string with bullet points.
+         Extract each bullet (lines starting with "- " or "* ") as a separate item.
+         If techDebt is empty, null, undefined, or has no bullet points, output
+         "No tech debt items to create — skipping." and stop. Do NOT error.
+
+      3. For each bullet, POST a new idea:
+         curl -s -X POST {{wintermute_base_url}}/api/ideas \
+           -H "Content-Type: application/json" \
+           -d '{
+             "title": "<short summary of the bullet>",
+             "description": "Tech debt from: {{idea_title}} ({{idea_id}})\n\n<full bullet text>",
+             "projectId": "{{project_id}}",
+             "tags": ["tech-debt", "auto-generated"]
+           }'
+
+         If a POST fails, log the error (output it) but continue to the next bullet.
+         Do NOT throw or exit early.
+
+      4. Collect the IDs of all successfully created ideas into an array.
+         If any were created, PATCH them back to the source idea:
+         curl -s -X PATCH {{wintermute_base_url}}/api/ideas/{{idea_id}} \
+           -H "Content-Type: application/json" \
+           -d '{"techDebtItemIds": ["<id1>", "<id2>", ...]}'
+
+      5. Output a summary: how many tech-debt items were created, their IDs,
+         and whether the PATCH succeeded. If none were created, say so.
+
   # ── 8. Promote to production ──────────────────────────────────────────────
   - id: promote
     type: agent
@@ -294,5 +346,6 @@ edges:
   - { from: { node: reload_staging },  to: { node: verify_staging } }
   - { from: { node: verify_staging },       to: { node: validate_build_output } }
   - { from: { node: validate_build_output }, to: { node: patch_complete } }
-  - { from: { node: patch_complete },        to: { node: promote } }
+  - { from: { node: patch_complete },        to: { node: create_tech_debt_items } }
+  - { from: { node: create_tech_debt_items }, to: { node: promote } }
   - { from: { node: promote },         to: { node: result } }
