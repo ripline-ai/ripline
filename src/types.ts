@@ -285,7 +285,7 @@ export type BackgroundQueueItem = {
   severityWeight: number;
   manualBoost: number;
   createdAt: number;
-  status: "pending" | "running" | "completed" | "errored";
+  status: "pending" | "running" | "completed" | "errored" | "failed";
   retries: number;
   maxRetries: number;
   needsReview: boolean;
