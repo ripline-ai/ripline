@@ -59,6 +59,8 @@ export type PipelinePluginConfig = {
   authToken?: string;
   /** Directory for run state (default .ripline/runs). Used by HTTP server. */
   runsDir?: string;
+  /** File path for the background queue YAML store (default ~/obsidian/Ops/queue.yaml). */
+  queueFilePath?: string;
 };
 
 export type NodeContract = {
@@ -70,6 +72,16 @@ export type NodeRetryConfig = {
   maxAttempts: number;
   delayMs?: number;
 };
+
+/** Pipeline-level retry policy for resuming failed runs. */
+export type RetryPolicy = {
+  maxAttempts: number;
+  backoffMs: number;
+  backoffMultiplier: number;
+  retryableCategories: ErrorCategory[];
+};
+
+export type ErrorCategory = "transient" | "permanent" | "unknown";
 
 export type ClaudeCodeAgentDefinition = {
   runner: "claude-code";
@@ -246,6 +258,8 @@ export type PipelineDefinition = {
   metadata?: Record<string, unknown>;
   /** Named queue this pipeline belongs to. Defaults to "default". */
   queue?: string;
+  /** Pipeline-level retry policy for automatic run resumption on failure. */
+  retry?: RetryPolicy;
 };
 
 export type PipelineRegistryEntry = {
@@ -268,6 +282,8 @@ export type PipelineRunStep = {
   finishedAt?: number;
   data?: unknown;
   error?: string;
+  /** Classification of the error for retry decisions. */
+  errorCategory?: ErrorCategory;
   iteration?: number;
 };
 
@@ -332,6 +348,10 @@ export type PipelineRunRecord = {
   };
   steps: PipelineRunStep[];
   error?: string;
+  /** Number of times this run has been retried. */
+  retryCount?: number;
+  /** Retry policy governing automatic resumption of this run. */
+  retryPolicy?: RetryPolicy;
   /** Optional webhook URL to receive push notifications on run completion/error. */
   webhook_url?: string;
 };
