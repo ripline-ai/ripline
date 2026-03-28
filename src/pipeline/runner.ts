@@ -24,6 +24,7 @@ import { emitActivity, flushActivityBuffer } from "../activity-emitter.js";
 import type { ActivityEvent } from "../types/activity.js";
 import { evaluateExpression } from "../expression.js";
 import { HttpResponseError, computeBackoffMs } from "../lib/http-response-guard.js";
+import { classifyError } from "./error-classifier.js";
 
 export type RunContext = {
   inputs: Record<string, unknown>;
@@ -500,6 +501,7 @@ export class DeterministicRunner extends EventEmitter {
         step.status = "errored";
         step.finishedAt = finishedAt;
         step.error = err instanceof Error ? err.message : String(err);
+        step.errorCategory = classifyError(err);
         await this.store.updateCursor(record, {
           nextNodeIndex: i,
           context: {
