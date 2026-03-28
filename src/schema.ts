@@ -3,6 +3,7 @@ import type {
   LoopBody,
   PipelineDefinition,
   PipelineNode,
+  SwitchNode,
 } from "./types.js";
 
 const jsonSchema = z.record(z.string(), z.any());
@@ -136,6 +137,13 @@ const loopNode = baseNode.extend({
   body: loopBodySchema,
 });
 
+const switchNode = baseNode.extend({
+  type: z.literal("switch"),
+  expression: z.string().min(1),
+  cases: z.record(z.string().min(1), z.object({}).passthrough()),
+  default: z.string().optional(),
+});
+
 const checkpointNode = baseNode.extend({
   type: z.literal("checkpoint"),
   reason: z.string().optional(),
@@ -168,6 +176,7 @@ const nodeSchema = z.lazy(() =>
     agentNode,
     runPipelineNode,
     loopNode,
+    switchNode,
     checkpointNode,
     outputNode,
     enqueueNode,
@@ -203,6 +212,8 @@ const edgeSchema = z.object({
   from: z.object({ node: z.string().min(1), port: z.string().optional() }),
   to: z.object({ node: z.string().min(1), port: z.string().optional() }),
   when: z.string().optional(),
+  default: z.boolean().optional(),
+  on_error: z.boolean().optional(),
 });
 
 const retryPolicySchema = z.object({
@@ -257,7 +268,13 @@ export const pipelineDefinitionSchema = z
         });
       }
     }
-    for (const edge of value.edges) {
+    // Build a map of node id → node for lookups.
+    const nodeMap = new Map(value.nodes.map((n) => [n.id, n]));
+
+    const defaultEdgeSources = new Set<string>();
+    const onErrorEdgeSources = new Set<string>();
+
+    for (const [i, edge] of value.edges.entries()) {
       if (!nodeIds.has(edge.from.node)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -269,6 +286,43 @@ export const pipelineDefinitionSchema = z
           code: z.ZodIssueCode.custom,
           message: `edge.to missing node ${edge.to.node}`,
         });
+      }
+
+      // Validate that from.port on edges from switch nodes matches a declared case key.
+      const sourceNode = nodeMap.get(edge.from.node);
+      if (sourceNode && sourceNode.type === "switch" && edge.from.port) {
+        const caseKeys = Object.keys((sourceNode as SwitchNode).cases);
+        if (!caseKeys.includes(edge.from.port)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `edge from switch node "${edge.from.node}" has port "${edge.from.port}" which does not match any case key (${caseKeys.join(", ")})`,
+            path: ["edges", i, "from", "port"],
+          });
+        }
+      }
+
+      // Validate at most one default edge per source node.
+      if (edge.default) {
+        if (defaultEdgeSources.has(edge.from.node)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `multiple default edges from node "${edge.from.node}"`,
+            path: ["edges", i],
+          });
+        }
+        defaultEdgeSources.add(edge.from.node);
+      }
+
+      // Validate at most one on_error edge per source node.
+      if (edge.on_error) {
+        if (onErrorEdgeSources.has(edge.from.node)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `multiple on_error edges from node "${edge.from.node}"`,
+            path: ["edges", i],
+          });
+        }
+        onErrorEdgeSources.add(edge.from.node);
       }
     }
   }) as z.ZodType<PipelineDefinition>;

@@ -185,6 +185,13 @@ export type LoopBody = {
   edges?: PipelineEdge[];
 };
 
+export type SwitchNode = NodeBase & {
+  type: "switch";
+  expression: string;
+  cases: Record<string, object>;
+  default?: string;
+};
+
 export type CheckpointNode = NodeBase & {
   type: "checkpoint";
   reason?: string;
@@ -228,6 +235,7 @@ export type PipelineNode =
   | AgentNode
   | RunPipelineNode
   | LoopNode
+  | SwitchNode
   | CheckpointNode
   | OutputNode
   | EnqueueNode
@@ -238,6 +246,8 @@ export type PipelineEdge = {
   from: { node: string; port?: string };
   to: { node: string; port?: string };
   when?: string;
+  default?: boolean;
+  on_error?: boolean;
 };
 
 export type PipelineContracts = {
