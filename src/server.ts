@@ -15,6 +15,8 @@ import { PipelineRunStore } from "./run-store.js";
 import { EventBus, type RunEvent } from "./event-bus.js";
 import { createRunQueue } from "./run-queue.js";
 import { createScheduler } from "./scheduler.js";
+import { BackgroundQueue } from "./background-queue.js";
+import { loadUserConfig } from "./config.js";
 import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
@@ -656,6 +658,179 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         bus.removeListener("run-event", listener);
         clearInterval(keepalive);
       });
+    },
+  });
+
+  // ─── Background Queue endpoints ───────────────────────────
+
+  const userConfig = loadUserConfig();
+  const bgQueue = new BackgroundQueue({
+    maxRetries: userConfig.backgroundQueue?.maxRetries ?? 5,
+  });
+
+  /** GET /queue - list all items sorted by computed priority score descending */
+  fastify.get("/queue", {
+    preHandler: requireAuth,
+    handler: async (_request, reply) => {
+      const items = bgQueue.list().map((item) => ({
+        ...item,
+        computedPriority: bgQueue.computePriority(item),
+      }));
+      items.sort((a, b) => b.computedPriority - a.computedPriority);
+      return reply.send({ items });
+    },
+  });
+
+  /** GET /queue/approved - return only pending items sorted by priority */
+  fastify.get("/queue/approved", {
+    preHandler: requireAuth,
+    handler: async (_request, reply) => {
+      const items = bgQueue
+        .list()
+        .filter((item) => item.status === "pending")
+        .map((item) => ({
+          ...item,
+          computedPriority: bgQueue.computePriority(item),
+        }));
+      items.sort((a, b) => b.computedPriority - a.computedPriority);
+      return reply.send({ items });
+    },
+  });
+
+  /** POST /queue - add a new item with validation */
+  fastify.post<{
+    Body: {
+      pipeline?: string;
+      inputs?: Record<string, unknown>;
+      severityWeight?: number;
+      manualBoost?: number;
+      maxRetries?: number;
+    };
+  }>("/queue", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const body = (request.body as Record<string, unknown>) ?? {};
+      if (!body.pipeline || typeof body.pipeline !== "string" || !body.pipeline.trim()) {
+        return reply.status(400).send({ error: "Bad Request", message: "pipeline is required and must be a non-empty string" });
+      }
+      if (body.inputs !== undefined && (typeof body.inputs !== "object" || body.inputs === null || Array.isArray(body.inputs))) {
+        return reply.status(400).send({ error: "Bad Request", message: "inputs must be an object" });
+      }
+      if (body.severityWeight !== undefined && typeof body.severityWeight !== "number") {
+        return reply.status(400).send({ error: "Bad Request", message: "severityWeight must be a number" });
+      }
+      if (body.manualBoost !== undefined && typeof body.manualBoost !== "number") {
+        return reply.status(400).send({ error: "Bad Request", message: "manualBoost must be a number" });
+      }
+      if (body.maxRetries !== undefined && typeof body.maxRetries !== "number") {
+        return reply.status(400).send({ error: "Bad Request", message: "maxRetries must be a number" });
+      }
+
+      const addOpts: Parameters<typeof bgQueue.add>[0] = {
+        pipeline: (body.pipeline as string).trim(),
+      };
+      if (body.inputs !== undefined) addOpts.inputs = body.inputs as Record<string, unknown>;
+      if (typeof body.severityWeight === "number") addOpts.severityWeight = body.severityWeight;
+      if (typeof body.manualBoost === "number") addOpts.manualBoost = body.manualBoost;
+      if (typeof body.maxRetries === "number") addOpts.maxRetries = body.maxRetries;
+      const id = bgQueue.add(addOpts);
+      const item = bgQueue.get(id);
+      return reply.status(201).send(item);
+    },
+  });
+
+  /** PATCH /queue/:id - update allowed fields */
+  fastify.patch<{
+    Params: { id: string };
+    Body: {
+      priority?: number;
+      manualBoost?: number;
+      status?: string;
+      severityWeight?: number;
+    };
+  }>("/queue/:id", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const existing = bgQueue.get(request.params.id);
+      if (!existing) {
+        return reply.status(404).send({ error: "Not Found", message: `Queue item ${request.params.id} not found` });
+      }
+      const body = (request.body as Record<string, unknown>) ?? {};
+      const patch: Record<string, unknown> = {};
+      if (body.priority !== undefined) {
+        if (typeof body.priority !== "number") {
+          return reply.status(400).send({ error: "Bad Request", message: "priority must be a number" });
+        }
+        patch.priority = body.priority;
+      }
+      if (body.manualBoost !== undefined) {
+        if (typeof body.manualBoost !== "number") {
+          return reply.status(400).send({ error: "Bad Request", message: "manualBoost must be a number" });
+        }
+        patch.manualBoost = body.manualBoost;
+      }
+      if (body.severityWeight !== undefined) {
+        if (typeof body.severityWeight !== "number") {
+          return reply.status(400).send({ error: "Bad Request", message: "severityWeight must be a number" });
+        }
+        patch.severityWeight = body.severityWeight;
+      }
+      if (body.status !== undefined) {
+        const validStatuses = ["pending", "running", "completed", "errored", "failed"];
+        if (typeof body.status !== "string" || !validStatuses.includes(body.status)) {
+          return reply.status(400).send({ error: "Bad Request", message: `status must be one of: ${validStatuses.join(", ")}` });
+        }
+        patch.status = body.status;
+      }
+      const updated = bgQueue.update(request.params.id, patch);
+      return reply.send(updated);
+    },
+  });
+
+  /** DELETE /queue/:id - remove an item */
+  fastify.delete<{ Params: { id: string } }>("/queue/:id", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const removed = bgQueue.remove(request.params.id);
+      if (!removed) {
+        return reply.status(404).send({ error: "Not Found", message: `Queue item ${request.params.id} not found` });
+      }
+      return reply.status(204).send();
+    },
+  });
+
+  /** PUT /config/background-queue - toggle backgroundQueue.enabled at runtime and persist */
+  fastify.put<{ Body: { enabled?: boolean } }>("/config/background-queue", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const body = (request.body as Record<string, unknown>) ?? {};
+      if (typeof body.enabled !== "boolean") {
+        return reply.status(400).send({ error: "Bad Request", message: "enabled is required and must be a boolean" });
+      }
+      const configPath = path.join(
+        process.env.HOME ?? path.resolve("."),
+        ".ripline",
+        "config.json",
+      );
+      let existing: Record<string, unknown> = {};
+      try {
+        const raw = await fs.readFile(configPath, "utf-8");
+        existing = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        // file missing or invalid — start fresh
+      }
+      const bgBlock =
+        existing.backgroundQueue && typeof existing.backgroundQueue === "object"
+          ? { ...(existing.backgroundQueue as Record<string, unknown>) }
+          : {};
+      bgBlock.enabled = body.enabled;
+      existing.backgroundQueue = bgBlock;
+
+      const dir = path.dirname(configPath);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
+
+      return reply.send({ backgroundQueue: bgBlock });
     },
   });
 
