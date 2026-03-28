@@ -66,7 +66,7 @@ function computeRetryBackoff(retryCount: number, backoffMs: number, backoffMulti
 function getFailedStepErrorCategory(record: import("./types.js").PipelineRunRecord): ErrorCategory | undefined {
   // Walk steps in reverse to find the most recent errored step
   for (let i = record.steps.length - 1; i >= 0; i--) {
-    const step = record.steps[i];
+    const step = record.steps[i]!;
     if (step.status === "errored") {
       return step.errorCategory;
     }
@@ -126,7 +126,7 @@ async function attemptAutoRetry(
   freshRecord.retryCount = currentRetryCount + 1;
   freshRecord.retryPolicy = retryPolicy;
   freshRecord.status = "pending";
-  freshRecord.error = undefined;
+  delete freshRecord.error;
   await store.save(freshRecord);
 
   // Emit auto-retry event
