@@ -23,6 +23,8 @@ import type { AgentRunner } from "./pipeline/executors/agent.js";
 import { loadAgentDefinitionsFromFile, loadSkillsRegistryFromFile } from "./agent-runner-config.js";
 import { listProfiles, loadProfile } from "./profiles.js";
 import { WebhookDispatcher } from "./webhook-dispatcher.js";
+import { AutoExecutor } from "./auto-executor.js";
+import { createTelegramNotifier } from "./telegram.js";
 import YAML from "yaml";
 
 const DEFAULT_RUNS_DIR = ".ripline/runs";
@@ -293,8 +295,9 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     });
   }
 
-  /** Hook close to stop scheduler and webhook dispatcher */
+  /** Hook close to stop scheduler, webhook dispatcher, and auto-executor */
   fastify.addHook("onClose", async () => {
+    autoExecutor.disable();
     if (scheduler) scheduler.stop();
     webhookDispatcher.stop();
   });
@@ -799,6 +802,20 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     },
   });
 
+  // ─── AutoExecutor setup ───────────────────────────────────
+  const telegramNotifier = createTelegramNotifier(userConfig.telegram);
+  const autoExecutor = new AutoExecutor({
+    backgroundQueue: bgQueue,
+    runQueue: queue,
+    store,
+    telegram: telegramNotifier,
+  });
+
+  // Enable on boot if config says so
+  if (userConfig.backgroundQueue?.enabled) {
+    autoExecutor.enable();
+  }
+
   /** PUT /config/background-queue - toggle backgroundQueue.enabled at runtime and persist */
   fastify.put<{ Body: { enabled?: boolean } }>("/config/background-queue", {
     preHandler: requireAuth,
@@ -829,6 +846,13 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       const dir = path.dirname(configPath);
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
+
+      // Toggle AutoExecutor at runtime
+      if (body.enabled) {
+        autoExecutor.enable();
+      } else {
+        autoExecutor.disable();
+      }
 
       return reply.send({ backgroundQueue: bgBlock });
     },
