@@ -5,6 +5,7 @@
 #   task           — topic or focus area for idea generation (optional)
 #   projectName    — name of the project to generate ideas for (optional)
 #   projectContext — README or other context about the project (optional)
+#   focusAreaId    — optional Focus Area ID; when provided, scopes generation to that area
 
 id: ideation
 name: Ideation
@@ -14,6 +15,49 @@ nodes:
   - id: intake
     type: input
 
+  # ── Fetch Focus Area (only when focusAreaId is provided) ──────────────
+  - id: fetch_focus_area
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 30
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
+
+      curl -s http://localhost:4001/api/focus-areas/{{focusAreaId}}
+
+  - id: parse_focus_area
+    type: transform
+    expression: |
+      (function(text) {
+        var t = text.trim();
+        var start = t.indexOf('{');
+        var end = t.lastIndexOf('}');
+        if (start !== -1 && end !== -1 && end > start) {
+          try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {}
+        }
+        var m = t.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        return JSON.parse(m ? m[1].trim() : t);
+      })(artifacts.fetch_focus_area.text)
+
+  # ── Build Focus Area context string (runs on both paths) ─────────────
+  - id: build_focus_context
+    type: transform
+    expression: |
+      (function() {
+        var fa = artifacts.parse_focus_area;
+        if (fa && fa.name) {
+          var scope = '\n## Focus Area Scope\nName: ' + fa.name;
+          if (fa.description) scope += '\nDescription: ' + fa.description;
+          scope += '\n\nAll generated ideas MUST be relevant to this Focus Area.';
+          var outputNote = '- "focusAreaId": "' + fa.id + '" (include this exact value in every idea)';
+          return { scopeText: scope, outputNote: outputNote, focusAreaId: fa.id };
+        }
+        return { scopeText: '', outputNote: '', focusAreaId: '' };
+      })()
+
   - id: generate
     type: agent
     runner: claude-code
@@ -22,16 +66,10 @@ nodes:
     prompt: |
       You are a senior product and engineering thinker. Generate a list of 6-8 concrete, actionable feature ideas.
 
-      {{#if projectName}}
       Project: {{projectName}}
-      {{/if}}
-      {{#if projectContext}}
-      Project context:
-      {{projectContext}}
-      {{/if}}
-      {{#if task}}
-      Focus area: {{task}}
-      {{/if}}
+      Project context: {{projectContext}}
+      Topic: {{task}}
+      {{build_focus_context.scopeText}}
 
       Generate ideas that are:
       - Specific and implementable (not vague)
@@ -42,6 +80,7 @@ nodes:
       Output ONLY a JSON array with no markdown fencing. Each item must have:
       - "title": short, specific title (max 8 words)
       - "description": 1-2 sentence summary of what the idea is
+      {{build_focus_context.outputNote}}
 
       Example format:
       [
@@ -54,5 +93,16 @@ nodes:
     source: generate
 
 edges:
-  - { from: { node: intake },   to: { node: generate } }
+  # Path A: focusAreaId provided — fetch and parse it first
+  - from: { node: intake }
+    to: { node: fetch_focus_area }
+    when: "inputs.focusAreaId"
+  - { from: { node: fetch_focus_area }, to: { node: parse_focus_area } }
+  - { from: { node: parse_focus_area }, to: { node: build_focus_context } }
+  # Path B: no focusAreaId — skip straight to context builder
+  - from: { node: intake }
+    to: { node: build_focus_context }
+    when: "!inputs.focusAreaId"
+  # Converge both paths
+  - { from: { node: build_focus_context }, to: { node: generate } }
   - { from: { node: generate }, to: { node: result } }
