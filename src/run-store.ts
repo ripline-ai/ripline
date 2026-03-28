@@ -50,6 +50,16 @@ export interface RunStore {
    * Returns the number of runs recovered.
    */
   recoverStaleRuns(): Promise<number>;
+  /**
+   * Atomically increment the retryCount for a run.
+   * Returns the new retryCount value.
+   */
+  incrementRetryCount(runId: string): Promise<number>;
+  /**
+   * Reset a run for retry: sets status to "pending", removes claim lock,
+   * and optionally resets retryCount to 0 (for manual retries).
+   */
+  resetForRetry(runId: string, options?: { resetCount?: boolean }): Promise<void>;
 }
 
 export class PipelineRunStore implements RunStore {
@@ -190,5 +200,48 @@ export class PipelineRunStore implements RunStore {
       await this.save(record);
     }
     return running.length;
+  }
+
+  async incrementRetryCount(runId: string): Promise<number> {
+    const lockPath = path.join(this.runDir(runId), "claim.lock");
+    let fd: fs.FileHandle | null = null;
+    try {
+      fd = await fs.open(lockPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL);
+      await fd.close();
+      fd = null;
+      const record = await this.load(runId);
+      if (!record) {
+        await fs.unlink(lockPath).catch(() => {});
+        throw new Error(`Run not found: ${runId}`);
+      }
+      record.retryCount = (record.retryCount ?? 0) + 1;
+      await this.save(record);
+      await fs.unlink(lockPath).catch(() => {});
+      return record.retryCount;
+    } catch (err) {
+      if (fd) await fd.close().catch(() => {});
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        // Another process holds the lock — wait briefly and retry
+        await new Promise((r) => setTimeout(r, 50));
+        return this.incrementRetryCount(runId);
+      }
+      throw err;
+    }
+  }
+
+  async resetForRetry(runId: string, options?: { resetCount?: boolean }): Promise<void> {
+    const lockPath = path.join(this.runDir(runId), "claim.lock");
+    const record = await this.load(runId);
+    if (!record) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    record.status = "pending";
+    delete record.error;
+    if (options?.resetCount) {
+      record.retryCount = 0;
+    }
+    await this.save(record);
+    // Remove claim lock if it exists (from a crashed/errored run)
+    await fs.unlink(lockPath).catch(() => {});
   }
 }

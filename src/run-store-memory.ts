@@ -98,4 +98,23 @@ export class MemoryRunStore implements RunStore {
     }
     return recovered;
   }
+
+  async incrementRetryCount(runId: string): Promise<number> {
+    const record = this.records.get(runId);
+    if (!record) throw new Error(`Run not found: ${runId}`);
+    record.retryCount = (record.retryCount ?? 0) + 1;
+    record.updatedAt = Date.now();
+    return record.retryCount;
+  }
+
+  async resetForRetry(runId: string, options?: { resetCount?: boolean }): Promise<void> {
+    const record = this.records.get(runId);
+    if (!record) throw new Error(`Run not found: ${runId}`);
+    record.status = "pending";
+    delete record.error;
+    if (options?.resetCount) {
+      record.retryCount = 0;
+    }
+    record.updatedAt = Date.now();
+  }
 }
