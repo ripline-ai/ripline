@@ -297,6 +297,8 @@ export class DeterministicRunner extends EventEmitter {
 
     const steps = record.steps;
     const skippedNodes = new Set<string>();
+    /** Nodes activated via on_error edge routing (execute even if only on_error edges point to them). */
+    const errorActivatedNodes = new Set<string>();
 
     for (let i = startIndex; i < order.length; i++) {
       const nodeId = order[i]!;
@@ -310,7 +312,7 @@ export class DeterministicRunner extends EventEmitter {
       }
 
       // Evaluate `when` conditions on incoming edges; skip if none are truthy.
-      if (!this.shouldExecuteNode(nodeId, context, skippedNodes)) {
+      if (!this.shouldExecuteNode(nodeId, context, skippedNodes, errorActivatedNodes)) {
         step.status = "skipped";
         step.startedAt = startedAt;
         step.finishedAt = startedAt;
@@ -502,34 +504,70 @@ export class DeterministicRunner extends EventEmitter {
         step.finishedAt = finishedAt;
         step.error = err instanceof Error ? err.message : String(err);
         step.errorCategory = classifyError(err);
-        await this.store.updateCursor(record, {
-          nextNodeIndex: i,
-          context: {
-            inputs: context.inputs,
-            artifacts: context.artifacts,
-            outputs: context.outputs,
-            ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
-          },
-        });
-        await this.store.failRun(record, step.error);
-        const erroredEvent = {
-          nodeId,
-          nodeType: node.type,
-          at: finishedAt,
-          error: step.error,
-        } as NodeErroredEvent;
-        this.emit("node.errored", erroredEvent);
-        this.emitBusEvent("node.errored", record, nodeId);
-        this.emitBusEvent("run.errored", record);
-        this.emitActivityEvent(
-          record.id, nodeId, node.name, "node_error", "error",
-          `Node ${node.name ?? nodeId} (${node.type}) errored`,
-          { error: step.error },
+
+        // Check for outgoing on_error edge from this node.
+        const onErrorEdge = this.definition.edges.find(
+          (e) => e.from.node === nodeId && e.on_error === true,
         );
-        if (!this.runnerOptions.quiet) {
-          console.error(`[${new Date(finishedAt).toISOString()}] node.errored ${nodeId} (${node.type}) ${step.error}`);
+
+        if (onErrorEdge) {
+          // Error edge routing: store error details in artifacts and continue
+          // execution to the error edge target instead of failing the run.
+          context.artifacts.__error = {
+            message: err instanceof Error ? err.message : String(err),
+            nodeId,
+            stack: err instanceof Error ? err.stack : undefined,
+          };
+          errorActivatedNodes.add(onErrorEdge.to.node);
+
+          const erroredEvent = {
+            nodeId,
+            nodeType: node.type,
+            at: finishedAt,
+            error: step.error,
+          } as NodeErroredEvent;
+          this.emit("node.errored", erroredEvent);
+          this.emitBusEvent("node.errored", record, nodeId);
+          this.emitActivityEvent(
+            record.id, nodeId, node.name, "node_error", "error",
+            `Node ${node.name ?? nodeId} (${node.type}) errored — routing to ${onErrorEdge.to.node}`,
+            { error: step.error },
+          );
+          if (!this.runnerOptions.quiet) {
+            console.error(`[${new Date(finishedAt).toISOString()}] node.errored ${nodeId} (${node.type}) ${step.error} — on_error → ${onErrorEdge.to.node}`);
+          }
+          // Continue execution; do NOT throw or fail the run.
+        } else {
+          // No on_error edge: preserve original fail-fast behavior.
+          await this.store.updateCursor(record, {
+            nextNodeIndex: i,
+            context: {
+              inputs: context.inputs,
+              artifacts: context.artifacts,
+              outputs: context.outputs,
+              ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
+            },
+          });
+          await this.store.failRun(record, step.error);
+          const erroredEvent = {
+            nodeId,
+            nodeType: node.type,
+            at: finishedAt,
+            error: step.error,
+          } as NodeErroredEvent;
+          this.emit("node.errored", erroredEvent);
+          this.emitBusEvent("node.errored", record, nodeId);
+          this.emitBusEvent("run.errored", record);
+          this.emitActivityEvent(
+            record.id, nodeId, node.name, "node_error", "error",
+            `Node ${node.name ?? nodeId} (${node.type}) errored`,
+            { error: step.error },
+          );
+          if (!this.runnerOptions.quiet) {
+            console.error(`[${new Date(finishedAt).toISOString()}] node.errored ${nodeId} (${node.type}) ${step.error}`);
+          }
+          throw err;
         }
-        throw err;
       }
 
       record.updatedAt = Date.now();
@@ -615,10 +653,15 @@ export class DeterministicRunner extends EventEmitter {
     nodeId: string,
     context: RunContext,
     skippedNodes: Set<string>,
+    errorActivatedNodes?: Set<string>,
   ): boolean {
-    // Start with edges from non-skipped sources.
+    // If this node was explicitly activated via an on_error edge, execute it.
+    if (errorActivatedNodes?.has(nodeId)) return true;
+
+    // Start with edges from non-skipped sources, excluding on_error edges
+    // (those only fire when explicitly activated above).
     let incomingEdges: PipelineEdge[] = this.definition.edges.filter(
-      (e) => e.to.node === nodeId && !skippedNodes.has(e.from.node),
+      (e) => e.to.node === nodeId && !skippedNodes.has(e.from.node) && !e.on_error,
     );
 
     // Port-based routing: filter out edges from switch nodes where the port
@@ -640,7 +683,7 @@ export class DeterministicRunner extends EventEmitter {
       // If there were edges before filtering but none survived, the node should
       // only execute if it also has at least one non-port-based active edge.
       const allEdgesToNode = this.definition.edges.filter(
-        (e) => e.to.node === nodeId,
+        (e) => e.to.node === nodeId && !e.on_error,
       );
       // True entry node (no incoming edges defined at all) — always execute.
       if (allEdgesToNode.length === 0) return true;
