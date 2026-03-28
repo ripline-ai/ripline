@@ -816,6 +816,14 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     autoExecutor.enable();
   }
 
+  /** GET /config/background-queue - return current enabled state */
+  fastify.get("/config/background-queue", {
+    preHandler: requireAuth,
+    handler: async (_request, reply) => {
+      return reply.send({ enabled: autoExecutor.isEnabled() });
+    },
+  });
+
   /** PUT /config/background-queue - toggle backgroundQueue.enabled at runtime and persist */
   fastify.put<{ Body: { enabled?: boolean } }>("/config/background-queue", {
     preHandler: requireAuth,

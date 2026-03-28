@@ -105,6 +105,55 @@ GET  /pipelines/metrics      ← Prometheus-style metrics
 
 Resume with `--resume <runId>`. Exit code 0 = success, non-zero = failure.
 
+## Background Queue & Auto-Execution
+
+Sequential background pipeline execution with priority scoring and circuit-breaker retry logic.
+
+### Key files
+
+```
+src/background-queue.ts   ← YAML-persisted queue with priority scoring + circuit breaker
+src/auto-executor.ts      ← Sequential dispatcher, listens to EventBus for run completions
+src/telegram.ts           ← Telegram Bot API notifications (run_started/completed/failed)
+src/config.ts             ← loadUserConfig() reads backgroundQueue + telegram from ~/.ripline/config.json
+src/types.ts              ← BackgroundQueueItem, BackgroundQueueConfig, TelegramConfig, RunSource
+```
+
+### Config (`~/.ripline/config.json`)
+
+```json
+{
+  "backgroundQueue": { "enabled": false, "maxRetries": 3 },
+  "telegram": { "botToken": "...", "chatId": "..." }
+}
+```
+
+### REST endpoints
+
+```
+GET    /queue                      ← All items (with computedPriority), sorted desc
+GET    /queue/approved             ← Pending items only, sorted by priority
+POST   /queue                      ← Add item (pipeline required)
+PATCH  /queue/:id                  ← Update priority/manualBoost/severityWeight/status
+DELETE /queue/:id                  ← Remove item
+PUT    /config/background-queue    ← Toggle { enabled: bool }, persists to config.json
+GET    /config/background-queue    ← Current enabled state
+```
+
+### Priority formula
+
+`score = severityWeight + ageInHours × 0.5 + manualBoost`
+
+### Circuit breaker
+
+On error: retries++ → if retries >= maxRetries, status = `failed`, needsReview = true. Otherwise status returns to `pending` for re-dispatch.
+
+### Wintermute UI
+
+- `BackgroundQueueToggle` — ON/OFF switch for auto-dispatch
+- `ApprovalPanel` — Two-panel: needs-approval items + approved/pending items
+- `QueueViewer` — Full queue table with status badges, priority, age, retry count
+
 ## Testing
 
 ```bash

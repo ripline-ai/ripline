@@ -370,6 +370,120 @@ To keep continuity across nodes (e.g. a multi-turn conversation flow), set `rese
 
 ---
 
+## Background Queue & Auto-Execution
+
+Ripline includes a priority-based background queue that automatically executes pipeline runs sequentially. Items are persisted to a YAML file and scored with a time-decaying priority formula. When auto-dispatch is enabled, the **AutoExecutor** pops the highest-priority pending item, runs it via `source: 'background'`, and dispatches the next item only after the current one completes or fails.
+
+### How it works
+
+1. **Enqueue** items via `POST /queue` with a pipeline ID, optional inputs, and priority weights.
+2. **Enable auto-dispatch** via `PUT /config/background-queue` with `{ "enabled": true }`.
+3. The AutoExecutor dispatches items one at a time (sequential execution). The next item is dispatched only after the current run completes or errors.
+4. **Circuit breaker:** If a run errors, the item is retried (status returns to `pending`). After `maxRetries` failures the item is marked `failed` with `needsReview: true` and no further retries occur.
+5. **Telegram notifications** are sent for `run_started`, `run_completed`, and `run_failed` events (when configured).
+
+### Priority scoring
+
+```
+score = severityWeight + (ageInHours × 0.5) + manualBoost
+```
+
+- `severityWeight` (default: 1) — base weight for the item
+- `manualBoost` (default: 0) — user-adjustable priority bump
+- Age-based decay: older items naturally rise in priority at 0.5 points per hour
+
+### Configuration
+
+All background-queue settings live in `~/.ripline/config.json`:
+
+```jsonc
+{
+  "backgroundQueue": {
+    "enabled": false,   // Whether auto-dispatch starts on boot (default: false)
+    "maxRetries": 3     // Circuit-breaker retry limit (default: 3 in config loader, 5 in constructor fallback)
+  },
+  "telegram": {
+    "botToken": "123456:ABC-DEF...",  // Telegram Bot API token (optional)
+    "chatId": "-1001234567890"        // Telegram chat ID for notifications (optional)
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `backgroundQueue.enabled` | boolean | `false` | Auto-dispatch on server boot. Can be toggled at runtime via `PUT /config/background-queue`. |
+| `backgroundQueue.maxRetries` | number | `3` | Max retry attempts before circuit-breaker marks item `failed`. |
+| `telegram.botToken` | string | — | Telegram Bot API token. Notifications are skipped if not set. |
+| `telegram.chatId` | string | — | Telegram chat/group ID. Notifications are skipped if not set. |
+
+### Queue item lifecycle
+
+```
+pending → running → completed
+                  → errored → pending (retry)
+                             → failed (circuit-breaker, needsReview: true)
+```
+
+### Queue data storage
+
+The queue is persisted as a YAML array at `~/obsidian/Ops/queue.yaml` by default. Each item contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string (UUID) | Unique identifier |
+| `pipeline` | string | Pipeline ID to execute |
+| `inputs` | object | Pipeline inputs |
+| `priority` | number | Last computed priority score |
+| `severityWeight` | number | Base priority weight (default: 1) |
+| `manualBoost` | number | Manual priority adjustment (default: 0) |
+| `createdAt` | number | Timestamp (ms) |
+| `status` | string | `pending` / `running` / `completed` / `errored` / `failed` |
+| `retries` | number | Current retry count |
+| `maxRetries` | number | Max retries before circuit-breaker |
+| `needsReview` | boolean | Set `true` when circuit-breaker trips |
+
+### REST API
+
+See [HTTP API — Background Queue](docs/http-api.md#background-queue) for full endpoint documentation.
+
+```bash
+# Add an item to the queue
+curl -X POST http://localhost:4001/queue \
+  -H "Content-Type: application/json" \
+  -d '{"pipeline": "my_pipeline", "inputs": {"task": "implement feature X"}, "severityWeight": 2}'
+
+# Enable auto-dispatch
+curl -X PUT http://localhost:4001/config/background-queue \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+
+# List queue items (sorted by priority)
+curl http://localhost:4001/queue
+
+# Disable auto-dispatch (current run finishes, no new dispatch)
+curl -X PUT http://localhost:4001/config/background-queue \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+```
+
+### Wintermute UI components
+
+The background queue is managed through three React components in the Wintermute dashboard:
+
+- **`BackgroundQueueToggle`** — A toggle switch to enable/disable auto-dispatch at runtime. Calls `PUT /api/config/background-queue` with optimistic UI updates. Shows ON (green) / OFF (grey) state.
+
+- **`ApprovalPanel`** — Two-section panel for queue triage:
+  - *Needs Approval* — Items with status `needsReview`, `needs_approval`, or `pending_approval`. Each item has **Approve & Queue** and **Reject** buttons.
+  - *Approved & Pending* — Approved items sorted by priority descending with a remove button. Polls every 10 seconds.
+
+- **`QueueViewer`** — Full queue table showing all items with columns: Pipeline name, Priority (tabular), Status (color-coded badge), Age (human-readable), and Retry count. Polls every 10 seconds. Status badges are color-coded: pending (amber), running (blue), completed (emerald), failed/needsReview (rose), approved (cyan).
+
+### PM2 restart behavior
+
+When Ripline is restarted via `pm2 restart ripline` with `backgroundQueue.enabled: true` in the config, the AutoExecutor is enabled on boot and immediately checks the queue for pending items to dispatch.
+
+---
+
 ## Roadmap
 
 - [ ] Type-safe config schemas per node type

@@ -205,6 +205,144 @@ Server-Sent Events stream of new log lines. The server polls the run log file an
 curl -N http://localhost:4001/runs/550e8400-e29b-41d4-a716-446655440000/logs/stream
 ```
 
+## Background Queue
+
+Endpoints for managing the background work queue and auto-execution toggle. Items are priority-scored and executed sequentially by the AutoExecutor.
+
+### List queue items
+
+```http
+GET /queue
+```
+
+Returns all queue items with their computed priority scores, sorted descending.
+
+**Response (200):**
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "pipeline": "my_pipeline",
+      "inputs": { "task": "..." },
+      "priority": 2.5,
+      "severityWeight": 1,
+      "manualBoost": 0,
+      "createdAt": 1711584000000,
+      "status": "pending",
+      "retries": 0,
+      "maxRetries": 3,
+      "needsReview": false,
+      "computedPriority": 3.7
+    }
+  ]
+}
+```
+
+### List approved (pending) items
+
+```http
+GET /queue/approved
+```
+
+Returns only items with status `pending`, sorted by computed priority descending.
+
+### Add a queue item
+
+```http
+POST /queue
+Content-Type: application/json
+```
+
+**Request body:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `pipeline` | string | **yes** | — | Pipeline ID to execute |
+| `inputs` | object | no | `{}` | Pipeline inputs |
+| `severityWeight` | number | no | `1` | Base priority weight |
+| `manualBoost` | number | no | `0` | Manual priority adjustment |
+| `maxRetries` | number | no | config default (3) | Circuit-breaker retry limit |
+
+**Example:**
+```bash
+curl -X POST http://localhost:4001/queue \
+  -H "Content-Type: application/json" \
+  -d '{"pipeline": "implement_story", "inputs": {"task": "add OAuth"}, "severityWeight": 2}'
+```
+
+**Response (201):** The created queue item.
+
+### Update a queue item
+
+```http
+PATCH /queue/:id
+Content-Type: application/json
+```
+
+**Updatable fields:** `priority` (number), `manualBoost` (number), `severityWeight` (number), `status` (one of: `pending`, `running`, `completed`, `errored`, `failed`).
+
+**Response (200):** The updated queue item. **404** if not found.
+
+### Delete a queue item
+
+```http
+DELETE /queue/:id
+```
+
+**Response:** `204 No Content`. **404** if not found.
+
+### Toggle auto-execution
+
+```http
+PUT /config/background-queue
+Content-Type: application/json
+```
+
+Enables or disables the AutoExecutor at runtime. The change is persisted to `~/.ripline/config.json` so it survives restarts.
+
+**Request body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | boolean | **yes** | `true` to enable auto-dispatch, `false` to stop |
+
+**Example — enable:**
+```bash
+curl -X PUT http://localhost:4001/config/background-queue \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
+
+**Response (200):**
+```json
+{
+  "backgroundQueue": {
+    "enabled": true,
+    "maxRetries": 3
+  }
+}
+```
+
+**Behavior:** When enabled, the AutoExecutor immediately checks the queue and dispatches the highest-priority pending item. When disabled, the current run finishes but no new items are dispatched. Re-enabling resumes dispatch.
+
+### Read current config
+
+```http
+GET /config/background-queue
+```
+
+Returns the current background queue config state.
+
+**Response (200):**
+```json
+{
+  "enabled": true
+}
+```
+
+---
+
 ## Plugin config
 
 In `openclaw.plugin.json` (or the host config), you can set:
