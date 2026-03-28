@@ -15,6 +15,11 @@ id: build_from_plan
 name: Build From Plan
 queue: build
 entry: [intake]
+retry:
+  maxAttempts: 3
+  backoffMs: 30000
+  backoffMultiplier: 2
+  retryableCategories: [transient, unknown]
 
 nodes:
   - id: intake

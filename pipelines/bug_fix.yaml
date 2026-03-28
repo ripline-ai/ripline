@@ -2,6 +2,11 @@ id: bug_fix
 name: Bug Fix Pipeline (Fetch → Triage → Fix → Verify → Stage → Promote)
 queue: build
 entry: [intake]
+retry:
+  maxAttempts: 2
+  backoffMs: 30000
+  backoffMultiplier: 2
+  retryableCategories: [transient, unknown]
 nodes:
   - id: intake
     type: input

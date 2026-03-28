@@ -205,6 +205,13 @@ const edgeSchema = z.object({
   when: z.string().optional(),
 });
 
+const retryPolicySchema = z.object({
+  maxAttempts: z.number().int().min(1),
+  backoffMs: z.number().int().min(0),
+  backoffMultiplier: z.number().min(1).optional(),
+  retryableCategories: z.array(z.enum(["transient", "permanent", "unknown"])).optional(),
+});
+
 export const pipelineDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -223,6 +230,7 @@ export const pipelineDefinitionSchema = z
     tags: z.array(z.string()).optional(),
     queue: z.string().optional(),
     metadata: z.record(z.string(), z.any()).optional(),
+    retry: retryPolicySchema.optional(),
   })
   .superRefine((value, ctx) => {
     const nodeIds = new Set<string>();

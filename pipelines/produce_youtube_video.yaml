@@ -34,6 +34,11 @@
 id: produce_youtube_video
 name: Produce YouTube Video
 entry: [intake]
+retry:
+  maxAttempts: 3
+  backoffMs: 60000
+  backoffMultiplier: 2
+  retryableCategories: [transient, unknown]
 nodes:
   - id: intake
     type: input
