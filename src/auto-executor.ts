@@ -178,9 +178,16 @@ export class AutoExecutor {
       log.log("info", `[auto-executor] dispatching queue item ${item.id} (pipeline: ${item.pipeline})`);
 
       // Enqueue into the RunQueue
-      const runId = await this.runQueue.enqueue(item.pipeline, item.inputs, {
-        source: "background",
-      });
+      let runId: string | string[];
+      try {
+        runId = await this.runQueue.enqueue(item.pipeline, item.inputs, {
+          source: "background",
+        });
+      } catch (err) {
+        // Roll back queue item to pending so it can be retried
+        this.bgQueue.update(item.id, { status: "pending" });
+        throw err;
+      }
 
       // runId can be string or string[] — normalize to string
       const resolvedRunId = Array.isArray(runId) ? runId[0] : runId;
