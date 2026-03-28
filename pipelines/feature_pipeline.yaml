@@ -367,7 +367,103 @@ nodes:
 
       After the script runs, use the Bash tool to echo "patch_idea complete" and stop.
 
-  # ── 6. Stub: trigger implementation subagent ──────────────────────────────
+  # ── 6. Auto-create Epic and link stories ─────────────────────────────────
+  # Creates an Epic entity in Wintermute linked to the originating idea and
+  # its focus area. Story IDs from the spec are added to the Epic's storyIds.
+  # Errors here do not block the pipeline — the idea is already specced.
+  - id: create_epic
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 60
+    prompt: |
+      Run this exact Python script using the Bash tool:
+
+      python3 << 'PYEOF'
+      import json, subprocess, sys
+
+      idea_id = "{{idea_id}}"
+      wintermute_url = "{{resolve_urls.wintermute_url}}"
+
+      try:
+          # 1. Fetch the updated idea to get focusAreaId, projectId, title, stories
+          r = subprocess.run(
+              ["curl", "-s", f"{wintermute_url}/api/ideas/{idea_id}"],
+              capture_output=True, text=True
+          )
+          idea = json.loads(r.stdout)
+
+          focus_area_id = idea.get("focusAreaId", "")
+          project_id = idea.get("projectId", "")
+          idea_title = idea.get("title", idea_id)
+          stories = idea.get("stories", [])
+
+          # If no focusAreaId or projectId, use fallback values
+          if not focus_area_id:
+              focus_area_id = "unassigned"
+          if not project_id:
+              project_id = "unassigned"
+
+          # 2. Create the Epic via POST /api/epics
+          epic_payload = {
+              "name": idea_title,
+              "description": f"Auto-created epic for idea: {idea_title}",
+              "focusAreaId": focus_area_id,
+              "projectId": project_id,
+              "status": "draft",
+              "ideaId": idea_id
+          }
+
+          r = subprocess.run(
+              ["curl", "-s", "-X", "POST",
+               f"{wintermute_url}/api/epics",
+               "-H", "Content-Type: application/json",
+               "--data-binary", json.dumps(epic_payload)],
+              capture_output=True, text=True
+          )
+          epic = json.loads(r.stdout)
+          epic_id = epic.get("id", "")
+
+          if not epic_id:
+              print(f"WARNING: Epic creation returned no id: {r.stdout}")
+              print("epic_created=false")
+              sys.exit(0)
+
+          # 3. Add story IDs to the Epic's storyIds array
+          story_ids = [s.get("id", "") for s in stories if s.get("id")]
+          if story_ids:
+              r = subprocess.run(
+                  ["curl", "-s", "-X", "PATCH",
+                   f"{wintermute_url}/api/epics/{epic_id}",
+                   "-H", "Content-Type: application/json",
+                   "--data-binary", json.dumps({"storyIds": story_ids})],
+                  capture_output=True, text=True
+              )
+
+          # 4. Link the idea back to the Epic
+          r = subprocess.run(
+              ["curl", "-s", "-X", "PATCH",
+               f"{wintermute_url}/api/ideas/{idea_id}",
+               "-H", "Content-Type: application/json",
+               "--data-binary", json.dumps({"epicId": epic_id})],
+              capture_output=True, text=True
+          )
+
+          print(f"Epic created: {epic_id} with {len(story_ids)} stories")
+          print("epic_created=true")
+
+      except Exception as e:
+          # Graceful error handling — do not block the pipeline
+          print(f"WARNING: Epic creation failed: {e}")
+          print("epic_created=false")
+          sys.exit(0)
+      PYEOF
+
+      After the script runs, use the Bash tool to echo "create_epic complete" and stop.
+
+  # ── 7. Stub: trigger implementation subagent ──────────────────────────────
   # This step is a placeholder. To enable automatic implementation, replace this
   # agent stub with an enqueue node pointing to implement_story_openclaw.
   - id: implementation_stub
@@ -393,5 +489,6 @@ edges:
   - { from: { node: read_codebase },      to: { node: generate_spec } }
   - { from: { node: generate_spec },      to: { node: parse_spec } }
   - { from: { node: parse_spec },         to: { node: patch_idea } }
-  - { from: { node: patch_idea },         to: { node: implementation_stub } }
+  - { from: { node: patch_idea },         to: { node: create_epic } }
+  - { from: { node: create_epic },        to: { node: implementation_stub } }
   - { from: { node: implementation_stub }, to: { node: result } }
