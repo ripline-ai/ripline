@@ -69,15 +69,44 @@ nodes:
 
       Steps:
       1. Identify the affected files and root cause
-      2. Write a failing test that reproduces the bug (TDD — no exceptions)
-      3. Implement the fix
-      4. Confirm the test passes
-      5. Run the full test suite and confirm nothing new is broken
-      6. Commit with message: fix: <bug title> [<bug-id>]
+      2. Implement the fix
+      3. Do NOT write tests — that happens in the next step
+      4. Do NOT run the test suite
+      5. Commit with message: fix: <bug title> [<bug-id>]
 
-      Output a summary: what was fixed, which files changed, test results.
+      Output a summary: what the root cause was, what was changed and why, which files were modified.
 
-  # ── 4. Build verification (unit tests only) ───────────────────────────────
+  # ── 4. Write tests ────────────────────────────────────────────────────────
+  - id: write_tests
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 900
+    prompt: |
+      The bug below has been fixed. Your job is to write tests that cover the bug scenario
+      and any edge cases discovered during the fix. Work in the relevant project directory.
+
+      Bug ID: {{parse_bug.id}}
+      Title: {{parse_bug.title}}
+      Description: {{parse_bug.description}}
+
+      Fix summary from the previous step:
+      {{fix.text}}
+
+      Steps:
+      1. Read the fix summary to understand what changed and why
+      2. Write tests that document the correct behavior and cover:
+         - The specific bug scenario (regression test)
+         - Edge cases identified during the fix
+      3. Tests should document correct behavior — they are not driving the implementation
+      4. Do NOT run the tests — that happens in build_verify
+      5. Commit with message: test: add coverage for <bug title> [<bug-id>]
+
+      Output a summary: what tests were written, what scenarios they cover, which files were added or modified.
+
+  # ── 5. Build verification ─────────────────────────────────────────────────
   - id: build_verify
     type: agent
     runner: claude-code
@@ -86,18 +115,24 @@ nodes:
     cwd: /home/openclaw/wintermute
     timeoutSeconds: 600
     prompt: |
-      Run a full build and unit-test verification after the bug fix.
+      Run a full build and unit-test verification after the bug fix and test additions.
 
       Fix summary:
       {{fix.text}}
+
+      Test summary:
+      {{write_tests.text}}
 
       Run these commands using the Bash tool:
       1. cd /home/openclaw/wintermute && npm run build 2>&1 | tail -20
       2. cd /home/openclaw/wintermute && npm test -- --passWithNoTests --testPathIgnorePatterns=e2e 2>&1 | tail -30
 
-      Report clearly: pass/fail, and what (if anything) required additional fixes.
+      If anything fails, attempt one fix and re-run. If it still fails after one fix attempt,
+      report the failure and stop — do not iterate further.
 
-  # ── 5. Reload staging ────────────────────────────────────────────────────
+      Report clearly: pass/fail, and what (if anything) required a fix.
+
+  # ── 6. Reload staging ────────────────────────────────────────────────────
   - id: reload_staging
     type: agent
     runner: claude-code
@@ -115,7 +150,7 @@ nodes:
 
       Output "staging ready" when all three succeed, or report the error and stop.
 
-  # ── 6. E2E smoke test against staging ────────────────────────────────────
+  # ── 7. E2E smoke test against staging ────────────────────────────────────
   - id: verify_staging
     type: agent
     runner: claude-code
@@ -138,7 +173,7 @@ nodes:
       details. Do not proceed — the pipeline will continue to the promote step but
       promote will see this failure and refuse to reload production.
 
-  # ── 7. Patch bug status to fixed ─────────────────────────────────────────
+  # ── 8. Patch bug status to fixed ─────────────────────────────────────────
   - id: patch_bug
     type: agent
     runner: claude-code
@@ -167,7 +202,7 @@ nodes:
 
       After the script runs, echo "patch_bug complete" and stop.
 
-  # ── 8. Promote to production ──────────────────────────────────────────────
+  # ── 9. Promote to production ──────────────────────────────────────────────
   - id: promote
     type: agent
     runner: claude-code
@@ -203,7 +238,8 @@ edges:
   - { from: { node: fetch_bug },       to: { node: parse_bug } }
   - { from: { node: parse_bug },       to: { node: pm_triage } }
   - { from: { node: pm_triage },       to: { node: fix } }
-  - { from: { node: fix },             to: { node: build_verify } }
+  - { from: { node: fix },             to: { node: write_tests } }
+  - { from: { node: write_tests },     to: { node: build_verify } }
   - { from: { node: build_verify },    to: { node: reload_staging } }
   - { from: { node: reload_staging },  to: { node: verify_staging } }
   - { from: { node: verify_staging },  to: { node: patch_bug } }
