@@ -536,6 +536,7 @@ export class DeterministicRunner extends EventEmitter {
       await this.store.save(record);
     }
 
+    delete record.cursor;
     await this.store.completeRun(record, context.outputs);
     this.emitBusEvent("run.completed", record);
 
@@ -600,23 +601,52 @@ export class DeterministicRunner extends EventEmitter {
   }
 
   /**
-   * Evaluate whether a node should be executed based on `when` conditions on its
-   * incoming edges.  Rules:
+   * Evaluate whether a node should be executed based on `when` conditions and
+   * port-based routing on its incoming edges.  Rules:
+   *   - Edges whose source node was skipped are ignored (treated as non-existent).
+   *   - Port-based routing: if an edge has a `from.port` and the source node is
+   *     a switch node, the edge is only active when the source node's __activePort
+   *     artifact matches the edge's from.port.  Inactive port edges are filtered out.
    *   - If NO incoming edge has a `when` clause, the node is reachable (return true).
    *   - If at least one incoming edge has a truthy `when`, the node is reachable.
    *   - If ALL incoming edges carry `when` clauses and none are truthy, skip (return false).
-   *   - Edges whose source node was skipped are ignored (treated as non-existent).
    */
   private shouldExecuteNode(
     nodeId: string,
     context: RunContext,
     skippedNodes: Set<string>,
   ): boolean {
-    const incomingEdges: PipelineEdge[] = this.definition.edges.filter(
+    // Start with edges from non-skipped sources.
+    let incomingEdges: PipelineEdge[] = this.definition.edges.filter(
       (e) => e.to.node === nodeId && !skippedNodes.has(e.from.node),
     );
-    // No incoming edges (entry node) — always execute.
-    if (incomingEdges.length === 0) return true;
+
+    // Port-based routing: filter out edges from switch nodes where the port
+    // does not match the switch's __activePort artifact.
+    incomingEdges = incomingEdges.filter((edge) => {
+      if (!edge.from.port) return true; // No port — always active.
+      const sourceNode = this.nodeById.get(edge.from.node);
+      if (!sourceNode || sourceNode.type !== "switch") return true; // Non-switch — pass through.
+      const artifact = context.artifacts[edge.from.node];
+      if (artifact && typeof artifact === "object" && "__activePort" in artifact) {
+        return (artifact as { __activePort: string }).__activePort === edge.from.port;
+      }
+      return false; // Switch has no artifact yet — edge inactive.
+    });
+
+    // No incoming edges (entry node or all filtered out) — check if the node
+    // has *any* defined incoming edges at all; if none, it's an entry node.
+    if (incomingEdges.length === 0) {
+      // If there were edges before filtering but none survived, the node should
+      // only execute if it also has at least one non-port-based active edge.
+      const allEdgesToNode = this.definition.edges.filter(
+        (e) => e.to.node === nodeId,
+      );
+      // True entry node (no incoming edges defined at all) — always execute.
+      if (allEdgesToNode.length === 0) return true;
+      // All incoming edges were filtered out (skipped sources + inactive ports) — skip.
+      return false;
+    }
 
     const conditionalEdges = incomingEdges.filter((e) => e.when != null && e.when.trim() !== "");
     const unconditionalEdges = incomingEdges.filter((e) => e.when == null || e.when.trim() === "");
