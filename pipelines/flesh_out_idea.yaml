@@ -253,6 +253,61 @@ nodes:
     type: transform
     expression: "(function(text) { var t = text.trim(); var start = t.indexOf('{'); var end = t.lastIndexOf('}'); if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {} } var m = t.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1].trim() : t); })(artifacts.generate_idea.text)"
 
+  # ── 4b. Suggest Focus Area via keyword overlap ──────────────────────────
+  - id: fetch_focus_areas
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 30
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
+
+      curl -s {{resolve_urls.ripline_url}}/api/focus-areas
+
+  - id: suggest_focus_area
+    type: transform
+    expression: |
+      (function() {
+        var idea = artifacts.parse_generated;
+        var faRaw = artifacts.fetch_focus_areas.text.trim();
+        var faData;
+        try {
+          var start = faRaw.indexOf('{');
+          var end = faRaw.lastIndexOf('}');
+          if (start !== -1 && end > start) { faData = JSON.parse(faRaw.slice(start, end + 1)); }
+          else { faData = JSON.parse(faRaw); }
+        } catch(e) { return { suggestedFocusAreaId: null }; }
+        var focusAreas = faData.focusAreas || [];
+        var active = focusAreas.filter(function(fa) { return fa.status === 'active'; });
+        if (active.length === 0) return { suggestedFocusAreaId: null };
+        var ideaText = ((idea.title || '') + ' ' + (idea.description || '') + ' ' + (idea.rationale || '') + ' ' + ((idea.tags || []).join(' '))).toLowerCase();
+        var stopWords = ['the','a','an','and','or','but','in','on','at','to','for','of','with','by','is','are','was','were','be','been','being','have','has','had','do','does','did','will','would','could','should','may','might','shall','can','need','must','it','its','this','that','these','those','i','we','you','he','she','they','me','us','him','her','them','my','our','your','his','their','not','no','from','as','into','about','between','through','during','before','after','above','below','up','down','out','off','over','under','then','than','so','if','when','where','how','what','which','who','whom','why','all','each','every','both','few','more','most','other','some','such','only','own','same','just','also','very','even','back','now','new','old','first','last','long','great','small','large','next','early','young','important','different','used','make','like','use','many','way','well','get'];
+        function tokenize(text) {
+          return text.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(function(w) {
+            return w.length > 2 && stopWords.indexOf(w) === -1;
+          });
+        }
+        var ideaTokens = tokenize(ideaText);
+        if (ideaTokens.length === 0) return { suggestedFocusAreaId: null };
+        var ideaSet = {};
+        ideaTokens.forEach(function(t) { ideaSet[t] = true; });
+        var bestId = null;
+        var bestScore = 0;
+        active.forEach(function(fa) {
+          var faText = ((fa.name || '') + ' ' + (fa.description || '')).toLowerCase();
+          var faTokens = tokenize(faText);
+          if (faTokens.length === 0) return;
+          var overlap = 0;
+          faTokens.forEach(function(t) { if (ideaSet[t]) overlap++; });
+          var score = overlap / faTokens.length;
+          if (score > bestScore) { bestScore = score; bestId = fa.id; }
+        });
+        if (bestScore >= 0.3 && bestId) return { suggestedFocusAreaId: bestId };
+        return { suggestedFocusAreaId: null };
+      })()
+
   # ── 5. Patch idea back to Wintermute ─────────────────────────────────────
   - id: patch_idea
     type: agent
@@ -267,6 +322,9 @@ nodes:
       The generated idea object:
       {{parse_generated}}
 
+      The focus area suggestion:
+      {{suggest_focus_area}}
+
       Build a JSON body with ALL of these fields (properly JSON-escaped):
         status: "specced"
         title: <parse_generated.title>
@@ -278,6 +336,10 @@ nodes:
         impactScore: <parse_generated.impactScore as a number>
         effortScore: <parse_generated.effortScore as a number>
         tags: <parse_generated.tags as a JSON array>
+
+      If suggest_focus_area.suggestedFocusAreaId is a non-null string, also include:
+        suggestedFocusAreaId: <suggest_focus_area.suggestedFocusAreaId>
+      If it is null, do NOT include the suggestedFocusAreaId field at all.
 
       Run (replacing <JSON_BODY> with the properly constructed and escaped JSON):
 
@@ -309,5 +371,7 @@ edges:
     when: "!(artifacts.parse_decomposition.shouldSplit === true && artifacts.parse_decomposition.confidence >= 0.7)"
   - { from: { node: propose_split },              to: { node: generate_idea } }
   - { from: { node: generate_idea },   to: { node: parse_generated } }
-  - { from: { node: parse_generated }, to: { node: patch_idea } }
+  - { from: { node: parse_generated }, to: { node: fetch_focus_areas } }
+  - { from: { node: fetch_focus_areas }, to: { node: suggest_focus_area } }
+  - { from: { node: suggest_focus_area }, to: { node: patch_idea } }
   - { from: { node: patch_idea },      to: { node: result } }
