@@ -168,6 +168,15 @@ const collectChildrenNode = baseNode.extend({
   type: z.literal("collect_children"),
 });
 
+const shellNode = baseNode.extend({
+  type: z.literal("shell"),
+  command: z.string(),
+  cwd: z.string().optional(),
+  assigns: z.string().optional(),
+  timeoutSeconds: z.number().int().positive().optional(),
+  failOnNonZero: z.boolean().optional(),
+});
+
 const nodeSchema = z.lazy(() =>
   z.discriminatedUnion("type", [
     literalNode,
@@ -181,6 +190,7 @@ const nodeSchema = z.lazy(() =>
     outputNode,
     enqueueNode,
     collectChildrenNode,
+    shellNode,
   ])
 ) as z.ZodType<PipelineNode>;
 

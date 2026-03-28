@@ -228,6 +228,20 @@ export type CollectChildrenNode = NodeBase & {
   type: "collect_children";
 };
 
+export type ShellNode = NodeBase & {
+  type: "shell";
+  /** Shell command to run. Supports {{artifact}} interpolation. */
+  command: string;
+  /** Working directory for the command. */
+  cwd?: string;
+  /** Artifact key to assign result to. Defaults to node id. */
+  assigns?: string;
+  /** Max execution time in seconds. Default 120. */
+  timeoutSeconds?: number;
+  /** If true, non-zero exit code throws and fails the pipeline node. Default true. */
+  failOnNonZero?: boolean;
+};
+
 export type PipelineNode =
   | LiteralNode
   | InputNode
@@ -239,7 +253,8 @@ export type PipelineNode =
   | CheckpointNode
   | OutputNode
   | EnqueueNode
-  | CollectChildrenNode;
+  | CollectChildrenNode
+  | ShellNode;
 
 export type PipelineEdge = {
   id?: string;

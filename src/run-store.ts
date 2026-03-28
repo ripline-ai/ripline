@@ -25,6 +25,8 @@ export type RunStoreCursor = {
 
 export type RunStoreListOptions = {
   status?: PipelineRunStatus;
+  /** Return at most this many runs (applied after sorting). */
+  limit?: number;
 };
 
 export interface RunStore {
@@ -145,9 +147,37 @@ export class PipelineRunStore implements RunStore {
 
   async list(options?: RunStoreListOptions): Promise<PipelineRunRecord[]> {
     const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
+    const dirs = entries.filter((e) => e.isDirectory());
+
+    // When a limit is requested and we're not filtering by pending/running (which need FIFO order),
+    // sort directories by mtime descending before reading — lets us stop early once we have enough.
+    const wantEarlyStop = options?.limit !== undefined &&
+      options?.status !== "pending" && options?.status !== "running";
+
+    if (wantEarlyStop) {
+      const withMtime = await Promise.all(
+        dirs.map(async (e) => {
+          const mtime = await fs.stat(path.join(this.rootDir, e.name))
+            .then((s) => s.mtimeMs)
+            .catch(() => 0);
+          return { name: e.name, mtime };
+        })
+      );
+      withMtime.sort((a, b) => b.mtime - a.mtime);
+
+      const runs: PipelineRunRecord[] = [];
+      for (const { name } of withMtime) {
+        if (options!.limit! <= runs.length) break;
+        const run = await this.load(name);
+        if (!run) continue;
+        if (options?.status !== undefined && run.status !== options.status) continue;
+        runs.push(run);
+      }
+      return runs.sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+
     const runs: PipelineRunRecord[] = [];
-    for (const ent of entries) {
-      if (!ent.isDirectory()) continue;
+    for (const ent of dirs) {
       const run = await this.load(ent.name);
       if (run) runs.push(run);
     }
@@ -156,6 +186,9 @@ export class PipelineRunStore implements RunStore {
       filtered = [...filtered].sort((a, b) => a.startedAt - b.startedAt);
     } else {
       filtered = [...filtered].sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+    if (options?.limit !== undefined) {
+      filtered = filtered.slice(0, options.limit);
     }
     return filtered;
   }
