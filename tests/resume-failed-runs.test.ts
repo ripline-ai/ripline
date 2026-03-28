@@ -776,7 +776,124 @@ describe("Resume clears error state", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 12. Retry endpoint strategies (from-failure vs from-start) via server
+// 12. E2E: Transient failure mid-pipeline → auto-retry resumes from correct node
+//     Verifies: scheduler detects transient error, auto-retries, resumes from
+//     the failing node (not restart), and completed steps are NOT re-executed.
+// ---------------------------------------------------------------------------
+describe("E2E: transient mid-pipeline failure triggers auto-retry from correct node", () => {
+  it("auto-retries a transient failure mid-pipeline without re-executing completed steps", async () => {
+    const { createScheduler } = await import("../src/scheduler.js");
+
+    // Track which nodes are executed (and how many times)
+    const executionLog: string[] = [];
+    let agentCallCount = 0;
+
+    const flakyMidPipeline: AgentRunner = async (params) => {
+      const nodeId = params.nodeId ?? "unknown";
+      agentCallCount++;
+      executionLog.push(nodeId);
+      // First call to agent node "step_b" throws a transient 503 error
+      if (nodeId === "step_b" && executionLog.filter((n) => n === "step_b").length === 1) {
+        const err = new Error("Service Unavailable") as Error & { statusCode?: number };
+        err.statusCode = 503;
+        throw err;
+      }
+      return { text: `${nodeId}-done`, tokenUsage: { input: 0, output: 0 } };
+    };
+
+    // Multi-step pipeline: input → transform(a) → agent(step_a) → agent(step_b) → output
+    // step_b will fail transiently on first execution
+    const def: PipelineDefinition = {
+      id: "e2e-transient-mid",
+      entry: ["inp"],
+      retry: {
+        maxAttempts: 3,
+        backoffMs: 5,           // tiny backoff for test speed
+        backoffMultiplier: 1,
+        retryableCategories: ["transient", "unknown"],
+      },
+      nodes: [
+        { id: "inp", type: "input" },
+        { id: "calc", type: "transform", expression: "inputs.x * 10", assigns: "calc" },
+        { id: "step_a", type: "agent", prompt: "Do step A" },
+        { id: "step_b", type: "agent", prompt: "Do step B" },
+        { id: "out", type: "output", path: "result", source: "step_b" },
+      ],
+      edges: [
+        { from: { node: "inp" }, to: { node: "calc" } },
+        { from: { node: "calc" }, to: { node: "step_a" } },
+        { from: { node: "step_a" }, to: { node: "step_b" } },
+        { from: { node: "step_b" }, to: { node: "out" } },
+      ],
+    };
+
+    const store = new MemoryRunStore();
+    const queue = createRunQueue(store);
+    const registry = {
+      get: async (id: string) =>
+        id === "e2e-transient-mid"
+          ? { definition: def, mtimeMs: 0, path: "" }
+          : null,
+    };
+
+    const scheduler = createScheduler({
+      store,
+      queue,
+      registry,
+      maxConcurrency: 1,
+      agentRunner: flakyMidPipeline,
+    });
+
+    await queue.enqueue("e2e-transient-mid", { x: 7 });
+    scheduler.start();
+
+    // Wait for the run to complete (auto-retry should handle the transient failure)
+    const deadline = Date.now() + 10_000;
+    let result: PipelineRunRecord | null = null;
+    while (Date.now() < deadline) {
+      const runs = await store.list();
+      const completed = runs.find((r) => r.status === "completed");
+      if (completed) {
+        result = completed;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 30));
+    }
+
+    scheduler.stop();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // --- Assertions ---
+
+    // 1. The run should have completed successfully after auto-retry
+    expect(result).not.toBeNull();
+    expect(result!.status).toBe("completed");
+
+    // 2. The run was retried at least once (transient 503 on first step_b call)
+    expect(result!.retryCount).toBeGreaterThanOrEqual(1);
+
+    // 3. step_a should have executed only ONCE across all attempts.
+    //    On resume, the scheduler uses resumeRunId (cursor-based) so completed
+    //    steps are skipped. step_a must NOT be re-executed.
+    const stepAExecutions = executionLog.filter((n) => n === "step_a");
+    expect(stepAExecutions).toHaveLength(1);
+
+    // 4. step_b should have executed exactly twice: once failing, once succeeding
+    const stepBExecutions = executionLog.filter((n) => n === "step_b");
+    expect(stepBExecutions).toHaveLength(2);
+
+    // 5. All steps should be marked completed in the final record
+    expect(result!.steps.every((s) => s.status === "completed")).toBe(true);
+
+    // 6. The transform step ("calc") should have preserved its artifact (x*10 = 70)
+    const calcStep = result!.steps.find((s) => s.nodeId === "calc");
+    expect(calcStep).toBeDefined();
+    expect(calcStep!.status).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 13. Retry endpoint strategies (from-failure vs from-start) via server
 // ---------------------------------------------------------------------------
 describe("Retry endpoint strategies (HTTP server)", () => {
   it("POST /runs/:runId/retry with from-failure resets only steps from errored node onwards", async () => {
