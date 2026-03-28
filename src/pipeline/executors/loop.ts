@@ -88,6 +88,7 @@ export async function executeLoop(
       [itemVar]: item,
       ...(indexVar !== undefined ? { [indexVar]: i } : {}),
       index: i,
+      results: iterationResults,
     };
 
     // Execute body nodes in declaration order (edges ignored for now — simple linear body)
@@ -101,6 +102,23 @@ export async function executeLoop(
     // Capture last body node's artifact as the iteration result
     const lastBodyNode = bodyNodes[bodyNodes.length - 1];
     iterationResults.push(lastBodyNode ? context.artifacts[lastBodyNode.id] : null);
+
+    // Evaluate exitCondition after each iteration; break early if truthy
+    if (node.exitCondition) {
+      const exitSandbox = {
+        inputs: context.inputs,
+        artifacts: context.artifacts,
+        env: context.env,
+        loop: context.artifacts["loop"],
+        JSON,
+      };
+      vm.createContext(exitSandbox);
+      const exitCode = `(function() { return (${node.exitCondition}); })()`;
+      const shouldExit = vm.runInContext(exitCode, exitSandbox, { timeout: DEFAULT_TIMEOUT_MS });
+      if (shouldExit) {
+        break;
+      }
+    }
   }
 
   // Clean up loop context variable
