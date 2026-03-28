@@ -23,6 +23,7 @@ import type { AgentRunner } from "./executors/index.js";
 import { emitActivity, flushActivityBuffer } from "../activity-emitter.js";
 import type { ActivityEvent } from "../types/activity.js";
 import { evaluateExpression } from "../expression.js";
+import { HttpResponseError, computeBackoffMs } from "../lib/http-response-guard.js";
 
 export type RunContext = {
   inputs: Record<string, unknown>;
@@ -361,12 +362,18 @@ export class DeterministicRunner extends EventEmitter {
         return record;
       }
 
-      const maxAttempts = node.retry?.maxAttempts ?? 1;
+      // AC2: Rate-limit (429) and server errors (5xx) get automatic retry with
+      // exponential backoff, even if the node has no explicit retry config.
+      // Default: 3 attempts for retryable HTTP errors, 1 for everything else.
+      const HTTP_RETRY_DEFAULT = 3;
+      const configuredMax = node.retry?.maxAttempts ?? 1;
       const retryDelayMs = node.retry?.delayMs ?? 0;
       let lastErr: unknown;
       let nodeResult: Awaited<ReturnType<typeof executeNode>> = null;
+      // Effective max attempts can grow if we hit a retryable HTTP error
+      let effectiveMaxAttempts = configuredMax;
 
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      for (let attempt = 1; attempt <= effectiveMaxAttempts; attempt++) {
         try {
           const executorContext = this.getExecutorContext(node, context, record);
           const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner; agentDefinitions?: Record<string, AgentDefinition>; skillsRegistry?: SkillsRegistry; skillsDir?: string } = {};
@@ -392,7 +399,26 @@ export class DeterministicRunner extends EventEmitter {
           break;
         } catch (err) {
           lastErr = err;
-          if (attempt < maxAttempts && retryDelayMs > 0) {
+
+          // AC2: For retryable HTTP errors (429, 5xx), use exponential backoff
+          // and ensure at least HTTP_RETRY_DEFAULT attempts even if node.retry
+          // is not configured.
+          if (err instanceof HttpResponseError && err.retryable) {
+            effectiveMaxAttempts = Math.max(effectiveMaxAttempts, HTTP_RETRY_DEFAULT);
+            if (attempt < effectiveMaxAttempts) {
+              const backoffMs = computeBackoffMs(attempt, err.retryAfterSeconds);
+              console.warn(
+                `[runner] Retryable HTTP ${err.statusCode} on node "${node.id}" ` +
+                `(attempt ${attempt}/${effectiveMaxAttempts}), backoff ${backoffMs}ms` +
+                (record ? ` [run=${record.id}]` : "")
+              );
+              await new Promise((r) => setTimeout(r, backoffMs));
+              continue;
+            }
+          }
+
+          // Non-HTTP error or non-retryable HTTP error: use configured delay
+          if (attempt < effectiveMaxAttempts && retryDelayMs > 0) {
             await new Promise((r) => setTimeout(r, retryDelayMs));
           }
         }

@@ -4,6 +4,7 @@ import type { AgentNode, AgentDefinition, ClaudeCodeAgentDefinition, McpServerCo
 import type { Logger } from "../../log.js";
 import { interpolateTemplate } from "../../expression.js";
 import type { ExecutorContext, NodeResult } from "./types.js";
+import { detectHttpError, HttpResponseError } from "../../lib/http-response-guard.js";
 
 /** Result of a single agent (sessions_spawn) call. */
 export type AgentResult = {
@@ -184,6 +185,22 @@ export async function executeAgent(
     ...(context.runId !== undefined && { runId: context.runId, nodeId: node.id }),
     ...(context.log !== undefined && { log: context.log }),
   });
+
+  // AC1: Check agent output for HTTP error responses (e.g. rate-limit 429).
+  // curl exits 0 even on 4xx/5xx, so the agent "succeeds" but the output is an
+  // error payload rather than valid data. Detect and throw so the runner's
+  // node-level retry (AC2) can re-attempt with backoff.
+  const httpError = detectHttpError(result.text);
+  if (httpError) {
+    const logCtx = [
+      `step=${node.id}`,
+      `http_status=${httpError.statusCode}`,
+      ...(context.runId ? [`run_id=${context.runId}`] : []),
+      ...(httpError.retryAfterSeconds !== undefined ? [`retry_after=${httpError.retryAfterSeconds}s`] : []),
+    ].join(" ");
+    console.error(`[agent] HTTP error detected in output: ${logCtx} — ${httpError.message.slice(0, 200)}`);
+    throw new HttpResponseError(httpError);
+  }
 
   const value = {
     text: result.text,
