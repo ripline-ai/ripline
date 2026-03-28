@@ -163,8 +163,14 @@ export class AutoExecutor {
     this.dispatching = true;
 
     try {
-      // Check if any background run is currently active
+      // Check if any background run is currently active (in-memory fast path)
       if (this.activeRunMap.size > 0) return;
+
+      // Persistent guard: check the YAML queue for any item already marked "running".
+      // This catches cases where activeRunMap was cleared (restart, race) but a run
+      // is still in progress and has the queue item locked as "running".
+      const runningQueueItems = this.bgQueue.list().filter((i) => i.status === "running");
+      if (runningQueueItems.length > 0) return;
 
       // Also check the run store for any running background runs we might not know about
       const runningRuns = await this.store.list({ status: "running" });
