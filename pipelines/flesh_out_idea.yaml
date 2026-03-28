@@ -229,8 +229,20 @@ nodes:
         "rationale": "Why this is beneficial — concrete value for users, the product, or ops. 2-5 sentences.",
         "implementation": "How it would work — rough approach, key components, major dependencies. Use bullet points.",
         "tradeoffs": "Honest drawbacks or risks — complexity, maintenance, edge cases. Use bullet points.",
-        "impactScore": <1-5 integer, where 5=transformative and 1=trivial>,
-        "effortScore": <1-5 integer, where 5=major multi-week effort and 1=trivial change>,
+        "impactScore": <integer 1-5 — use the FULL range, calibrated as:
+          1 = trivial cosmetic or convenience tweak; affects almost no one
+          2 = small improvement to an existing flow; noticeable but not critical
+          3 = meaningful feature or fix that unblocks a real workflow for regular users
+          4 = high-value capability that significantly improves a core part of the product
+          5 = transformative — changes how the whole system works or unlocks an entirely new class of use
+          Avoid defaulting to 3. Push toward 1-2 for polish/cleanup, 4-5 for core capabilities.>,
+        "effortScore": <integer 1-5 — use the FULL range, calibrated as:
+          1 = trivial — a config change, a one-liner, or a single-file tweak (< 1 hour)
+          2 = small — a few files, well-understood change, no API design needed (half a day)
+          3 = moderate — multiple components, some design decisions, a few hours of work
+          4 = substantial — new subsystem or significant refactor; touches many files; a full day+
+          5 = major — multi-session epic; new infrastructure, deep integration, or significant unknowns
+          Avoid defaulting to 3. Small bug fixes and config tweaks should be 1-2; only novel systems are 4-5.>,
         "tags": ["tag1", "tag2", "tag3"]
       }
 
