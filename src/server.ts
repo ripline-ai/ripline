@@ -339,14 +339,23 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     },
   });
 
-  /** POST /runs/:runId/retry - requeue an errored/paused run from a given node (or the first errored node) */
-  fastify.post<{ Params: { runId: string }; Body: { fromNode?: string } }>(
+  /** POST /runs/:runId/retry - requeue an errored/paused run with optional strategy */
+  fastify.post<{ Params: { runId: string }; Body: { fromNode?: string; strategy?: string } }>(
     "/runs/:runId/retry",
     {
       preHandler: requireAuth,
       handler: async (request, reply) => {
         const { runId } = request.params;
-        const { fromNode } = (request.body as { fromNode?: string }) ?? {};
+        const body = (request.body as { fromNode?: string; strategy?: string }) ?? {};
+        const { fromNode } = body;
+        const strategy = body.strategy ?? "from-failure";
+
+        if (strategy !== "from-failure" && strategy !== "from-start") {
+          return reply.status(400).send({
+            error: "Bad Request",
+            message: `Invalid strategy "${strategy}". Must be "from-failure" or "from-start".`,
+          });
+        }
 
         let record: PipelineRunRecord | null;
         try {
@@ -384,7 +393,10 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         const order = tempRunner.getExecutionOrder();
 
         let targetIndex: number;
-        if (fromNode) {
+        if (strategy === "from-start") {
+          // Restart from the beginning: reset all steps and clear cursor
+          targetIndex = 0;
+        } else if (fromNode) {
           targetIndex = order.indexOf(fromNode);
           if (targetIndex === -1) {
             return reply.status(400).send({
@@ -404,33 +416,41 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           record.steps[i] = { nodeId: record.steps[i]!.nodeId, status: "pending" };
         }
 
-        // Rebuild artifact context from completed steps before targetIndex
-        const artifacts: Record<string, unknown> = {};
-        for (let k = 0; k < targetIndex; k++) {
-          const s = record.steps[k];
-          if (
-            s?.status === "completed" &&
-            s.data &&
-            typeof s.data === "object" &&
-            "artifactKey" in s.data &&
-            "artifactValue" in s.data
-          ) {
-            const d = s.data as { artifactKey: string; artifactValue: unknown };
-            artifacts[d.artifactKey] = d.artifactValue;
+        if (strategy === "from-start") {
+          // Full restart: clear cursor and outputs
+          delete record.cursor;
+          record.outputs = {};
+        } else {
+          // Rebuild artifact context from completed steps before targetIndex
+          const artifacts: Record<string, unknown> = {};
+          for (let k = 0; k < targetIndex; k++) {
+            const s = record.steps[k];
+            if (
+              s?.status === "completed" &&
+              s.data &&
+              typeof s.data === "object" &&
+              "artifactKey" in s.data &&
+              "artifactValue" in s.data
+            ) {
+              const d = s.data as { artifactKey: string; artifactValue: unknown };
+              artifacts[d.artifactKey] = d.artifactValue;
+            }
           }
+
+          record.cursor = {
+            nextNodeIndex: targetIndex,
+            context: { inputs: record.inputs, artifacts, outputs: record.outputs ?? {} },
+          };
         }
 
-        record.cursor = {
-          nextNodeIndex: targetIndex,
-          context: { inputs: record.inputs, artifacts, outputs: record.outputs ?? {} },
-        };
         record.status = "pending";
         record.updatedAt = Date.now();
+        record.retryCount = 0;
         delete record.error;
         await store.save(record);
 
         if (!scheduler) {
-          // No scheduler — run inline in background using resumeRunId path
+          // No scheduler — run inline in background
           const resumeLog = createLogger({ sink: createRunScopedFileSink(runsDir) });
           const inlineRunner = new DeterministicRunner(entry.definition, {
             store,
@@ -443,12 +463,18 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
             ...(skillsRegistry !== undefined && { skillsRegistry }),
             skillsDir,
           });
-          inlineRunner.run({ resumeRunId: runId }).catch((err) => {
-            console.error(`[server] retry run failed: ${err instanceof Error ? err.message : String(err)}`);
-          });
+          if (strategy === "from-start") {
+            inlineRunner.run({ startRunId: runId, inputs: record.inputs }).catch((err) => {
+              console.error(`[server] retry run failed: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          } else {
+            inlineRunner.run({ resumeRunId: runId }).catch((err) => {
+              console.error(`[server] retry run failed: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          }
         }
 
-        return reply.status(202).send({ runId: record.id, fromNode: order[targetIndex] });
+        return reply.status(202).send({ runId: record.id, fromNode: order[targetIndex], strategy });
       },
     }
   );
@@ -668,6 +694,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
 
   const userConfig = loadUserConfig();
   const bgQueue = new BackgroundQueue({
+    ...(config.queueFilePath != null ? { filePath: config.queueFilePath } : {}),
     maxRetries: userConfig.backgroundQueue?.maxRetries ?? 5,
   });
 

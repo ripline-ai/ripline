@@ -566,6 +566,50 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
     });
 
   program
+    .command("retry <runId>")
+    .description("Retry a failed or paused run via the HTTP API")
+    .option("--from-start", "Restart the entire pipeline from scratch instead of resuming from the failed step")
+    .option("--api-url <url>", "HTTP API base URL (default: http://localhost:4001 or RIPLINE_API_URL)")
+    .action(async (runId: string, opts) => {
+      const apiUrl = (opts.apiUrl?.trim() ?? process.env.RIPLINE_API_URL ?? "http://localhost:4001").replace(/\/$/, "");
+      const strategy = opts.fromStart ? "from-start" : "from-failure";
+      const authHeader: Record<string, string> = process.env.RIPLINE_AUTH_TOKEN
+        ? { Authorization: `Bearer ${process.env.RIPLINE_AUTH_TOKEN}` }
+        : {};
+
+      let res: Response;
+      try {
+        res = await fetch(`${apiUrl}/runs/${runId}/retry`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeader },
+          body: JSON.stringify({ strategy }),
+        });
+      } catch (e) {
+        console.error(chalk.red(`Failed to connect to ${apiUrl}: ${e instanceof Error ? e.message : String(e)}`));
+        process.exit(1);
+      }
+
+      const body = await res.json() as Record<string, unknown>;
+
+      if (res.status === 404) {
+        console.error(chalk.red(`Run not found: ${runId}`));
+        process.exit(1);
+      }
+      if (res.status === 409) {
+        console.error(chalk.red(String(body.message ?? `Run ${runId} is not in a retryable state`)));
+        process.exit(1);
+      }
+      if (!res.ok) {
+        console.error(chalk.red(String(body.message ?? `HTTP ${res.status}`)));
+        process.exit(1);
+      }
+
+      console.log(chalk.green(`Retry accepted for run ${body.runId}`));
+      console.log(chalk.gray(`  strategy: ${body.strategy}`));
+      console.log(chalk.gray(`  from node: ${body.fromNode}`));
+    });
+
+  program
     .command("serve")
     .description("Start the HTTP API server (GET /pipelines, POST /pipelines/:id/run, GET /runs, GET /runs/:runId, GET /runs/:runId/stream, GET /runs/:runId/logs, GET /metrics)")
     .option("--port <number>", `Port (default: ${resolveStageConfig().port})`, String(resolveStageConfig().port))
