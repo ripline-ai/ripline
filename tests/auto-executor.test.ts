@@ -229,8 +229,8 @@ describe("AutoExecutor", () => {
 
       const item = bgQueue.list().find((i) => i.pipeline === "flaky");
       expect(item!.retries).toBe(1);
-      // Should be pending for retry (not yet at max)
-      expect(item!.status).toBe("pending");
+      // After recordRetry sets status to "pending", tryDispatchNext re-pops it → "running"
+      expect(item!.status).toBe("running");
     });
   });
 

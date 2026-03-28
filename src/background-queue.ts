@@ -75,9 +75,9 @@ export class BackgroundQueue {
     const items = this.read();
     const idx = items.findIndex((i) => i.id === id);
     if (idx === -1) return undefined;
-    items[idx] = { ...items[idx], ...patch };
+    items[idx] = { ...items[idx]!, ...patch };
     this.write(items);
-    return items[idx];
+    return items[idx]!;
   }
 
   /** Remove an item by ID. Returns true if found and removed. */
@@ -113,13 +113,13 @@ export class BackgroundQueue {
 
     // Sort descending by computed priority
     pending.sort((a, b) => this.computePriority(b) - this.computePriority(a));
-    const best = pending[0];
+    const best = pending[0]!;
 
     // Mark in-progress
     const idx = items.findIndex((i) => i.id === best.id);
-    items[idx] = { ...items[idx], status: "running", priority: this.computePriority(best) };
+    items[idx] = { ...items[idx]!, status: "running", priority: this.computePriority(best) };
     this.write(items);
-    return items[idx];
+    return items[idx]!;
   }
 
   // ─── Circuit Breaker ─────────────────────────────────────
@@ -133,13 +133,13 @@ export class BackgroundQueue {
     const idx = items.findIndex((i) => i.id === id);
     if (idx === -1) return undefined;
 
-    const item = items[idx];
+    const item = items[idx]!;
     const retries = item.retries + 1;
 
     if (retries >= item.maxRetries) {
-      items[idx] = { ...item, retries, status: "failed", needsReview: true };
+      items[idx] = { ...item, retries, status: "failed" as const, needsReview: true };
     } else {
-      items[idx] = { ...item, retries, status: "pending" };
+      items[idx] = { ...item, retries, status: "pending" as const };
     }
 
     this.write(items);

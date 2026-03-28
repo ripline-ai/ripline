@@ -7,6 +7,8 @@
  */
 
 import fs from "node:fs/promises";
+import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 import type { ActivityEvent } from "./types/activity.js";
 import { resolveStageConfig } from "./config.js";
@@ -23,24 +25,69 @@ const BUFFER_FILE = path.join(
 /**
  * Post a single activity event to Wintermute.
  * Returns true on success, false on failure.
+ *
+ * Uses node:http directly with agent:false to disable keep-alive connection
+ * pooling, ensuring the process can exit cleanly after fire-and-forget calls.
  */
 async function postEvent(event: ActivityEvent): Promise<boolean> {
   const base = process.env["WINTERMUTE_URL"] ?? DEFAULT_WINTERMUTE_URL;
   const url = `${base}${ACTIVITY_ENDPOINT}`;
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), POST_TIMEOUT_MS);
-    const res = await fetch(url, {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (val: boolean) => {
+      if (!settled) {
+        settled = true;
+        resolve(val);
+      }
+    };
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      settle(false);
+      return;
+    }
+
+    const body = JSON.stringify(event);
+    const isHttps = parsedUrl.protocol === "https:";
+    const options: http.RequestOptions = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (isHttps ? 443 : 80),
+      path: parsedUrl.pathname + parsedUrl.search,
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(event),
-      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+        "Connection": "close",
+      },
+      // agent: false disables connection pooling — no keep-alive, process exits cleanly
+      agent: false,
+    };
+
+    const timer = setTimeout(() => {
+      req.destroy();
+      settle(false);
+    }, POST_TIMEOUT_MS);
+
+    const transport = isHttps ? https : http;
+    const req = transport.request(options, (res) => {
+      // Drain response body so the socket closes
+      res.resume();
+      res.on("end", () => {
+        clearTimeout(timer);
+        settle((res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300);
+      });
     });
-    clearTimeout(timer);
-    return res.ok;
-  } catch {
-    return false;
-  }
+
+    req.on("error", () => {
+      clearTimeout(timer);
+      settle(false);
+    });
+
+    req.write(body);
+    req.end();
+  });
 }
 
 /**
@@ -75,8 +122,13 @@ async function bufferEvent(event: ActivityEvent): Promise<void> {
  * Successfully posted events are removed from the buffer.
  * Events that still fail remain in the buffer for the next flush.
  *
+ * Caps the flush to MAX_FLUSH_BATCH events per call to prevent runaway
+ * sequential HTTP traffic from stale backlogs stalling the event loop.
+ *
  * Should be called at pipeline run start.
  */
+const MAX_FLUSH_BATCH = 50;
+
 export async function flushActivityBuffer(): Promise<void> {
   let raw: string;
   try {
@@ -89,9 +141,13 @@ export async function flushActivityBuffer(): Promise<void> {
   const lines = raw.split("\n").filter((l) => l.trim());
   if (lines.length === 0) return;
 
+  // Cap batch size to prevent stalling on large backlogs
+  const batch = lines.slice(0, MAX_FLUSH_BATCH);
+  const deferred = lines.slice(MAX_FLUSH_BATCH);
+
   const stillFailed: ActivityEvent[] = [];
 
-  for (const line of lines) {
+  for (const line of batch) {
     try {
       const event = JSON.parse(line) as ActivityEvent;
       const ok = await postEvent(event);
@@ -103,11 +159,16 @@ export async function flushActivityBuffer(): Promise<void> {
     }
   }
 
+  // Remaining buffer = events that failed to post + events deferred for next batch
+  const remaining = [...stillFailed, ...deferred.map((l) => {
+    try { return JSON.parse(l) as ActivityEvent; } catch { return null; }
+  }).filter((e): e is ActivityEvent => e !== null)];
+
   try {
-    if (stillFailed.length === 0) {
+    if (remaining.length === 0) {
       await fs.unlink(BUFFER_FILE);
     } else {
-      const content = stillFailed.map((e) => JSON.stringify(e)).join("\n") + "\n";
+      const content = remaining.map((e) => JSON.stringify(e)).join("\n") + "\n";
       await fs.writeFile(BUFFER_FILE, content, "utf-8");
     }
   } catch {

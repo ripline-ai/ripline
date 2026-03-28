@@ -629,7 +629,7 @@ describe("Retry endpoint integration", () => {
     const runsDir = path.join(os.tmpdir(), `ripline-acceptance-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     await fs.mkdir(runsDir, { recursive: true });
 
-    const fixturesDir = path.join(process.cwd(), "pipelines", "examples");
+    const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "pipelines");
     const app = await createApp({
       pipelinesDir: fixturesDir,
       httpPath: "/",

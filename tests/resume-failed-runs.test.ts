@@ -905,7 +905,7 @@ describe("Retry endpoint strategies (HTTP server)", () => {
     const runsDir = path.join(os.tmpdir(), `ripline-retry-test-${Date.now()}`);
     await fs.mkdir(runsDir, { recursive: true });
 
-    const fixturesDir = path.join(process.cwd(), "pipelines", "examples");
+    const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "pipelines");
     const app = await createApp({
       pipelinesDir: fixturesDir,
       httpPath: "/",
@@ -964,7 +964,7 @@ describe("Retry endpoint strategies (HTTP server)", () => {
     const runsDir = path.join(os.tmpdir(), `ripline-retry-start-test-${Date.now()}`);
     await fs.mkdir(runsDir, { recursive: true });
 
-    const fixturesDir = path.join(process.cwd(), "pipelines", "examples");
+    const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "pipelines");
     const app = await createApp({
       pipelinesDir: fixturesDir,
       httpPath: "/",
@@ -1015,7 +1015,7 @@ describe("Retry endpoint strategies (HTTP server)", () => {
     const runsDir = path.join(os.tmpdir(), `ripline-retry-conflict-${Date.now()}`);
     await fs.mkdir(runsDir, { recursive: true });
 
-    const fixturesDir = path.join(process.cwd(), "pipelines", "examples");
+    const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "pipelines");
     const app = await createApp({
       pipelinesDir: fixturesDir,
       httpPath: "/",
@@ -1061,7 +1061,7 @@ describe("Retry endpoint strategies (HTTP server)", () => {
     const runsDir = path.join(os.tmpdir(), `ripline-retry-badstrat-${Date.now()}`);
     await fs.mkdir(runsDir, { recursive: true });
 
-    const fixturesDir = path.join(process.cwd(), "pipelines", "examples");
+    const fixturesDir = path.join(process.cwd(), "tests", "fixtures", "pipelines");
     const app = await createApp({
       pipelinesDir: fixturesDir,
       httpPath: "/",

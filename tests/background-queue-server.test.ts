@@ -23,6 +23,7 @@ describe("Background Queue REST endpoints", () => {
       httpPath: "/",
       httpPort: 4001,
       runsDir,
+      queueFilePath: path.join(runsDir, "queue.yaml"),
     };
     app = await createApp(config);
   });
