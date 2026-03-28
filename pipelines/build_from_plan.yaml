@@ -10,7 +10,7 @@
 # Flow:
 #   intake → parse_plan → story_loop → write_tests → build_verify
 #          → reload_staging → verify_staging → patch_complete
-#          → create_tech_debt_items → promote → result
+#          → create_tech_debt_items → promote → backup → result
 
 id: build_from_plan
 name: Build From Plan
@@ -333,9 +333,28 @@ nodes:
       followed by the script output.
       Do not attempt to fix failures — just report them.
 
+  # ── 9. Backup after successful deploy ────────────────────────────────────
+  - id: backup
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 120
+    prompt: |
+      Run the backup script after a successful deployment.
+
+      Use the Bash tool to run:
+
+        ~/backups/wintermuteos-backup/backup.sh 2>&1
+
+      If it exits 0, output "backup: success".
+      If it exits non-zero, log the error output but output "backup: completed with errors (non-blocking)"
+      — do NOT fail or stop the pipeline.
+
   - id: result
     type: output
-    source: promote
+    source: backup
 
 edges:
   - { from: { node: intake },          to: { node: parse_plan } }
@@ -348,4 +367,5 @@ edges:
   - { from: { node: validate_build_output }, to: { node: patch_complete } }
   - { from: { node: patch_complete },        to: { node: create_tech_debt_items } }
   - { from: { node: create_tech_debt_items }, to: { node: promote } }
-  - { from: { node: promote },         to: { node: result } }
+  - { from: { node: promote },         to: { node: backup } }
+  - { from: { node: backup },          to: { node: result } }
