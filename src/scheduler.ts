@@ -1,10 +1,11 @@
 import path from "node:path";
 import type { RunStore } from "./run-store.js";
 import type { RunQueue } from "./run-queue.js";
-import type { AgentDefinition, SkillsRegistry, PipelineRegistryEntry } from "./types.js";
+import type { AgentDefinition, SkillsRegistry, PipelineRegistryEntry, RetryPolicy, ErrorCategory } from "./types.js";
 import { createLogger } from "./log.js";
 import { createRunScopedFileSink } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
+import { EventBus } from "./event-bus.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
 
 export type SchedulerConfig = {
@@ -51,6 +52,96 @@ export type Scheduler = {
   getMetrics(): Promise<SchedulerMetrics>;
   getDetailedMetrics(): Promise<DetailedSchedulerMetrics>;
 };
+
+/**
+ * Compute exponential backoff delay for a retry attempt.
+ */
+function computeRetryBackoff(retryCount: number, backoffMs: number, backoffMultiplier: number): number {
+  return backoffMs * Math.pow(backoffMultiplier, retryCount);
+}
+
+/**
+ * Determine the error category of the most recent failing step in a run record.
+ */
+function getFailedStepErrorCategory(record: import("./types.js").PipelineRunRecord): ErrorCategory | undefined {
+  // Walk steps in reverse to find the most recent errored step
+  for (let i = record.steps.length - 1; i >= 0; i--) {
+    const step = record.steps[i];
+    if (step.status === "errored") {
+      return step.errorCategory;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Attempt to automatically retry a failed run based on its pipeline's retry policy.
+ * Returns true if the run was re-enqueued for retry, false otherwise.
+ */
+async function attemptAutoRetry(
+  failedRecord: import("./types.js").PipelineRunRecord,
+  registry: { get(id: string): Promise<PipelineRegistryEntry | null> },
+  store: RunStore,
+): Promise<boolean> {
+  const bus = EventBus.getInstance();
+
+  // Load the retry policy: prefer the run-level policy, fall back to pipeline definition
+  let retryPolicy: RetryPolicy | undefined = failedRecord.retryPolicy;
+  if (!retryPolicy) {
+    const entry = await registry.get(failedRecord.pipelineId);
+    retryPolicy = entry?.definition.retry;
+  }
+  if (!retryPolicy) return false;
+
+  const errorCategory = getFailedStepErrorCategory(failedRecord);
+  // Only retry if the error category is in the retryable set
+  const isRetryable = errorCategory !== undefined &&
+    retryPolicy.retryableCategories.includes(errorCategory);
+
+  if (!isRetryable) return false;
+
+  const currentRetryCount = failedRecord.retryCount ?? 0;
+
+  if (currentRetryCount >= retryPolicy.maxAttempts) {
+    // Retries exhausted
+    bus.emitRunEvent({
+      event: "run.retry-exhausted",
+      runId: failedRecord.id,
+      pipelineId: failedRecord.pipelineId,
+      status: "errored",
+      retryCount: currentRetryCount,
+      timestamp: Date.now(),
+    });
+    return false;
+  }
+
+  // Compute backoff delay and wait
+  const backoffDelay = computeRetryBackoff(currentRetryCount, retryPolicy.backoffMs, retryPolicy.backoffMultiplier);
+  await new Promise((r) => setTimeout(r, backoffDelay));
+
+  // Re-enqueue: increment retryCount, reset status to pending, preserve cursor
+  const freshRecord = await store.load(failedRecord.id);
+  if (!freshRecord) return false;
+
+  freshRecord.retryCount = currentRetryCount + 1;
+  freshRecord.retryPolicy = retryPolicy;
+  freshRecord.status = "pending";
+  freshRecord.error = undefined;
+  await store.save(freshRecord);
+
+  // Emit auto-retry event
+  bus.emitRunEvent({
+    event: "run.auto-retry",
+    runId: freshRecord.id,
+    pipelineId: freshRecord.pipelineId,
+    status: "pending",
+    retryCount: freshRecord.retryCount,
+    backoffMs: backoffDelay,
+    timestamp: Date.now(),
+  });
+
+  return true;
+}
 
 export function createScheduler(config: SchedulerConfig): Scheduler {
   const {
@@ -164,7 +255,17 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
         const msg = err instanceof Error ? err.message : String(err);
         const loaded = await store.load(record.id);
         if (loaded) await store.failRun(loaded, msg);
+
+        // --- Automatic retry logic ---
         const failedRecord = await store.load(record.id);
+        if (failedRecord && failedRecord.status === "errored") {
+          const retried = await attemptAutoRetry(failedRecord, registry, store);
+          if (retried) {
+            // Run was re-enqueued; skip parent error propagation
+            activeWorkersPerQueue.set(queueName, Math.max(0, (activeWorkersPerQueue.get(queueName) ?? 1) - 1));
+            continue;
+          }
+        }
         if (failedRecord?.parentRunId && failedRecord.status === "errored") {
           const parent = await store.load(failedRecord.parentRunId);
           if (parent?.status === "paused" && parent.childRunIds?.length) {

@@ -8,6 +8,8 @@ export type RunEvent = {
     | "run.started"
     | "run.completed"
     | "run.errored"
+    | "run.auto-retry"
+    | "run.retry-exhausted"
     | "node.started"
     | "node.completed"
     | "node.errored";
@@ -15,6 +17,10 @@ export type RunEvent = {
   pipelineId: string;
   status: string;
   nodeId?: string;
+  /** Present on run.auto-retry events: which retry attempt this is. */
+  retryCount?: number;
+  /** Present on run.auto-retry events: backoff delay in ms before re-enqueue. */
+  backoffMs?: number;
   timestamp: number;
 };
 
