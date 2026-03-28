@@ -1,16 +1,15 @@
 # Build From Plan
 # Fetches a planned Wintermute idea, extracts its stories, and implements them
-# sequentially via Claude Code agents, each committing to a feature branch.
+# sequentially via Claude Code agents, each committing directly to main/master.
+# After all stories are implemented, writes tests, verifies the build, stages,
+# and promotes to production.
 #
 # Inputs:
-#   idea_id     — Wintermute idea ID (required)
-#   branch_name — Git branch to commit to (required, e.g. feat/<idea-id>)
-#   stage    — "production" or "staging" (default: "production")
-#              production → localhost:3000 (Wintermute), localhost:4001 (Ripline)
-#              staging    → localhost:3001 (Wintermute), localhost:4002 (Ripline)
+#   idea_id — Wintermute idea ID (required)
 #
 # Flow:
-#   intake → fetch_idea → parse_plan → story_loop → patch_complete → result
+#   intake → parse_plan → story_loop → write_tests → build_verify
+#          → reload_staging → verify_staging → patch_complete → promote → result
 
 id: build_from_plan
 name: Build From Plan
@@ -20,10 +19,6 @@ entry: [intake]
 nodes:
   - id: intake
     type: input
-
-  - id: resolve_urls
-    type: transform
-    expression: "(function() { var s = (inputs.stage || 'production').toLowerCase(); var wp = s === 'staging' ? 3001 : 3000; var rp = s === 'staging' ? 4002 : 4001; return { wintermute_url: 'http://localhost:' + wp, ripline_url: 'http://localhost:' + rp }; })()"
 
   # ── 1. Parse plan from inputs ─────────────────────────────────────────────
   # Wintermute passes idea data directly as inputs — no HTTP fetch needed.
@@ -41,7 +36,7 @@ nodes:
         };
       })()
 
-  # ── 4. Loop over stories sequentially ────────────────────────────────────
+  # ── 2. Loop over stories sequentially ────────────────────────────────────
   - id: story_loop
     type: loop
     collection: "JSON.parse(inputs.stories_json || '[]')"
@@ -62,7 +57,6 @@ nodes:
 
             ## Context
             Idea: {{idea_title}}
-            Branch: {{branch_name}}
             Idea ID: {{idea_id}}
 
             ## Story to Implement
@@ -76,69 +70,177 @@ nodes:
             {{idea_mvp_scope}}
 
             ## Instructions
-            1. First, ensure you are on the correct branch. Run:
-               git -C <project-dir> checkout {{branch_name}} 2>/dev/null || git -C <project-dir> checkout -b {{branch_name}}
-               Replace <project-dir> with the project's local path (check the idea's projectId if needed, or look in ~/wintermute or ~/ripline).
-            2. Implement the story described above. Make focused, clean changes.
-            3. Commit your work with message: "{{loop.story.id}}: {{loop.story.title}}"
-            4. Output a brief summary of what was implemented (1-3 sentences).
+            1. Determine the project directory from the idea's projectId (~/wintermute or ~/ripline).
+            2. Ensure you are on the main branch (or master for Wintermute):
+               git -C <project-dir> checkout main 2>/dev/null || git -C <project-dir> checkout master
+            3. Implement the story described above. Make focused, clean changes.
+            4. Do NOT write tests — that happens in a dedicated write_tests step after all stories are done.
+            5. Commit your work directly to that branch with message: "{{loop.story.id}}: {{loop.story.title}}"
+            6. Output a brief summary of what was implemented (1-3 sentences).
 
         - id: story_result
           type: output
           source: implement_story
 
-  # ── 5. Merge feature branch to master ────────────────────────────────────
-  - id: merge_to_master
+  # ── 3. Write tests ────────────────────────────────────────────────────────
+  - id: write_tests
     type: agent
     runner: claude-code
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /home/openclaw
-    timeoutSeconds: 60
+    timeoutSeconds: 900
     prompt: |
-      Run these exact commands using the Bash tool, one at a time:
+      All stories for the feature below have been implemented. Your job is to write
+      tests that cover the acceptance criteria for each story and any integration
+      points between them. Work in the relevant project directory.
 
-      1. Find the project directory by checking the idea's projectId:
-         curl -s {{resolve_urls.wintermute_url}}/api/ideas/{{idea_id}} | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('projectId',''))"
+      ## Idea
+      Title: {{idea_title}}
+      ID: {{idea_id}}
 
-      2. Based on the projectId, determine the project directory:
-         - project_wintermute or wintermute → /home/openclaw/wintermute
-         - project_ripline or ripline → /home/openclaw/ripline
-         - If empty or unknown, default to /home/openclaw/wintermute
+      ## MVP Scope / Stories
+      {{idea_mvp_scope}}
 
-      3. Run these git commands in that directory (replace PROJECT_DIR):
-         git -C PROJECT_DIR checkout master
-         git -C PROJECT_DIR merge {{branch_name}} --no-edit
-         git -C PROJECT_DIR push origin master 2>/dev/null || echo "no remote push (ok)"
-         git -C PROJECT_DIR branch -d {{branch_name}} 2>/dev/null || echo "branch delete skipped"
+      ## Story Implementation Summaries
+      {{story_loop.text}}
 
-      Output a single line: "merged {{branch_name}} to master" or an error if it failed.
+      ## Steps
+      1. Determine the project directory from the idea's projectId (~/wintermute or ~/ripline).
+      2. Ensure you are on the main branch (or master for Wintermute).
+      3. Write tests covering:
+         - Each story's acceptance criteria (regression tests)
+         - Integration points between stories, if relevant
+      4. Tests should document correct behavior — they are not driving implementation.
+      5. Do NOT run the tests — that happens in build_verify.
+      6. Commit with message: test: add coverage for {{idea_title}} [{{idea_id}}]
 
-  # ── 6. Mark idea as done ──────────────────────────────────────────────────
+      Output a summary: what tests were written, what scenarios they cover, which files were added or modified.
+
+  # ── 4. Build verification ─────────────────────────────────────────────────
+  - id: build_verify
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw/wintermute
+    timeoutSeconds: 600
+    prompt: |
+      Run a full build and unit-test verification after the feature implementation
+      and test additions.
+
+      Implementation summary:
+      {{story_loop.text}}
+
+      Test summary:
+      {{write_tests.text}}
+
+      Run these commands using the Bash tool in the relevant project directory
+      (determine from the idea's projectId — ~/wintermute or ~/ripline):
+      1. cd <project-dir> && npm run build 2>&1 | tail -20
+      2. cd <project-dir> && npm test -- --passWithNoTests --testPathIgnorePatterns=e2e 2>&1 | tail -30
+
+      If anything fails, attempt one fix and re-run. If it still fails after one fix attempt,
+      report the failure and stop — do not iterate further.
+
+      Report clearly: pass/fail, and what (if anything) required a fix.
+
+  # ── 5. Reload staging ────────────────────────────────────────────────────
+  - id: reload_staging
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 120
+    prompt: |
+      Sync the production vault to staging, then reload both staging services so they
+      pick up the freshly-built code. Use the Bash tool to run these three commands:
+
+      1. ~/wintermute/scripts/vault-sync
+      2. /home/openclaw/.npm-global/bin/pm2 reload wintermute-staging
+      3. /home/openclaw/.npm-global/bin/pm2 reload ripline-staging
+
+      Output "staging ready" when all three succeed, or report the error and stop.
+
+  # ── 6. E2E smoke test against staging ────────────────────────────────────
+  - id: verify_staging
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw/wintermute
+    timeoutSeconds: 300
+    prompt: |
+      Run the e2e smoke tests against the staging stack to verify the feature
+      end-to-end before promoting to production.
+
+      Use the Bash tool:
+
+        cd /home/openclaw/wintermute && \
+          WINTERMUTE_URL=http://localhost:3001 RIPLINE_URL=http://localhost:4002 \
+          npx jest tests/e2e/smoke-consolidated-flow.test.ts --no-coverage 2>&1 | tail -30
+
+      If all tests pass, output "staging verified — ready to promote".
+      If any tests fail, output "STAGING VERIFICATION FAILED" followed by the failure
+      details. Do not proceed — the pipeline will continue to the promote step but
+      promote will see this failure and refuse to reload production.
+
+  # ── 7. Mark idea as done ──────────────────────────────────────────────────
   - id: patch_complete
     type: agent
     runner: claude-code
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /home/openclaw
-    timeoutSeconds: 30
+    timeoutSeconds: 90
     prompt: |
       Run this exact command using the Bash tool:
 
-      curl -s -X PATCH {{resolve_urls.wintermute_url}}/api/ideas/{{idea_id}} \
+      curl -s -X PATCH {{wintermute_base_url}}/api/ideas/{{idea_id}} \
         -H "Content-Type: application/json" \
         -d '{"status":"done"}'
 
       Output only the response JSON, nothing else.
 
+  # ── 8. Promote to production ──────────────────────────────────────────────
+  - id: promote
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 300
+    prompt: |
+      Check the staging verification result, then promote to production if it passed.
+
+      Staging result:
+      {{verify_staging.text}}
+
+      If the staging result contains "STAGING VERIFICATION FAILED", output
+      "promote: ABORTED — staging verification failed, production NOT reloaded"
+      and stop. Do not run any further commands.
+
+      Otherwise, run the promote script using the Bash tool:
+
+        ~/wintermute/bin/promote
+
+      If it exits 0, output "promote: success — production reloaded".
+      If it exits non-zero, output "promote: FAILED — production NOT reloaded"
+      followed by the script output.
+      Do not attempt to fix failures — just report them.
+
   - id: result
     type: output
-    source: patch_complete
+    source: promote
 
 edges:
-  - { from: { node: intake },         to: { node: resolve_urls } }
-  - { from: { node: resolve_urls }, to: { node: parse_plan } }
-  - { from: { node: parse_plan },     to: { node: story_loop } }
-  - { from: { node: story_loop },     to: { node: merge_to_master } }
-  - { from: { node: merge_to_master }, to: { node: patch_complete } }
-  - { from: { node: patch_complete }, to: { node: result } }
+  - { from: { node: intake },          to: { node: parse_plan } }
+  - { from: { node: parse_plan },      to: { node: story_loop } }
+  - { from: { node: story_loop },      to: { node: write_tests } }
+  - { from: { node: write_tests },     to: { node: build_verify } }
+  - { from: { node: build_verify },    to: { node: reload_staging } }
+  - { from: { node: reload_staging },  to: { node: verify_staging } }
+  - { from: { node: verify_staging },  to: { node: patch_complete } }
+  - { from: { node: patch_complete },  to: { node: promote } }
+  - { from: { node: promote },         to: { node: result } }
