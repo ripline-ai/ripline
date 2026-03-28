@@ -14,6 +14,7 @@ export class MemoryRunStore implements RunStore {
       id,
       pipelineId: params.pipelineId,
       ...(params.parentRunId !== undefined && { parentRunId: params.parentRunId }),
+      source: params.source ?? "user",
       ...(params.taskId !== undefined && { taskId: params.taskId }),
       ...(params.queueMode !== undefined && { queueMode: params.queueMode }),
       ...(params.queueName !== undefined && { queueName: params.queueName }),

@@ -45,6 +45,10 @@ export type RiplineUserConfig = {
   defaultProfile?: string;
   /** Only from ~/.ripline/config.json; never from pipeline/profile/input. */
   claudeCode?: { allowDangerouslySkipPermissions?: boolean };
+  /** Background queue configuration. */
+  backgroundQueue?: BackgroundQueueConfig;
+  /** Telegram notification configuration. */
+  telegram?: TelegramConfig;
 };
 
 export type PipelinePluginConfig = {
@@ -269,10 +273,42 @@ export type PipelineRunStep = {
 
 export type QueueMode = "batch" | "per-item";
 
+/** How a run was initiated. */
+export type RunSource = "user" | "schedule" | "background";
+
+/** An item queued for background processing. */
+export type BackgroundQueueItem = {
+  id: string;
+  pipeline: string;
+  inputs: Record<string, unknown>;
+  priority: number;
+  severityWeight: number;
+  manualBoost: number;
+  createdAt: number;
+  status: "pending" | "running" | "completed" | "errored";
+  retries: number;
+  maxRetries: number;
+  needsReview: boolean;
+};
+
+/** Configuration for the background queue. */
+export type BackgroundQueueConfig = {
+  enabled: boolean;
+  maxRetries: number;
+};
+
+/** Configuration for Telegram notifications. */
+export type TelegramConfig = {
+  botToken: string;
+  chatId: string;
+};
+
 export type PipelineRunRecord = {
   id: string;
   pipelineId: string;
   parentRunId?: string;
+  /** How this run was initiated. Defaults to 'user'. */
+  source?: RunSource;
   /** When this run was created by an enqueue node. */
   taskId?: string;
   /** When this run was created by an enqueue node. */

@@ -7,6 +7,7 @@ import {
   loadUserConfig,
   resolvePipelineDir,
   resolveProfileDir,
+  resolveStageConfig,
 } from "../src/config.js";
 
 describe("normalizeConfig", () => {
@@ -235,5 +236,34 @@ describe("resolveProfileDir", () => {
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveStageConfig", () => {
+  it("returns production config when STAGE is unset", () => {
+    const cfg = resolveStageConfig({});
+    expect(cfg.stage).toBe("production");
+    expect(cfg.port).toBe(4001);
+    expect(cfg.wintermuteBaseUrl).toBe("http://localhost:3000");
+  });
+
+  it("returns production config when STAGE is 'production'", () => {
+    const cfg = resolveStageConfig({ STAGE: "production" });
+    expect(cfg.stage).toBe("production");
+    expect(cfg.port).toBe(4001);
+    expect(cfg.wintermuteBaseUrl).toBe("http://localhost:3000");
+  });
+
+  it("returns staging config when STAGE is 'staging'", () => {
+    const cfg = resolveStageConfig({ STAGE: "staging" });
+    expect(cfg.stage).toBe("staging");
+    expect(cfg.port).toBe(4002);
+    expect(cfg.wintermuteBaseUrl).toBe("http://localhost:3001");
+  });
+
+  it("defaults to production for unrecognised STAGE values", () => {
+    const cfg = resolveStageConfig({ STAGE: "dev" });
+    expect(cfg.stage).toBe("production");
+    expect(cfg.port).toBe(4001);
   });
 });

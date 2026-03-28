@@ -1,8 +1,10 @@
 import type { RunStore } from "./run-store.js";
-import type { PipelineRunRecord, QueueMode } from "./types.js";
+import type { PipelineRunRecord, QueueMode, RunSource } from "./types.js";
 
 export type EnqueueOptions = {
   parentRunId?: string;
+  /** How this run was initiated. Defaults to 'user'. */
+  source?: RunSource;
   taskId?: string;
   queueMode?: QueueMode;
   /** Named queue this run belongs to. Defaults to "default". */
@@ -41,6 +43,7 @@ export function createRunQueue(store: RunStore): RunQueue {
         pipelineId,
         inputs,
         ...(options?.parentRunId !== undefined && { parentRunId: options.parentRunId }),
+        ...(options?.source !== undefined && { source: options.source }),
         ...(options?.taskId !== undefined && { taskId: options.taskId }),
         ...(options?.queueMode !== undefined && { queueMode: options.queueMode }),
         ...(options?.queueName !== undefined && { queueName: options.queueName }),

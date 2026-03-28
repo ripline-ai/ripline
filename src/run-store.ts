@@ -2,12 +2,14 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { writeJsonAtomically } from "./lib/atomic-write.js";
-import type { PipelineRunRecord, PipelineRunStep, PipelineRunStatus, QueueMode } from "./types.js";
+import type { PipelineRunRecord, PipelineRunStep, PipelineRunStatus, QueueMode, RunSource } from "./types.js";
 
 export type RunStoreCreateParams = {
   pipelineId: string;
   inputs: Record<string, unknown>;
   parentRunId?: string;
+  /** How this run was initiated. Defaults to 'user'. */
+  source?: RunSource;
   taskId?: string;
   queueMode?: QueueMode;
   /** Named queue this run belongs to. Defaults to "default". */
@@ -74,6 +76,7 @@ export class PipelineRunStore implements RunStore {
       id,
       pipelineId: params.pipelineId,
       ...(params.parentRunId !== undefined && { parentRunId: params.parentRunId }),
+      source: params.source ?? "user",
       ...(params.taskId !== undefined && { taskId: params.taskId }),
       ...(params.queueMode !== undefined && { queueMode: params.queueMode as QueueMode }),
       ...(params.queueName !== undefined && { queueName: params.queueName }),

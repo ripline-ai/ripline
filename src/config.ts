@@ -70,6 +70,29 @@ export function loadUserConfig(homedir?: string): RiplineUserConfig {
     if (claudeBlock && typeof claudeBlock === "object" && (claudeBlock as Record<string, unknown>).allowDangerouslySkipPermissions === true) {
       result.claudeCode = { allowDangerouslySkipPermissions: true };
     }
+
+    // Background queue config (defaults: enabled=false, maxRetries=3)
+    const bgBlock = parsed.backgroundQueue;
+    if (bgBlock && typeof bgBlock === "object") {
+      const bg = bgBlock as Record<string, unknown>;
+      result.backgroundQueue = {
+        enabled: bg.enabled === true,
+        maxRetries: typeof bg.maxRetries === "number" ? bg.maxRetries : 3,
+      };
+    }
+
+    // Telegram config
+    const tgBlock = parsed.telegram;
+    if (tgBlock && typeof tgBlock === "object") {
+      const tg = tgBlock as Record<string, unknown>;
+      if (typeof tg.botToken === "string" && typeof tg.chatId === "string") {
+        result.telegram = {
+          botToken: tg.botToken,
+          chatId: tg.chatId,
+        };
+      }
+    }
+
     return result;
   } catch {
     return {};
