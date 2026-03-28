@@ -648,13 +648,18 @@ export class DeterministicRunner extends EventEmitter {
       return false;
     }
 
-    const conditionalEdges = incomingEdges.filter((e) => e.when != null && e.when.trim() !== "");
-    const unconditionalEdges = incomingEdges.filter((e) => e.when == null || e.when.trim() === "");
+    const conditionalEdges = incomingEdges.filter(
+      (e) => !e.default && e.when != null && e.when.trim() !== "",
+    );
+    const unconditionalEdges = incomingEdges.filter(
+      (e) => !e.default && (e.when == null || e.when.trim() === ""),
+    );
+    const defaultEdges = incomingEdges.filter((e) => e.default === true);
 
     // If there are any unconditional edges from non-skipped sources, always execute.
     if (unconditionalEdges.length > 0) return true;
-    // No conditional edges at all — always execute.
-    if (conditionalEdges.length === 0) return true;
+    // No conditional or default edges at all — always execute.
+    if (conditionalEdges.length === 0 && defaultEdges.length === 0) return true;
 
     const evalContext: Record<string, unknown> = {
       inputs: context.inputs,
@@ -671,6 +676,30 @@ export class DeterministicRunner extends EventEmitter {
         // Expression error → treat as falsy.
       }
     }
+
+    // Default edge fallback: a default edge fires when ALL sibling when-conditional
+    // edges from the same source node evaluate to false.
+    for (const defEdge of defaultEdges) {
+      const sourceId = defEdge.from.node;
+      // Gather all when-conditional sibling edges from the same source (not just
+      // those targeting this node).
+      const siblingConditionals = this.definition.edges.filter(
+        (e) =>
+          e.from.node === sourceId &&
+          !e.default &&
+          e.when != null &&
+          e.when.trim() !== "",
+      );
+      const anyTrue = siblingConditionals.some((e) => {
+        try {
+          return !!evaluateExpression(e.when!, evalContext);
+        } catch {
+          return false;
+        }
+      });
+      if (!anyTrue) return true; // Default edge fires.
+    }
+
     return false;
   }
 
