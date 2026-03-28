@@ -8,6 +8,7 @@ import { executeCollectChildren } from "./collect-children.js";
 import type { AgentRunner } from "./agent.js";
 import { executeAgent } from "./agent.js";
 import { executeLoop } from "./loop.js";
+import { executeSwitch } from "./switch.js";
 
 export type { NodeResult, ExecutorContext, NodeExecutor } from "./types.js";
 export type { AgentRunner, AgentResult } from "./agent.js";
@@ -18,6 +19,7 @@ export { executeEnqueue } from "./enqueue.js";
 export { executeCollectChildren } from "./collect-children.js";
 export { executeAgent } from "./agent.js";
 export { executeLoop } from "./loop.js";
+export { executeSwitch } from "./switch.js";
 
 export type ExecutorRegistryOptions = {
   agentRunner?: AgentRunner;
@@ -49,6 +51,7 @@ function registerExecutors() {
       ...(options?.skillsDir !== undefined && { skillsDir: options.skillsDir }),
     }
   ));
+  executors.set("switch", (node, ctx) => executeSwitch(node as import("../../types.js").SwitchNode, ctx));
   executors.set("agent", (node, ctx, options) => {
     const agentNode = node as import("../../types.js").AgentNode;
     return executeAgent(
