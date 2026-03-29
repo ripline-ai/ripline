@@ -59,6 +59,12 @@ export class AutoExecutor {
     this.enabled = true;
     EventBus.getInstance().on("run-event", this.eventHandler);
     log.log("info", "[auto-executor] enabled");
+    // Recover orphaned "running" items that have no runId (e.g. from a previous crash/restart)
+    const orphaned = this.bgQueue.list().filter((i) => i.status === "running" && !i.runId);
+    for (const item of orphaned) {
+      log.log("warn", `[auto-executor] resetting orphaned queue item ${item.id} to pending`);
+      this.bgQueue.update(item.id, { status: "pending" });
+    }
     // Kick off immediately if nothing is running
     this.tryDispatchNext().catch((err) => {
       log.log("error", `[auto-executor] error on initial dispatch: ${err instanceof Error ? err.message : String(err)}`);
@@ -205,6 +211,7 @@ export class AutoExecutor {
       const resolvedRunId = Array.isArray(runId) ? runId[0] : runId;
       if (resolvedRunId) {
         this.activeRunMap.set(resolvedRunId, item.id);
+        this.bgQueue.update(item.id, { runId: resolvedRunId });
       }
 
       // Telegram notification

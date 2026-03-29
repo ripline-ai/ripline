@@ -358,6 +358,7 @@ export type BackgroundQueueItem = {
   manualBoost: number;
   createdAt: number;
   status: "pending" | "running" | "completed" | "errored" | "failed";
+  runId?: string;
   retries: number;
   maxRetries: number;
   needsReview: boolean;
