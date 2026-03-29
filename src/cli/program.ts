@@ -641,6 +641,13 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       const agentRunner = llmConfig ? createLlmAgentRunner(llmConfig) : undefined;
       const claudeCodeConfig = resolveClaudeCodeConfig({ cwd: process.cwd(), homedir: os.homedir() });
       const claudeCodeRunner = claudeCodeConfig ? createClaudeCodeRunner(claudeCodeConfig) : undefined;
+      // Inject stage-aware URLs into process.env so Claude Code agents (and the
+      // Python scripts they run) can access them via os.environ without hardcoding
+      // localhost ports.  Caller-set env vars always take precedence.
+      const serveStageConfig = resolveStageConfig();
+      if (!process.env.WINTERMUTE_URL) process.env.WINTERMUTE_URL = serveStageConfig.wintermuteBaseUrl;
+      if (!process.env.RIPLINE_URL)    process.env.RIPLINE_URL    = serveStageConfig.riplineUrl;
+
       // Load user config early so queue logging and container build config are both available
       const serveUserConfig = loadUserConfig(os.homedir());
       console.log(chalk.cyan(`Starting HTTP server on port ${port}`));
