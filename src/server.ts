@@ -28,6 +28,7 @@ import { createTelegramNotifier } from "./telegram.js";
 import { FocusAreaStore } from "./focus-area-store.js";
 import { registerFocusAreaRoutes } from "./routes/focus-areas.js";
 import { registerEpicRoutes } from "./routes/epics.js";
+import { registerUsageRoutes } from "./routes/usage.js";
 import YAML from "yaml";
 
 const DEFAULT_RUNS_DIR = ".ripline/runs";
@@ -911,6 +912,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
 
   registerFocusAreaRoutes(fastify, faStore, requireAuth);
   registerEpicRoutes(fastify, faStore, requireAuth);
+  registerUsageRoutes(fastify, requireAuth);
 
   return fastify;
 }
