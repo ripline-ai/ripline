@@ -1,19 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import * as child_process from "node:child_process";
 import { promoteStep, type PromoteStepParams } from "../src/promote-step.js";
+
+/* ── ESM-safe mock ────────────────────────────────────────────────────── */
+
+const { spawnMockFn } = vi.hoisted(() => ({ spawnMockFn: vi.fn() }));
+
+vi.mock("node:child_process", () => ({ spawn: spawnMockFn }));
 
 /* ── Helpers ──────────────────────────────────────────────────────────── */
 
-/**
- * Create a mock spawn that simulates sequential shell command execution.
- * The commandResults map uses command substrings as keys.
- */
 function mockSpawnForCommands(
   commandResults: Record<string, { exitCode: number; output?: string }>,
 ) {
-  vi.spyOn(child_process, "spawn").mockImplementation((cmd, args) => {
+  spawnMockFn.mockImplementation((cmd: string, args: string[]) => {
     const fullCommand = Array.isArray(args) ? args.join(" ") : String(args);
-    // Find matching command
     let result = { exitCode: 0, output: "" };
     for (const [key, val] of Object.entries(commandResults)) {
       if (fullCommand.includes(key)) {
@@ -32,7 +32,6 @@ function mockSpawnForCommands(
         }
       }),
       kill: vi.fn((sig?: string) => {
-        // Simulate timeout kill
         const closeHandlers = handlers["close"] ?? [];
         for (const h of closeHandlers) h(124);
       }),
@@ -44,9 +43,7 @@ function mockSpawnForCommands(
         }),
       },
       stderr: {
-        on: vi.fn((event: string, handler: any) => {
-          // no-op
-        }),
+        on: vi.fn((_event: string, _handler: any) => {}),
       },
       pid: 1234,
     };
@@ -67,10 +64,8 @@ const baseParams: PromoteStepParams = {
 
 describe("promoteStep", () => {
   afterEach(() => {
-    vi.restoreAllMocks();
+    spawnMockFn.mockReset();
   });
-
-  /* ── Happy path: fast-forward merge succeeds ─────────────────────── */
 
   it("returns 'merged' on successful fast-forward merge with passing tests", async () => {
     mockSpawnForCommands({
@@ -91,8 +86,6 @@ describe("promoteStep", () => {
     expect(result.mergeCommit).toBeDefined();
   });
 
-  /* ── Test failure after merge ────────────────────────────────────── */
-
   it("returns 'test-failure' when tests fail after merge, reverts merge", async () => {
     mockSpawnForCommands({
       "fetch origin": { exitCode: 0 },
@@ -107,11 +100,9 @@ describe("promoteStep", () => {
 
     expect(result.status).toBe("test-failure");
     expect(result.message).toContain("Test suite failed");
-    expect(result.message).toContain("Merge reverted");
+    expect(result.message).toContain("Merge aborted");
     expect(result.testOutput).toBeDefined();
   });
-
-  /* ── Merge conflict ──────────────────────────────────────────────── */
 
   it("returns 'merge-conflict' when rebase detects conflicts", async () => {
     mockSpawnForCommands({
@@ -119,7 +110,6 @@ describe("promoteStep", () => {
       "checkout main": { exitCode: 0 },
       "pull origin main": { exitCode: 0 },
       "merge --ff-only": { exitCode: 1 },
-      // Rebase flow
       "reset --hard HEAD": { exitCode: 0 },
       "checkout build/run-123": { exitCode: 0 },
       "rebase main": { exitCode: 1, output: "CONFLICT (content): Merge conflict in src/index.ts" },
@@ -134,8 +124,6 @@ describe("promoteStep", () => {
     expect(result.gitOutput).toBeDefined();
   });
 
-  /* ── Checkout failure ────────────────────────────────────────────── */
-
   it("returns 'error' when checkout of target branch fails", async () => {
     mockSpawnForCommands({
       "fetch origin": { exitCode: 0 },
@@ -148,23 +136,48 @@ describe("promoteStep", () => {
     expect(result.message).toContain("Failed to checkout target branch");
   });
 
-  /* ── Rebase succeeds when FF fails ───────────────────────────────── */
-
   it("falls back to rebase when fast-forward is not possible", async () => {
-    mockSpawnForCommands({
-      "fetch origin": { exitCode: 0 },
-      "checkout main": { exitCode: 0 },
-      "pull origin main": { exitCode: 0 },
-      "merge --ff-only build/run-123": { exitCode: 1, output: "Not possible to fast-forward" },
-      // rebaseAndMerge flow
-      "reset --hard HEAD": { exitCode: 0 },
-      "checkout build/run-123": { exitCode: 0 },
-      "rebase main": { exitCode: 0 },
-      "merge --ff-only": { exitCode: 0 },
-      // Back to main flow
-      "npm test": { exitCode: 0 },
-      "rev-parse HEAD": { exitCode: 0, output: "def456abc789\n" },
-      "branch -d": { exitCode: 0 },
+    // The first `git merge --ff-only build/run-123` fails (FF not possible).
+    // After rebase succeeds, the exact same command is issued again and must succeed.
+    // mockSpawnForCommands matches by substring so can't distinguish the two calls —
+    // use a counter-aware implementation instead.
+    let ffMergeCallCount = 0;
+    spawnMockFn.mockImplementation((cmd: string, args: string[]) => {
+      const fullCommand = Array.isArray(args) ? args.join(" ") : String(args);
+
+      let exitCode = 0;
+      let output = "";
+
+      if (fullCommand.includes("merge --ff-only")) {
+        ffMergeCallCount++;
+        if (ffMergeCallCount === 1) {
+          exitCode = 1;
+          output = "Not possible to fast-forward";
+        }
+      } else if (fullCommand.includes("rev-parse")) {
+        output = "def456abc789\n";
+      }
+
+      const handlers: Record<string, ((...a: any[]) => void)[]> = {};
+      const proc = {
+        on: vi.fn((event: string, handler: any) => {
+          if (!handlers[event]) handlers[event] = [];
+          handlers[event]!.push(handler);
+          if (event === "close") setTimeout(() => handler(exitCode), 5);
+        }),
+        kill: vi.fn((sig?: string) => {
+          const closeHandlers = handlers["close"] ?? [];
+          for (const h of closeHandlers) h(124);
+        }),
+        stdout: {
+          on: vi.fn((event: string, handler: any) => {
+            if (event === "data" && output) handler(Buffer.from(output));
+          }),
+        },
+        stderr: { on: vi.fn((_event: string, _handler: any) => {}) },
+        pid: 1234,
+      };
+      return proc as any;
     });
 
     const result = await promoteStep(baseParams);
@@ -172,8 +185,6 @@ describe("promoteStep", () => {
     expect(result.status).toBe("merged");
     expect(result.mergeCommit).toBeDefined();
   });
-
-  /* ── Branch preserved on failure ─────────────────────────────────── */
 
   it("preserves feature branch on merge conflict for manual resolution", async () => {
     mockSpawnForCommands({
@@ -190,14 +201,11 @@ describe("promoteStep", () => {
     const result = await promoteStep(baseParams);
 
     expect(result.status).toBe("merge-conflict");
-    // The message should indicate the branch is preserved
     expect(result.message).toContain("Branch preserved");
   });
 
-  /* ── Feature branch deleted on success ───────────────────────────── */
-
   it("deletes feature branch locally after successful merge", async () => {
-    const spawnSpy = mockSpawnForCommands({
+    mockSpawnForCommands({
       "fetch origin": { exitCode: 0 },
       "checkout main": { exitCode: 0 },
       "pull origin main": { exitCode: 0 },
@@ -210,14 +218,11 @@ describe("promoteStep", () => {
     const result = await promoteStep(baseParams);
 
     expect(result.status).toBe("merged");
-    // Verify branch -d was called (indirectly via the mock setup)
   });
-
-  /* ── Custom remote name ──────────────────────────────────────────── */
 
   it("uses custom remote name when specified", async () => {
     const spawnCalls: string[] = [];
-    vi.spyOn(child_process, "spawn").mockImplementation((cmd, args) => {
+    spawnMockFn.mockImplementation((cmd: string, args: string[]) => {
       const fullCommand = Array.isArray(args) ? args.join(" ") : "";
       spawnCalls.push(fullCommand);
       const proc = {
@@ -238,19 +243,13 @@ describe("promoteStep", () => {
       return proc as any;
     });
 
-    await promoteStep({
-      ...baseParams,
-      remote: "upstream",
-    });
+    await promoteStep({ ...baseParams, remote: "upstream" });
 
     const fetchCmd = spawnCalls.find((c) => c.includes("fetch"));
     expect(fetchCmd).toContain("upstream");
   });
 
-  /* ── Result types ────────────────────────────────────────────────── */
-
   it("returns all four possible status values", () => {
-    // Type-level check: ensure the union is exhaustive
     const statuses: Array<"merged" | "merge-conflict" | "test-failure" | "error"> = [
       "merged",
       "merge-conflict",
@@ -259,8 +258,6 @@ describe("promoteStep", () => {
     ];
     expect(statuses).toHaveLength(4);
   });
-
-  /* ── Truncation of test output ───────────────────────────────────── */
 
   it("truncates test output to last 4000 chars on test failure", async () => {
     const longOutput = "x".repeat(5000);
@@ -280,10 +277,8 @@ describe("promoteStep", () => {
     expect(result.testOutput!.length).toBeLessThanOrEqual(4000);
   });
 
-  /* ── Unexpected error handling ───────────────────────────────────── */
-
   it("returns 'error' status on unexpected exception", async () => {
-    vi.spyOn(child_process, "spawn").mockImplementation(() => {
+    spawnMockFn.mockImplementation(() => {
       throw new Error("Unexpected spawn failure");
     });
 
