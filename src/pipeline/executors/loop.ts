@@ -6,6 +6,12 @@ import { executeAgent } from "./agent.js";
 import { executeTransform } from "./transform.js";
 import { computeDependencyWaves } from "../../lib/dependency-waves.js";
 import type { Story } from "../../lib/dependency-waves.js";
+import {
+  deriveResultKey,
+  mergeWaveResults,
+  buildPriorResultsContext,
+  safeLargeArtifact,
+} from "../../lib/merge-iteration-results.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
@@ -32,6 +38,8 @@ type ParallelLoopState = {
   lastWaveChildRunIds: string[];
   /** Map from child runId → original collection index, for the last dispatched wave. */
   childRunIdToIndex: Record<string, number>;
+  /** Output key to extract from child runs to match sequential loop shape. */
+  resultKey?: string;
 };
 
 /** Artifact key used to persist parallel-loop state across pause/resume cycles. */
@@ -129,16 +137,14 @@ async function executeParallelLoop(
   let state = context.artifacts[stateKey] as ParallelLoopState | undefined;
 
   if (state && state.nextWaveIndex > 0) {
-    // Resuming after a wave completed — collect child results.
-    const results = await collectWaveResults(
+    // Resuming after a wave completed — collect child results and merge
+    // into iterationResults, normalizing to match sequential loop shape.
+    const rawResults = await collectWaveResults(
       store,
       state.lastWaveChildRunIds,
       state.childRunIdToIndex,
     );
-    // Place results in dependency order into iterationResults.
-    for (const { index, result } of results) {
-      state.iterationResults[index] = result;
-    }
+    mergeWaveResults(state.iterationResults, rawResults, state.resultKey);
   }
 
   // ── First invocation: compute waves ────────────────────────────
@@ -153,20 +159,33 @@ async function executeParallelLoop(
       wave.map((s) => idToIdx.get(s.id)!),
     );
 
+    // Derive resultKey from inline body nodes so child outputs can be
+    // normalized to match the sequential loop's per-iteration shape.
+    const resultKey = deriveResultKey(node.body.nodes);
+
     state = {
       waves,
       nextWaveIndex: 0,
       iterationResults: new Array(collection.length).fill(null),
       lastWaveChildRunIds: [],
       childRunIdToIndex: {},
+      ...(resultKey !== undefined ? { resultKey } : {}),
     };
   }
 
   // ── Dispatch next wave ─────────────────────────────────────────
-  if (state.nextWaveIndex < state.waves.length) {
-    const waveIndices = state.waves[state.nextWaveIndex]!;
+  // After the init block above, state is always defined.
+  const st = state!;
+  if (st.nextWaveIndex < st.waves.length) {
+    const waveIndices = st.waves[st.nextWaveIndex]!;
     const childRunIds: string[] = [];
     const childRunIdToIndex: Record<string, number> = {};
+
+    // Build prior-wave results so child runs in this wave can access
+    // outputs from earlier waves via inputs.__loop.priorResults.
+    const priorResults = st.nextWaveIndex > 0
+      ? buildPriorResultsContext(st.iterationResults, collection)
+      : [];
 
     for (const idx of waveIndices) {
       const item = collection[idx];
@@ -179,6 +198,8 @@ async function executeParallelLoop(
             index: idx,
             item,
             parentNodeId: node.id,
+            waveIndex: st.nextWaveIndex,
+            priorResults,
           },
         },
         { parentRunId: runId, taskId: String(idx), queueMode: "per-item" },
@@ -188,40 +209,42 @@ async function executeParallelLoop(
       childRunIdToIndex[id] = idx;
     }
 
-    state.lastWaveChildRunIds = childRunIds;
-    state.childRunIdToIndex = childRunIdToIndex;
-    state.nextWaveIndex++;
+    st.lastWaveChildRunIds = childRunIds;
+    st.childRunIdToIndex = childRunIdToIndex;
+    st.nextWaveIndex++;
 
     // Persist state so it survives the pause/resume cycle.
-    context.artifacts[stateKey] = state;
+    context.artifacts[stateKey] = st;
 
-    const isLastWave = state.nextWaveIndex >= state.waves.length;
+    const isLastWave = st.nextWaveIndex >= st.waves.length;
 
     // Return childRunIds to trigger runner pause.
     // If more waves remain, set rerunOnResume so the runner re-executes this node.
     return {
       artifactKey: node.id,
-      value: state.iterationResults,
+      value: st.iterationResults,
       childRunIds,
       ...(!isLastWave && { rerunOnResume: true }),
     };
   }
 
   // ── All waves complete — finalize ──────────────────────────────
+  // Apply safe-large-artifact handling to final results.
+  const finalResults = st.iterationResults.map((r) => safeLargeArtifact(r));
+
   // Expose loop context one final time for downstream consumption.
   context.artifacts["loop"] = {
     [itemVar]: null,
     index: collection.length,
-    results: state.iterationResults,
+    results: finalResults,
   };
 
   // Clean up internal state.
   delete context.artifacts[stateKey];
   delete context.artifacts["loop"];
 
-  const value = state.iterationResults;
-  context.artifacts[node.id] = value;
-  return { artifactKey: node.id, value };
+  context.artifacts[node.id] = finalResults;
+  return { artifactKey: node.id, value: finalResults };
 }
 
 /**
