@@ -30,6 +30,8 @@ export interface ClassifiableError {
   status?: number;
   code?: string;
   message?: string;
+  /** Explicit error category — when set, classification short-circuits to this value. */
+  errorCategory?: ErrorCategory;
 }
 
 /**
@@ -43,6 +45,9 @@ export interface ClassifiableError {
  */
 export function classifyError(error: ClassifiableError | Error | unknown): ErrorCategory {
   const err = normalizeError(error);
+
+  // 0. Explicit category (e.g. propagated from a child run)
+  if (err.errorCategory) return err.errorCategory;
 
   // 1. Check HTTP status code
   const status = err.statusCode ?? err.status;

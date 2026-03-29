@@ -12,6 +12,7 @@ import {
   buildPriorResultsContext,
   safeLargeArtifact,
 } from "../../lib/merge-iteration-results.js";
+import type { ErrorCategory } from "../error-classifier.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
@@ -41,6 +42,19 @@ type ParallelLoopState = {
   /** Output key to extract from child runs to match sequential loop shape. */
   resultKey?: string;
 };
+
+/**
+ * Custom error thrown when one or more child runs in a wave fail.
+ * Carries the error category from the child for propagation to the parent run.
+ */
+class WaveFailureError extends Error {
+  errorCategory: ErrorCategory | undefined;
+  constructor(message: string, errorCategory?: ErrorCategory) {
+    super(message);
+    this.name = "WaveFailureError";
+    this.errorCategory = errorCategory;
+  }
+}
 
 /** Artifact key used to persist parallel-loop state across pause/resume cycles. */
 function parallelStateKey(nodeId: string): string {
@@ -144,6 +158,59 @@ async function executeParallelLoop(
       state.lastWaveChildRunIds,
       state.childRunIdToIndex,
     );
+
+    // Check for failed children in this wave.
+    // Child retries have already been exhausted by the scheduler before
+    // the parent is resumed, so any failure here is final.
+    const failures = rawResults.filter((r) => r.failed);
+    if (failures.length > 0) {
+      // Merge results first so partial successes are preserved in the run record.
+      mergeWaveResults(state.iterationResults, rawResults, state.resultKey);
+      // Persist partial results to artifacts so the run record captures them.
+      context.artifacts[stateKey] = state;
+      context.artifacts[node.id] = state.iterationResults.map((r) => safeLargeArtifact(r));
+
+      // Identify succeeded and failed stories for the error message.
+      const succeeded = rawResults
+        .filter((r) => !r.failed)
+        .map((r) => {
+          const item = collection[r.index] as Record<string, unknown> | undefined;
+          return item?.id ?? item?.title ?? `index:${r.index}`;
+        });
+      const failedDescriptions = failures.map((f) => {
+        const item = collection[f.index] as Record<string, unknown> | undefined;
+        const name = item?.id ?? item?.title ?? `index:${f.index}`;
+        return `${name}: ${f.failed!.error}`;
+      });
+
+      const waveLabel = `wave ${state.nextWaveIndex}`;
+      const successMsg = succeeded.length > 0
+        ? ` Completed in same wave: [${succeeded.join(", ")}].`
+        : "";
+      const errorMsg =
+        `Parallel ${waveLabel} failed — ${failures.length} story(ies) errored: ` +
+        `[${failedDescriptions.join("; ")}].${successMsg}`;
+
+      // Propagate the most severe error category from failed children.
+      // Priority: permanent > unknown > transient (permanent means no retry).
+      const CATEGORY_PRIORITY: Record<string, number> = { permanent: 3, unknown: 2, transient: 1 };
+      let worstCategory: ErrorCategory | undefined;
+      let worstPriority = 0;
+      for (const f of failures) {
+        const cat = f.failed!.errorCategory;
+        const p = cat ? (CATEGORY_PRIORITY[cat] ?? 0) : 0;
+        if (p > worstPriority) {
+          worstPriority = p;
+          worstCategory = cat;
+        }
+      }
+      // If no category was found on any child, default to unknown so the
+      // parent can still be retried at the pipeline level.
+      if (!worstCategory) worstCategory = "unknown";
+
+      throw new WaveFailureError(errorMsg, worstCategory);
+    }
+
     mergeWaveResults(state.iterationResults, rawResults, state.resultKey);
   }
 
@@ -256,15 +323,32 @@ async function executeParallelLoop(
   return { artifactKey: node.id, value: finalResults };
 }
 
+/** Details about a failed child run. */
+type WaveChildFailure = {
+  childRunId: string;
+  taskId?: string | undefined;
+  error: string;
+  errorCategory?: ErrorCategory | undefined;
+};
+
+/** Result from collecting a single child run's output. */
+type WaveChildResult = {
+  index: number;
+  result: unknown;
+  /** Set when the child run errored. */
+  failed?: WaveChildFailure | undefined;
+};
+
 /**
  * Collect results from completed child runs for a wave.
+ * Captures both successful outputs and failure details for error propagation.
  */
 async function collectWaveResults(
   store: import("../../run-store.js").RunStore,
   childRunIds: string[],
   childRunIdToIndex: Record<string, number>,
-): Promise<Array<{ index: number; result: unknown }>> {
-  const results: Array<{ index: number; result: unknown }> = [];
+): Promise<WaveChildResult[]> {
+  const results: WaveChildResult[] = [];
   for (const childId of childRunIds) {
     const record = await store.load(childId);
     const index = childRunIdToIndex[childId]!;
@@ -272,6 +356,23 @@ async function collectWaveResults(
       // Use the full outputs object as the iteration result.
       results.push({ index, result: record.outputs });
     } else {
+      // Determine the error category from the child's most recent errored step
+      let errorCategory: ErrorCategory | undefined;
+      if (record?.steps) {
+        for (let i = record.steps.length - 1; i >= 0; i--) {
+          const step = record.steps[i]!;
+          if (step.status === "errored" && step.errorCategory) {
+            errorCategory = step.errorCategory;
+            break;
+          }
+        }
+      }
+      const failure: WaveChildFailure = {
+        childRunId: childId,
+        error: record?.error ?? "Child run not found or not completed",
+      };
+      if (record?.taskId !== undefined) failure.taskId = record.taskId;
+      if (errorCategory !== undefined) failure.errorCategory = errorCategory;
       results.push({
         index,
         result: {
@@ -279,6 +380,7 @@ async function collectWaveResults(
           status: record?.status ?? "unknown",
           error: record?.error ?? "Child run not found or not completed",
         },
+        failed: failure,
       });
     }
   }
