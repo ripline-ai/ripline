@@ -65,8 +65,8 @@ nodes:
       bugs_raw  = json.loads(bugs_r.stdout)
 
       # Trim to only the fields needed for ranking — keeps payload small
-      idea_fields = ["id","title","status","impactScore","effortScore","priority","priorityLocked","lastRankedAt","updatedAt","createdAt","tags","projectId","blocks","blockedBy"]
-      bug_fields  = ["id","title","status","severity","priority","priorityLocked","lastRankedAt","updatedAt","createdAt","projectId"]
+      idea_fields = ["id","title","status","impactScore","effortScore","priority","priorityLocked","priorityPinned","lastRankedAt","updatedAt","createdAt","tags","projectId","blocks","blockedBy"]
+      bug_fields  = ["id","title","status","severity","priority","priorityLocked","priorityPinned","lastRankedAt","updatedAt","createdAt","projectId"]
 
       ideas = [{k: i.get(k) for k in idea_fields} for i in (ideas_raw if isinstance(ideas_raw, list) else [])]
       bugs  = [{k: b.get(k) for k in bug_fields}  for b in (bugs_raw  if isinstance(bugs_raw,  list) else [])]
@@ -88,7 +88,25 @@ nodes:
         return JSON.parse(m ? m[1].trim() : t);
       })(artifacts.fetch_backlog.text)
 
-  # Use Claude to evaluate and rank every item
+  # Separate pinned items from unpinned — pinned items keep their current priority
+  - id: separate_pinned
+    type: transform
+    expression: |
+      (function(data) {
+        var pinned = [];
+        var unpinned = { ideas: [], bugs: [] };
+        (data.ideas || []).forEach(function(i) {
+          if (i.priorityPinned) { pinned.push({ id: i.id, type: 'idea', title: i.title, priority: i.priority || 0, pinned: true }); }
+          else { unpinned.ideas.push(i); }
+        });
+        (data.bugs || []).forEach(function(b) {
+          if (b.priorityPinned) { pinned.push({ id: b.id, type: 'bug', title: b.title, priority: b.priority || 0, pinned: true }); }
+          else { unpinned.bugs.push(b); }
+        });
+        return { pinned: pinned, unpinned: unpinned, hasPinned: pinned.length > 0 };
+      })(artifacts.parse_backlog)
+
+  # Use Claude to evaluate and rank every item (unpinned only)
   - id: prioritize
     type: agent
     runner: claude-code
@@ -99,8 +117,11 @@ nodes:
       You are a backlog prioritization agent. Analyze the following items and produce a
       stack-ranked JSON array with composite scores.
 
+      **NOTE:** Items with `priorityPinned: true` have already been removed from this
+      list — they retain their current positions. You are scoring only unpinned items.
+
       ## Backlog Data
-      {{parse_backlog}}
+      {{separate_pinned.unpinned}}
 
       ## Stability — Prefer Minimal Re-ordering
       Items include a `lastRankedAt` timestamp and their current `priority` (rank).
@@ -170,6 +191,72 @@ nodes:
         return JSON.parse(m ? m[1] : text.trim());
       })(artifacts.prioritize.text)
 
+  # Merge pinned items back into the ranked list, preserving their priority positions
+  - id: merge_rankings
+    type: transform
+    expression: |
+      (function(ranked, pinnedData) {
+        var pinned = pinnedData.pinned || [];
+        if (pinned.length === 0) { return ranked; }
+
+        // Unpinned items sorted by compositeScore descending (as returned by LLM)
+        var unpinned = ranked.slice().sort(function(a, b) { return b.compositeScore - a.compositeScore; });
+
+        // Pinned items sorted by their existing priority descending (higher = more important)
+        pinned.sort(function(a, b) { return (b.priority || 0) - (a.priority || 0); });
+
+        // Build merged list: pinned items reserve score slots, unpinned fill around them.
+        // Strategy: create a combined list sorted by score, where pinned items keep their
+        // exact priority value as compositeScore and unpinned items get adjusted scores
+        // to avoid collisions.
+
+        // Convert pinned items to ranking format
+        var pinnedEntries = pinned.map(function(p) {
+          return {
+            id: p.id,
+            type: p.type,
+            title: p.title,
+            compositeScore: p.priority || 0,
+            rank: 0,
+            factors: { impactEffort: 0, blockCount: 0, severity: 0, staleness: 0, blockedPenalty: 0 },
+            reasoning: '[PINNED] Priority preserved from previous ranking',
+            pinned: true
+          };
+        });
+
+        // Combine all items
+        var all = pinnedEntries.concat(unpinned.map(function(u) { u.pinned = false; return u; }));
+
+        // Sort by compositeScore descending
+        all.sort(function(a, b) { return b.compositeScore - a.compositeScore; });
+
+        // Resolve score collisions: if an unpinned item has the same score as a pinned item,
+        // nudge the unpinned item down slightly
+        var usedScores = {};
+        pinnedEntries.forEach(function(p) { usedScores[p.compositeScore.toFixed(1)] = true; });
+
+        all.forEach(function(item) {
+          if (!item.pinned) {
+            var score = item.compositeScore;
+            var key = score.toFixed(1);
+            while (usedScores[key]) {
+              score = Math.round((score - 0.1) * 10) / 10;
+              key = score.toFixed(1);
+            }
+            item.compositeScore = score;
+            usedScores[key] = true;
+          } else {
+            usedScores[item.compositeScore.toFixed(1)] = true;
+          }
+        });
+
+        // Re-sort and assign final ranks
+        all.sort(function(a, b) { return b.compositeScore - a.compositeScore; });
+        all.forEach(function(item, i) { item.rank = i + 1; });
+
+        return all;
+      })(artifacts.parse_rankings, artifacts.separate_pinned)
+
   # Write priorities back via bulk-priority endpoints and generate the report
   - id: apply_and_report
     type: agent
@@ -187,12 +274,20 @@ nodes:
       - Report path: {{ resolve_config.reportPath }}
       - Stage: {{ resolve_config.stage }}
 
-      ## Ranked Items
-      {{parse_rankings}}
+      ## Ranked Items (merged — includes both pinned and unpinned)
+      {{merge_rankings}}
+
+      ## Pinned Items (for reference)
+      {{separate_pinned.pinned}}
 
       ## Step 1 — Write priorities back
 
-      Separate the items by type. For ideas, call:
+      **IMPORTANT:** Items with `"pinned": true` in the ranked list must be SKIPPED
+      during the write-back — their priority is already correct and must not be
+      overwritten. Log each skipped pinned item like:
+        "[PINNED] Skipping <type> '<title>' (id: <id>) — priority preserved at <compositeScore>"
+
+      For the remaining (unpinned) items, separate by type. For ideas, call:
         curl -s -X POST {{ resolve_config.apiBase }}/api/ideas/bulk-priority \
           -H "Content-Type: application/json" \
           -d '<JSON array of {id, priority} where priority = compositeScore (0-100 float, higher = more important)>'
@@ -215,6 +310,7 @@ nodes:
       **Generated:** <current ISO date>
       **Stage:** {{ resolve_config.stage }}
       **Total items ranked:** <count>
+      **Pinned items (unchanged):** <count of pinned items, or 0>
 
       ## Top 10 — Detailed Reasoning
       For each of the top 10 items, write:
@@ -224,9 +320,9 @@ nodes:
       - **Reasoning:** <the reasoning string>
 
       ## Full Ranking
-      | Rank | Type | ID | Title | Score |
-      |------|------|----|-------|-------|
-      ... one row per item ...
+      | Rank | Type | ID | Title | Score | Pinned |
+      |------|------|----|-------|-------|--------|
+      ... one row per item (mark pinned items with 📌) ...
 
       ## Scoring Methodology
       - Impact/Effort ratio (30%)
@@ -236,7 +332,8 @@ nodes:
       - Blocked status penalty (10%)
       ```
 
-      After writing the file, output "DONE" and the number of ideas and bugs updated.
+      After writing the file, output "DONE" and the number of ideas and bugs updated,
+      plus the number of pinned items that were skipped.
 
   - id: result
     type: output
@@ -244,10 +341,12 @@ nodes:
     path: prioritization.result
 
 edges:
-  - { from: { node: intake },         to: { node: resolve_config } }
-  - { from: { node: resolve_config },  to: { node: fetch_backlog } }
-  - { from: { node: fetch_backlog },   to: { node: parse_backlog } }
-  - { from: { node: parse_backlog },   to: { node: prioritize } }
-  - { from: { node: prioritize },      to: { node: parse_rankings } }
-  - { from: { node: parse_rankings },  to: { node: apply_and_report } }
+  - { from: { node: intake },           to: { node: resolve_config } }
+  - { from: { node: resolve_config },   to: { node: fetch_backlog } }
+  - { from: { node: fetch_backlog },    to: { node: parse_backlog } }
+  - { from: { node: parse_backlog },    to: { node: separate_pinned } }
+  - { from: { node: separate_pinned },  to: { node: prioritize } }
+  - { from: { node: prioritize },       to: { node: parse_rankings } }
+  - { from: { node: parse_rankings },   to: { node: merge_rankings } }
+  - { from: { node: merge_rankings },   to: { node: apply_and_report } }
   - { from: { node: apply_and_report }, to: { node: result } }
