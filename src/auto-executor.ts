@@ -11,15 +11,32 @@ import type { BackgroundQueue } from "./background-queue.js";
 import type { RunQueue } from "./run-queue.js";
 import type { TelegramNotifier } from "./telegram.js";
 import type { RunStore } from "./run-store.js";
+import type { QueueService } from "./lib/queueService.js";
 import { createLogger } from "./log.js";
 
 const log = createLogger();
+
+/** If abs(backlogPriority - queueComputedPriority) exceeds this, sync the priority. */
+export const PRIORITY_SYNC_THRESHOLD = 0.5;
+
+/** A dispatchable backlog item with its current priority and source identifier. */
+export type BacklogItem = {
+  sourceId: string;
+  priority: number;
+};
+
+/** Summary returned by syncPriorities(). */
+export type PrioritySyncSummary = {
+  checked: number;
+  synced: number;
+};
 
 export type AutoExecutorOptions = {
   backgroundQueue: BackgroundQueue;
   runQueue: RunQueue;
   store: RunStore;
   telegram?: TelegramNotifier;
+  queueService?: QueueService;
 };
 
 export class AutoExecutor {
@@ -27,6 +44,7 @@ export class AutoExecutor {
   private readonly runQueue: RunQueue;
   private readonly store: RunStore;
   private readonly telegram: TelegramNotifier | undefined;
+  private readonly queueService: QueueService | undefined;
   private enabled = false;
   private dispatching = false;
 
@@ -43,6 +61,7 @@ export class AutoExecutor {
     this.runQueue = opts.runQueue;
     this.store = opts.store;
     this.telegram = opts.telegram;
+    this.queueService = opts.queueService;
 
     this.eventHandler = (event: RunEvent) => {
       if (event.event === "run.completed" || event.event === "run.errored") {
@@ -161,6 +180,50 @@ export class AutoExecutor {
     if (this.enabled) {
       await this.tryDispatchNext();
     }
+  }
+
+  /**
+   * Compare backlog priorities with queue computed priorities for items already
+   * enqueued. If the absolute difference exceeds PRIORITY_SYNC_THRESHOLD,
+   * issue a PATCH to update the queue item's severityWeight so the queue
+   * execution order stays aligned with the backlog.
+   *
+   * @param backlogItems  Dispatchable backlog items with their current priority and sourceId.
+   * @returns Summary of how many items were checked and how many were synced.
+   */
+  async syncPriorities(backlogItems: BacklogItem[]): Promise<PrioritySyncSummary> {
+    if (!this.queueService) {
+      log.log("warn", "[auto-executor] syncPriorities called but no queueService configured");
+      return { checked: 0, synced: 0 };
+    }
+
+    let checked = 0;
+    let synced = 0;
+
+    for (const backlogItem of backlogItems) {
+      const queueItem = await this.queueService.findBySourceId(backlogItem.sourceId);
+      if (!queueItem) continue;
+
+      checked++;
+
+      const queuePriority = queueItem.computedPriority ?? 0;
+      const diff = Math.abs(backlogItem.priority - queuePriority);
+
+      if (diff > PRIORITY_SYNC_THRESHOLD) {
+        log.log(
+          "info",
+          `[auto-executor] priority sync: item ${queueItem.id} (source ${backlogItem.sourceId}) ` +
+            `backlog=${backlogItem.priority.toFixed(2)} queue=${queuePriority.toFixed(2)} diff=${diff.toFixed(2)} — patching`,
+        );
+        await this.queueService.updatePriority(queueItem.id, {
+          severityWeight: backlogItem.priority,
+        });
+        synced++;
+      }
+    }
+
+    log.log("info", `[auto-executor] priority sync complete: checked=${checked} synced=${synced}`);
+    return { checked, synced };
   }
 
   /**
