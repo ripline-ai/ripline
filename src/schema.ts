@@ -239,6 +239,24 @@ const retryPolicySchema = z.object({
   retryableCategories: z.array(z.enum(["transient", "permanent", "unknown"])).optional(),
 });
 
+/* ── User config schemas (queue configuration) ─────────────────────── */
+
+export const containerResourceLimitsSchema = z.object({
+  /** CPU limit (e.g. "1.5" for 1.5 cores, "0.5" for half a core). Maps to Docker --cpus. */
+  cpus: z.string().regex(/^\d+(\.\d+)?$/, "cpus must be a numeric string (e.g. \"1.0\", \"0.5\")").optional(),
+  /** Memory limit (e.g. "512m", "2g"). Maps to Docker --memory. */
+  memory: z.string().regex(/^\d+[bkmg]$/i, "memory must be a size string (e.g. \"512m\", \"2g\")").optional(),
+}).strict();
+
+export const queueConfigSchema = z.object({
+  /** Maximum number of concurrent jobs for this queue. Default 1. Must be >= 1. */
+  concurrency: z.number().int().min(1, "concurrency must be at least 1").default(1),
+  /** Resource limits applied to containers spawned by this queue. */
+  resourceLimits: containerResourceLimitsSchema.optional(),
+}).strict();
+
+export const queuesConfigSchema = z.record(z.string().min(1), queueConfigSchema);
+
 export const pipelineDefinitionSchema = z
   .object({
     id: z.string().min(1),

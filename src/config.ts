@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { RiplineUserConfig, QueueConfig, ContainerBuildUserConfig } from "./types.js";
+import { queuesConfigSchema } from "./schema.js";
 
 /* ── Stage-aware configuration ──────────────────────────────────────── */
 
@@ -109,26 +110,47 @@ export function loadUserConfig(homedir?: string): RiplineUserConfig {
     }
 
     // Per-queue configuration (concurrency + resource limits)
+    // Validate with Zod schema; fall back to manual parsing on validation failure.
     const queuesBlock = parsed.queues;
     if (queuesBlock && typeof queuesBlock === "object" && !Array.isArray(queuesBlock)) {
-      const queues: Record<string, QueueConfig> = {};
-      for (const [name, raw] of Object.entries(queuesBlock as Record<string, unknown>)) {
-        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-          const q = raw as Record<string, unknown>;
-          const concurrency = typeof q.concurrency === "number" ? Math.max(1, q.concurrency) : 1;
-          const qc: QueueConfig = { concurrency };
-          if (q.resourceLimits && typeof q.resourceLimits === "object" && !Array.isArray(q.resourceLimits)) {
-            const rl = q.resourceLimits as Record<string, unknown>;
+      const zodResult = queuesConfigSchema.safeParse(queuesBlock);
+      if (zodResult.success) {
+        const queues: Record<string, QueueConfig> = {};
+        for (const [name, qc] of Object.entries(zodResult.data)) {
+          const entry: QueueConfig = { concurrency: qc.concurrency };
+          if (qc.resourceLimits) {
             const limits: { cpus?: string; memory?: string } = {};
-            if (typeof rl.cpus === "string") limits.cpus = rl.cpus;
-            if (typeof rl.memory === "string") limits.memory = rl.memory;
-            if (Object.keys(limits).length > 0) qc.resourceLimits = limits;
+            if (qc.resourceLimits.cpus) limits.cpus = qc.resourceLimits.cpus;
+            if (qc.resourceLimits.memory) limits.memory = qc.resourceLimits.memory;
+            if (Object.keys(limits).length > 0) entry.resourceLimits = limits;
           }
-          queues[name] = qc;
+          queues[name] = entry;
         }
-      }
-      if (Object.keys(queues).length > 0) {
-        result.queues = queues;
+        if (Object.keys(queues).length > 0) {
+          result.queues = queues;
+        }
+      } else {
+        // Schema validation failed — log warning and fall back to manual parsing
+        console.warn(`[config] queues config validation warning: ${zodResult.error.issues.map((i) => i.message).join("; ")}. Falling back to manual parsing.`);
+        const queues: Record<string, QueueConfig> = {};
+        for (const [name, raw] of Object.entries(queuesBlock as Record<string, unknown>)) {
+          if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+            const q = raw as Record<string, unknown>;
+            const concurrency = typeof q.concurrency === "number" ? Math.max(1, q.concurrency) : 1;
+            const qc: QueueConfig = { concurrency };
+            if (q.resourceLimits && typeof q.resourceLimits === "object" && !Array.isArray(q.resourceLimits)) {
+              const rl = q.resourceLimits as Record<string, unknown>;
+              const limits: { cpus?: string; memory?: string } = {};
+              if (typeof rl.cpus === "string") limits.cpus = rl.cpus;
+              if (typeof rl.memory === "string") limits.memory = rl.memory;
+              if (Object.keys(limits).length > 0) qc.resourceLimits = limits;
+            }
+            queues[name] = qc;
+          }
+        }
+        if (Object.keys(queues).length > 0) {
+          result.queues = queues;
+        }
       }
     }
 

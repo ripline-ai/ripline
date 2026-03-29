@@ -500,6 +500,18 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
         }
       }
 
+      // Log resource limits per queue (if configured)
+      if (queueResourceLimits) {
+        for (const [qName, limits] of Object.entries(queueResourceLimits)) {
+          const parts: string[] = [];
+          if (limits.cpus) parts.push(`cpus=${limits.cpus}`);
+          if (limits.memory) parts.push(`memory=${limits.memory}`);
+          if (parts.length > 0) {
+            console.log(`[scheduler] queue "${qName}" container limits: ${parts.join(", ")}`);
+          }
+        }
+      }
+
       // Auto-discover named queues from the pipeline registry. Pipelines may
       // declare `queue: "build"` etc. — ensure each referenced queue has at
       // least one worker (default concurrency 1) even if not explicitly
