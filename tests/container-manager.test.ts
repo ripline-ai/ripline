@@ -1,9 +1,27 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ContainerManager, type ContainerSpawnOptions } from "../src/container-manager.js";
 import * as child_process from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
+import * as fs from "node:fs";
+
+/* ── ESM-compatible mocks ─────────────────────────────────────────────── */
+// vi.mock is hoisted to top of file by Vitest, so ESM namespaces become
+// configurable and vi.mocked() wrappers work throughout the tests.
+
+vi.mock("node:child_process", () => ({
+  spawn: vi.fn(),
+  execFile: vi.fn(),
+  execFileSync: vi.fn(),
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    mkdirSync: vi.fn(),
+    openSync: vi.fn(),
+    closeSync: vi.fn(),
+  };
+});
 
 /* ── Helpers ──────────────────────────────────────────────────────────── */
 
@@ -23,10 +41,47 @@ function createTestManager(opts?: { failedContainerTTL?: number }) {
   });
 }
 
+/** Default mock implementation for `docker run` + `docker wait` calls via execFile. */
+function mockExecFileSuccess(containerId = "abc123def456") {
+  vi.mocked(child_process.execFile).mockImplementation(
+    ((cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
+      const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
+      if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;
+
+      if (args[0] === "run") {
+        callback(null, `${containerId}\n`, "");
+      } else if (args[0] === "wait") {
+        callback(null, "0\n", "");
+      } else {
+        callback(null, "", "");
+      }
+      return { kill: vi.fn(), on: vi.fn() } as any;
+    }) as any,
+  );
+}
+
+/** Mock spawn to return a minimal no-op child process. */
+function mockSpawnNoop() {
+  vi.mocked(child_process.spawn).mockReturnValue({
+    on: vi.fn(),
+    kill: vi.fn(),
+    stdout: null,
+    stderr: null,
+    pid: 1234,
+  } as any);
+}
+
 /* ── Tests ────────────────────────────────────────────────────────────── */
 
 describe("ContainerManager", () => {
   let manager: ContainerManager;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fs.mkdirSync).mockReturnValue(undefined);
+    vi.mocked(fs.openSync).mockReturnValue(99 as any);
+    vi.mocked(fs.closeSync).mockReturnValue(undefined);
+  });
 
   afterEach(() => {
     manager?.dispose();
@@ -51,46 +106,10 @@ describe("ContainerManager", () => {
   /* ── buildRunArgs (tested indirectly via spawn) ───────────────────── */
 
   describe("spawn — docker run argument construction", () => {
-    let execFileMock: ReturnType<typeof vi.spyOn>;
-
     beforeEach(() => {
       manager = createTestManager();
-      // Mock execFile to capture the `docker run` args without actually calling Docker.
-      // We make the container ID come back immediately, then `docker wait` returns 0.
-      execFileMock = vi.spyOn(child_process, "execFile").mockImplementation(
-        ((cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
-          const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
-          if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;
-
-          if (args[0] === "run") {
-            // docker run --detach ... → return a fake container ID
-            callback(null, "abc123def456\n", "");
-          } else if (args[0] === "wait") {
-            // docker wait → exit code 0
-            callback(null, "0\n", "");
-          } else if (args[0] === "logs") {
-            // handled by spawn mock below
-            callback(null, "", "");
-          } else if (args[0] === "rm") {
-            callback(null, "", "");
-          }
-          return { kill: vi.fn(), on: vi.fn() } as any;
-        }) as any,
-      );
-
-      // Mock spawn for `docker logs -f`
-      vi.spyOn(child_process, "spawn").mockReturnValue({
-        on: vi.fn(),
-        kill: vi.fn(),
-        stdout: null,
-        stderr: null,
-        pid: 1234,
-      } as any);
-
-      // Mock fs operations
-      vi.spyOn(fs, "mkdirSync").mockReturnValue(undefined);
-      vi.spyOn(fs, "openSync").mockReturnValue(99);
-      vi.spyOn(fs, "closeSync").mockReturnValue(undefined);
+      mockSpawnNoop();
+      mockExecFileSuccess("abc123def456");
     });
 
     it("passes --env flags for each environment variable", async () => {
@@ -100,7 +119,8 @@ describe("ContainerManager", () => {
         logFile: "/tmp/test.log",
       });
 
-      const runCall = execFileMock.mock.calls.find(
+      const calls = vi.mocked(child_process.execFile).mock.calls;
+      const runCall = calls.find(
         (c) => c[0] === "docker" && (c[1] as string[])[0] === "run",
       );
       expect(runCall).toBeDefined();
@@ -118,7 +138,8 @@ describe("ContainerManager", () => {
         logFile: "/tmp/test.log",
       });
 
-      const runCall = execFileMock.mock.calls.find(
+      const calls = vi.mocked(child_process.execFile).mock.calls;
+      const runCall = calls.find(
         (c) => c[0] === "docker" && (c[1] as string[])[0] === "run",
       );
       const args = runCall![1] as string[];
@@ -133,7 +154,8 @@ describe("ContainerManager", () => {
         logFile: "/tmp/test.log",
       });
 
-      const runCall = execFileMock.mock.calls.find(
+      const calls = vi.mocked(child_process.execFile).mock.calls;
+      const runCall = calls.find(
         (c) => c[0] === "docker" && (c[1] as string[])[0] === "run",
       );
       const args = runCall![1] as string[];
@@ -148,7 +170,8 @@ describe("ContainerManager", () => {
         logFile: "/tmp/test.log",
       });
 
-      const runCall = execFileMock.mock.calls.find(
+      const calls = vi.mocked(child_process.execFile).mock.calls;
+      const runCall = calls.find(
         (c) => c[0] === "docker" && (c[1] as string[])[0] === "run",
       );
       const args = runCall![1] as string[];
@@ -163,7 +186,8 @@ describe("ContainerManager", () => {
         logFile: "/tmp/test.log",
       });
 
-      const runCall = execFileMock.mock.calls.find(
+      const calls = vi.mocked(child_process.execFile).mock.calls;
+      const runCall = calls.find(
         (c) => c[0] === "docker" && (c[1] as string[])[0] === "run",
       );
       const args = runCall![1] as string[];
@@ -179,7 +203,8 @@ describe("ContainerManager", () => {
         logFile: "/tmp/test.log",
       });
 
-      const runCall = execFileMock.mock.calls.find(
+      const calls = vi.mocked(child_process.execFile).mock.calls;
+      const runCall = calls.find(
         (c) => c[0] === "docker" && (c[1] as string[])[0] === "run",
       );
       const args = runCall![1] as string[];
@@ -194,7 +219,8 @@ describe("ContainerManager", () => {
         logFile: "/tmp/test.log",
       });
 
-      const runCall = execFileMock.mock.calls.find(
+      const calls = vi.mocked(child_process.execFile).mock.calls;
+      const runCall = calls.find(
         (c) => c[0] === "docker" && (c[1] as string[])[0] === "run",
       );
       const args = runCall![1] as string[];
@@ -209,7 +235,8 @@ describe("ContainerManager", () => {
         logFile: "/tmp/test.log",
       });
 
-      const runCall = execFileMock.mock.calls.find(
+      const calls = vi.mocked(child_process.execFile).mock.calls;
+      const runCall = calls.find(
         (c) => c[0] === "docker" && (c[1] as string[])[0] === "run",
       );
       const args = runCall![1] as string[];
@@ -222,18 +249,12 @@ describe("ContainerManager", () => {
   describe("spawn — exit code and cleanup", () => {
     beforeEach(() => {
       manager = createTestManager();
-      vi.spyOn(fs, "mkdirSync").mockReturnValue(undefined);
-      vi.spyOn(fs, "openSync").mockReturnValue(99);
-      vi.spyOn(fs, "closeSync").mockReturnValue(undefined);
-      vi.spyOn(child_process, "spawn").mockReturnValue({
-        on: vi.fn(),
-        kill: vi.fn(),
-      } as any);
+      mockSpawnNoop();
     });
 
     it("removes container on success (exit code 0)", async () => {
-      const removeSpy = vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
-      vi.spyOn(child_process, "execFile").mockImplementation(
+      vi.mocked(child_process.execFileSync).mockReturnValue("" as any);
+      vi.mocked(child_process.execFile).mockImplementation(
         ((cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
           const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
           if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;
@@ -252,12 +273,14 @@ describe("ContainerManager", () => {
       expect(result.exitCode).toBe(0);
       expect(result.timedOut).toBe(false);
       // Container should have been removed (docker rm -f)
-      expect(removeSpy).toHaveBeenCalledWith("docker", ["rm", "-f", "abc123def456"], expect.anything());
+      expect(vi.mocked(child_process.execFileSync)).toHaveBeenCalledWith(
+        "docker", ["rm", "-f", "abc123def456"], expect.anything()
+      );
     });
 
     it("tracks failed container for TTL cleanup on non-zero exit", async () => {
-      vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
-      vi.spyOn(child_process, "execFile").mockImplementation(
+      vi.mocked(child_process.execFileSync).mockReturnValue("" as any);
+      vi.mocked(child_process.execFile).mockImplementation(
         ((cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
           const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
           if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;
@@ -279,8 +302,8 @@ describe("ContainerManager", () => {
     });
 
     it("returns containerId truncated to 12 chars", async () => {
-      vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
-      vi.spyOn(child_process, "execFile").mockImplementation(
+      vi.mocked(child_process.execFileSync).mockReturnValue("" as any);
+      vi.mocked(child_process.execFile).mockImplementation(
         ((cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
           const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
           if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;
@@ -300,8 +323,8 @@ describe("ContainerManager", () => {
     });
 
     it("returns logFile path in result", async () => {
-      vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
-      vi.spyOn(child_process, "execFile").mockImplementation(
+      vi.mocked(child_process.execFileSync).mockReturnValue("" as any);
+      vi.mocked(child_process.execFile).mockImplementation(
         ((cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
           const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
           if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;
@@ -328,35 +351,37 @@ describe("ContainerManager", () => {
       manager = createTestManager({ failedContainerTTL: 100 });
 
       // Manually inject a failed container entry with an old timestamp
-      const removeSpy = vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
+      vi.mocked(child_process.execFileSync).mockReturnValue("" as any);
       (manager as any).failedContainers.push(
         { containerId: "old-container", failedAt: Date.now() - 200 },
       );
 
       manager.cleanupExpiredContainers();
 
-      expect(removeSpy).toHaveBeenCalledWith("docker", ["rm", "-f", "old-container"], expect.anything());
+      expect(vi.mocked(child_process.execFileSync)).toHaveBeenCalledWith(
+        "docker", ["rm", "-f", "old-container"], expect.anything()
+      );
       expect(manager.trackedFailedContainers.length).toBe(0);
     });
 
     it("does not remove containers within TTL", () => {
       manager = createTestManager({ failedContainerTTL: 10_000 });
 
-      const removeSpy = vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
+      vi.mocked(child_process.execFileSync).mockReturnValue("" as any);
       (manager as any).failedContainers.push(
         { containerId: "recent-container", failedAt: Date.now() },
       );
 
       manager.cleanupExpiredContainers();
 
-      expect(removeSpy).not.toHaveBeenCalled();
+      expect(vi.mocked(child_process.execFileSync)).not.toHaveBeenCalled();
       expect(manager.trackedFailedContainers.length).toBe(1);
     });
 
     it("handles mix of expired and non-expired containers", () => {
       manager = createTestManager({ failedContainerTTL: 100 });
 
-      const removeSpy = vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
+      vi.mocked(child_process.execFileSync).mockReturnValue("" as any);
       (manager as any).failedContainers.push(
         { containerId: "expired1", failedAt: Date.now() - 200 },
         { containerId: "fresh1", failedAt: Date.now() },
@@ -375,16 +400,18 @@ describe("ContainerManager", () => {
   describe("removeContainer", () => {
     it("calls docker rm -f with the container ID", () => {
       manager = createTestManager();
-      const spy = vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
+      vi.mocked(child_process.execFileSync).mockReturnValue("" as any);
 
       manager.removeContainer("abc123");
 
-      expect(spy).toHaveBeenCalledWith("docker", ["rm", "-f", "abc123"], { stdio: "ignore" });
+      expect(vi.mocked(child_process.execFileSync)).toHaveBeenCalledWith(
+        "docker", ["rm", "-f", "abc123"], { stdio: "ignore" }
+      );
     });
 
     it("does not throw when removal fails", () => {
       manager = createTestManager();
-      vi.spyOn(child_process, "execFileSync").mockImplementation(() => {
+      vi.mocked(child_process.execFileSync).mockImplementation(() => {
         throw new Error("container not found");
       });
 
@@ -417,18 +444,12 @@ describe("ContainerManager", () => {
   describe("spawn — timeout", () => {
     it("sets timedOut to true and kills container when timeout is exceeded", async () => {
       manager = createTestManager();
-      vi.spyOn(fs, "mkdirSync").mockReturnValue(undefined);
-      vi.spyOn(fs, "openSync").mockReturnValue(99);
-      vi.spyOn(fs, "closeSync").mockReturnValue(undefined);
-      vi.spyOn(child_process, "spawn").mockReturnValue({
-        on: vi.fn(),
-        kill: vi.fn(),
-      } as any);
-      const killSpy = vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
+      mockSpawnNoop();
+      vi.mocked(child_process.execFileSync).mockReturnValue("" as any);
 
       // Make `docker wait` never resolve (simulating long-running container),
       // so the timeout fires first.
-      vi.spyOn(child_process, "execFile").mockImplementation(
+      vi.mocked(child_process.execFile).mockImplementation(
         ((cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
           const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
           if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;
@@ -463,12 +484,8 @@ describe("ContainerManager", () => {
   describe("spawn — docker errors", () => {
     it("rejects when docker run fails", async () => {
       manager = createTestManager();
-      vi.spyOn(fs, "mkdirSync").mockReturnValue(undefined);
-      vi.spyOn(child_process, "spawn").mockReturnValue({
-        on: vi.fn(),
-        kill: vi.fn(),
-      } as any);
-      vi.spyOn(child_process, "execFile").mockImplementation(
+      mockSpawnNoop();
+      vi.mocked(child_process.execFile).mockImplementation(
         ((cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
           const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
           if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;
