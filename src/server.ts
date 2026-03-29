@@ -937,8 +937,8 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     telegram: telegramNotifier,
   });
 
-  // Enable on boot if config says so
-  if (userConfig.backgroundQueue?.enabled) {
+  // Enable on boot if config says so (unless explicitly disabled via env var, e.g. for staging)
+  if (userConfig.backgroundQueue?.enabled && process.env.BACKGROUND_QUEUE_DISABLED !== "1") {
     autoExecutor.enable();
   }
 

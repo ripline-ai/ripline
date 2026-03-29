@@ -22,6 +22,7 @@ module.exports = {
       env: {
         STAGE: "staging",
         NODE_ENV: "development",
+        BACKGROUND_QUEUE_DISABLED: "1",
       },
     },
   ],
