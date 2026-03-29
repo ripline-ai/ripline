@@ -55,6 +55,7 @@ export {
   resolveLlmAgentConfigFromEnv,
   loadLlmAgentConfigFromFile,
 } from "./agent-runner-config.js";
+export { promoteStep, type PromoteStepParams, type PromoteStepResult } from "./promote-step.js";
 
 export function normalizeConfig(raw: unknown): NormalizedConfig {
   const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
