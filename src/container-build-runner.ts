@@ -35,6 +35,8 @@ export interface ContainerBuildConfig {
   resourceLimits?: { cpus?: string; memory?: string };
   /** Logger instance. */
   logger?: Logger;
+  /** Absolute path to the runs directory (for co-locating container logs with run records). */
+  runsDir?: string;
 }
 
 export interface ContainerBuildResult {
@@ -126,6 +128,7 @@ export async function runContainerBuild(
     containerTimeoutMs = 600_000,
     resourceLimits,
     logger = createLogger(),
+    runsDir,
   } = config;
 
   // 1. Check Docker availability
@@ -149,13 +152,23 @@ export async function runContainerBuild(
   }
 
   // 3. Build env vars and volumes for container
+  // Detect git remote URL for containers that may need to clone independently
+  let repoUrl = "";
+  try {
+    repoUrl = gitSync(repoPath, ["remote", "get-url", "origin"]);
+  } catch {
+    // Local-only repo — leave empty
+  }
+
   const env: Record<string, string> = {
     RIPLINE_REPO_PATH: repoPath,
+    RIPLINE_REPO_URL: repoUrl,
     RIPLINE_BRANCH: featureBranch,
     RIPLINE_TARGET_BRANCH: targetBranch,
     RIPLINE_RUN_ID: runId,
     RIPLINE_PIPELINE_ID: pipelineId,
     RIPLINE_PIPELINE_CONTEXT: JSON.stringify(pipelineContext),
+    RIPLINE_JOB_INPUTS: JSON.stringify(pipelineContext.inputs ?? {}),
   };
 
   const volumes: Record<string, string> = {
@@ -167,8 +180,10 @@ export async function runContainerBuild(
     env.RIPLINE_SECRETS_PATH = "/run/secrets";
   }
 
-  // 4. Determine log file path
-  const logDir = path.join(repoPath, ".ripline", "runs", runId);
+  // 4. Determine log file path — co-locate with run records when runsDir is available
+  const logDir = runsDir
+    ? path.join(runsDir, runId)
+    : path.join(repoPath, ".ripline", "runs", runId);
   fs.mkdirSync(logDir, { recursive: true });
   const logFile = path.join(logDir, "container.log");
 

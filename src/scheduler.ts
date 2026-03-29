@@ -217,6 +217,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
               ...containerBuild,
               ...(log !== undefined && { logger: log }),
               ...(queueLimits !== undefined && { resourceLimits: queueLimits }),
+              ...(runsDir !== undefined && { runsDir }),
             },
           );
 
