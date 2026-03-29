@@ -1,0 +1,25 @@
+id: simple_test
+name: Simple Test Pipeline
+entry:
+  - intake
+nodes:
+  - id: intake
+    type: input
+    description: Provide x field
+  - id: double
+    type: transform
+    expression: "inputs.x * 2"
+    assigns: result
+  - id: out
+    type: output
+    path: result
+    source: double
+edges:
+  - from:
+      node: intake
+    to:
+      node: double
+  - from:
+      node: double
+    to:
+      node: out
