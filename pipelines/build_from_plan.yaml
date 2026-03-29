@@ -10,8 +10,12 @@
 #
 # Flow:
 #   intake → parse_plan → compute_waves → story_loop → write_tests → build_verify
-#          → reload_staging → verify_staging → patch_complete
+#          → reload_staging → verify_staging → validate_build_output
 #          → create_tech_debt_items → promote → backup → result
+#
+# Note: Terminal status ("done" / "errored") is written exclusively by the
+# Ripline webhook handler (single-writer rule). No pipeline step PATCHes
+# the idea status.
 
 id: build_from_plan
 name: Build From Plan
@@ -263,34 +267,7 @@ nodes:
         return { validated: true, totalStories: results.length, nullStories: nullCount };
       })()
 
-  # ── 7. Mark idea as done ──────────────────────────────────────────────────
-  # AC3: patch_complete validates that upstream steps produced valid output.
-  - id: patch_complete
-    type: agent
-    runner: claude-code
-    mode: execute
-    dangerouslySkipPermissions: true
-    cwd: /home/openclaw
-    timeoutSeconds: 90
-    prompt: |
-      First, verify that the build produced real output. The validation result is:
-      {{validate_build_output}}
-
-      If the validation shows nullStories > 0, output an error message and do NOT
-      run the curl command. Output: "ERROR: {{validate_build_output.nullStories}} stories
-      produced null output — refusing to mark idea as done."
-
-      Otherwise, run this exact command using the Bash tool:
-
-      curl -s -w "\n%%HTTP_STATUS:%%{http_code}" -X PATCH {{wintermute_base_url}}/api/ideas/{{idea_id}} \
-        -H "Content-Type: application/json" \
-        -d '{"status":"done"}'
-
-      Check the HTTP status code at the end of the output. If it is not 200, output
-      "ERROR: PATCH failed with HTTP <status>: <body>" and stop.
-      Otherwise output only the response JSON, nothing else.
-
-  # ── 7b. Create tech-debt follow-up items ─────────────────────────────────
+  # ── 7. Create tech-debt follow-up items ─────────────────────────────────
   # Reads the idea's techDebt field, parses each bullet into a separate idea,
   # POSTs each to /api/ideas, and PATCHes the created IDs back to the source.
   # No-ops gracefully if techDebt is empty; logs errors but never throws.
@@ -400,8 +377,7 @@ edges:
   - { from: { node: build_verify },    to: { node: reload_staging } }
   - { from: { node: reload_staging },  to: { node: verify_staging } }
   - { from: { node: verify_staging },       to: { node: validate_build_output } }
-  - { from: { node: validate_build_output }, to: { node: patch_complete } }
-  - { from: { node: patch_complete },        to: { node: create_tech_debt_items } }
+  - { from: { node: validate_build_output }, to: { node: create_tech_debt_items } }
   - { from: { node: create_tech_debt_items }, to: { node: promote } }
   - { from: { node: promote },         to: { node: backup } }
   - { from: { node: backup },          to: { node: result } }
