@@ -23,6 +23,20 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
+/* ── ESM-safe child_process mock ────────────────────────────────────────── */
+
+const { execFileMockFn, execFileSyncMockFn, spawnMockFn } = vi.hoisted(() => ({
+  execFileMockFn: vi.fn(),
+  execFileSyncMockFn: vi.fn(),
+  spawnMockFn: vi.fn(),
+}));
+
+vi.mock("node:child_process", () => ({
+  execFile: execFileMockFn,
+  execFileSync: execFileSyncMockFn,
+  spawn: spawnMockFn,
+}));
+
 /* ── Imports ─────────────────────────────────────────────────────────── */
 
 import { ContainerManager } from "../src/container-manager.js";
@@ -45,6 +59,12 @@ import type {
 } from "../src/types.js";
 import type { ContainerBuildResult } from "../src/container-build-runner.js";
 import type { PromoteStepResult } from "../src/promote-step.js";
+
+beforeEach(() => {
+  execFileMockFn.mockReset();
+  execFileSyncMockFn.mockReset();
+  spawnMockFn.mockReset();
+});
 
 const silentLogger = { log: vi.fn() } as any;
 
@@ -83,7 +103,7 @@ describe("Story 2 — ContainerManager: buildRunArgs edge cases", () => {
     );
 
     // Mock docker rm
-    vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
+    (child_process.execFileSync as any).mockReturnValue("" as any);
 
     manager.cleanupExpiredContainers();
 
@@ -129,12 +149,12 @@ describe("Story 2 — ContainerManager: buildRunArgs edge cases", () => {
     const mkdirSpy = vi.spyOn(fs, "mkdirSync").mockReturnValue(undefined);
     vi.spyOn(fs, "openSync").mockReturnValue(99);
     vi.spyOn(fs, "closeSync").mockReturnValue(undefined);
-    vi.spyOn(child_process, "spawn").mockReturnValue({
+    (child_process.spawn as any).mockReturnValue({
       on: vi.fn(),
       kill: vi.fn(),
     } as any);
-    vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
-    vi.spyOn(child_process, "execFile").mockImplementation(
+    (child_process.execFileSync as any).mockReturnValue("" as any);
+    (child_process.execFile as any).mockImplementation(
       ((cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
         const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
         if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;
@@ -162,14 +182,14 @@ describe("Story 2 — ContainerManager: buildRunArgs edge cases", () => {
     vi.spyOn(fs, "mkdirSync").mockReturnValue(undefined);
     vi.spyOn(fs, "openSync").mockReturnValue(99);
     vi.spyOn(fs, "closeSync").mockReturnValue(undefined);
-    vi.spyOn(child_process, "spawn").mockReturnValue({
+    (child_process.spawn as any).mockReturnValue({
       on: vi.fn(),
       kill: vi.fn(),
     } as any);
-    vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
+    (child_process.execFileSync as any).mockReturnValue("" as any);
 
     let capturedArgs: string[] = [];
-    vi.spyOn(child_process, "execFile").mockImplementation(
+    (child_process.execFile as any).mockImplementation(
       ((cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
         const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
         if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;
@@ -218,14 +238,14 @@ describe("Story 2 — ContainerManager: buildRunArgs edge cases", () => {
     vi.spyOn(fs, "mkdirSync").mockReturnValue(undefined);
     vi.spyOn(fs, "openSync").mockReturnValue(99);
     vi.spyOn(fs, "closeSync").mockReturnValue(undefined);
-    vi.spyOn(child_process, "spawn").mockReturnValue({
+    (child_process.spawn as any).mockReturnValue({
       on: vi.fn(),
       kill: vi.fn(),
     } as any);
-    vi.spyOn(child_process, "execFileSync").mockReturnValue("" as any);
+    (child_process.execFileSync as any).mockReturnValue("" as any);
 
     let capturedArgs: string[] = [];
-    vi.spyOn(child_process, "execFile").mockImplementation(
+    (child_process.execFile as any).mockImplementation(
       ((cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
         const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
         if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;

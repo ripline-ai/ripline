@@ -20,6 +20,27 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as child_process from "node:child_process";
 import { execFileSync } from "node:child_process";
+
+/* ── ESM-safe child_process mock ────────────────────────────────────────── */
+
+const { execFileSyncMockFn, realExecFileSync } = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const cp = require("node:child_process");
+  return {
+    execFileSyncMockFn: vi.fn(),
+    realExecFileSync: cp.execFileSync as typeof import("node:child_process").execFileSync,
+  };
+});
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>(
+    "node:child_process",
+  );
+  return {
+    ...actual,
+    execFileSync: execFileSyncMockFn,
+  };
+});
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -43,7 +64,7 @@ const silentLogger = { log: vi.fn() } as any;
 
 function git(repoPath: string, args: string): string {
   const parts = args.split(/\s+/);
-  return execFileSync("git", parts, {
+  return realExecFileSync("git", parts, {
     cwd: repoPath,
     encoding: "utf8",
     timeout: 15_000,
@@ -68,7 +89,7 @@ function createTestRepo(): { bare: string; work: string } {
   git(work, "add README.md");
   git(work, "commit -m initial");
 
-  execFileSync("git", ["clone", "--bare", work, bare], {
+  realExecFileSync("git", ["clone", "--bare", work, bare], {
     encoding: "utf8",
     timeout: 10_000,
   });
@@ -281,6 +302,7 @@ describe("Cross-story: Scheduler eligibility + event contract (Story 6)", () => 
 describe("Cross-story: ContainerManager lifecycle guarantees (Story 2)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    execFileSyncMockFn.mockReset();
   });
 
   it("cleanup timer uses unref() to avoid blocking process exit", () => {
@@ -326,7 +348,7 @@ describe("Cross-story: ContainerManager lifecycle guarantees (Story 2)", () => {
 
   it("removeContainer is best-effort — does not throw on failure", () => {
     const manager = new ContainerManager({ logger: silentLogger });
-    vi.spyOn(child_process, "execFileSync").mockImplementation(() => {
+    execFileSyncMockFn.mockImplementation(() => {
       throw new Error("No such container");
     });
 
@@ -340,10 +362,13 @@ describe("Cross-story: PromoteStep ordering guarantee (Story 3 + real git)", () 
   let repo: { bare: string; work: string };
 
   beforeEach(() => {
+    // Pass execFileSync through to the real implementation for git operations
+    execFileSyncMockFn.mockImplementation((...args: any[]) => (realExecFileSync as any)(...args));
     repo = createTestRepo();
   });
 
   afterEach(() => {
+    execFileSyncMockFn.mockReset();
     cleanupRepo(repo.work);
   });
 

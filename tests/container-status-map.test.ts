@@ -56,7 +56,7 @@ describe("mapContainerBuildToRunStatus — Docker unavailable", () => {
     expect(mapping.status).toBeNull();
     expect(mapping.usedContainer).toBe(false);
     expect(mapping.preserveFeatureBranch).toBe(false);
-    expect(mapping.summary).toContain("fallback");
+    expect(mapping.summary).toContain("fell back");
     expect(mapping.error).toBeUndefined();
   });
 });

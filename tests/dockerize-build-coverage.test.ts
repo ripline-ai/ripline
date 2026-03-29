@@ -118,7 +118,7 @@ describe("Story 3 — PromoteStep code structure guarantees", () => {
 
     const testRunIdx = source.indexOf("Run project test suite");
     const checkoutTargetIdx = source.indexOf("Checkout target branch");
-    const mergeIdx = source.indexOf("Attempt fast-forward merge");
+    const mergeIdx = source.indexOf("merge --ff-only");
 
     // Tests must come before checkout target and merge
     expect(testRunIdx).toBeGreaterThan(0);
