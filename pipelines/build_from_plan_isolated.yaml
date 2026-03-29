@@ -1,0 +1,498 @@
+# Build From Plan (Isolated)
+# Identical intent to build_from_plan, but each run gets its own git workspace.
+# Stories are implemented on a feature branch (feat/<idea_id>) inside a cloned
+# copy of the repo at /workspace/repo — the shared /home/openclaw checkout is
+# NEVER mutated.  After build_verify the promote step rebases onto main, runs
+# tests, and pushes back to the host repo before calling the existing promote
+# script to reload production.
+#
+# Inputs:
+#   idea_id             — Wintermute idea ID (required)
+#   wintermute_base_url — Wintermute base URL (required)
+#   stories_json        — JSON array of stories (optional; fetched from Wintermute if absent)
+#   idea_title          — Idea title (optional; fetched from Wintermute if absent)
+#   idea_mvp_scope      — MVP scope markdown (optional; fetched from Wintermute if absent)
+#   project_id          — Wintermute project ID (optional; fetched from Wintermute if absent)
+#
+# Flow:
+#   intake → fetch_idea → enrich_inputs → parse_plan → setup_workspace
+#          → story_loop → write_tests → build_verify
+#          → reload_staging → verify_staging → validate_build_output
+#          → create_tech_debt_items → promote_isolated → backup → result
+#
+# Isolation design:
+#   - Container mounts /home/openclaw read-only (for git source + secrets)
+#   - setup_workspace clones the target repo to /workspace/repo and creates
+#     a feature branch feat/<idea_id>
+#   - All story / test / verify work uses /workspace/repo as cwd
+#   - promote_isolated: rebase onto main → npm test → push to host via
+#     file:/// URL → call ~/wintermute/bin/promote
+#   - flock /tmp/ripline-promote.lock serialises concurrent promote steps
+
+id: build_from_plan_isolated
+name: Build From Plan (Isolated)
+queue: build
+entry: [intake]
+container:
+  # Read-only bind of /home/openclaw so the container can read git sources,
+  # SSH keys, and ~/.config/claude without being able to mutate the host.
+  # /workspace is an ephemeral directory inside the container (not mounted).
+  volumes:
+    /home/openclaw: /home/openclaw:ro
+retry:
+  maxAttempts: 3
+  backoffMs: 30000
+  backoffMultiplier: 2
+  retryableCategories: [transient, unknown]
+
+nodes:
+  - id: intake
+    type: input
+
+  # ── 0a. Fetch idea from Wintermute ────────────────────────────────────────
+  - id: fetch_idea
+    type: shell
+    cwd: /home/openclaw
+    timeoutSeconds: 30
+    failOnNonZero: false
+    command: curl -sf "{{wintermute_base_url}}/api/ideas/{{idea_id}}"
+
+  # ── 0b. Enrich inputs from fetched idea ───────────────────────────────────
+  - id: enrich_inputs
+    type: transform
+    expression: |
+      (function() {
+        var idea = {};
+        try {
+          var raw = artifacts.fetch_idea && (artifacts.fetch_idea.rawOutput || artifacts.fetch_idea.output || '');
+          if (raw && raw.trim()) idea = JSON.parse(raw.trim());
+        } catch(e) { /* parse failure handled downstream */ }
+        return {
+          stories_json:    inputs.stories_json    || JSON.stringify(idea.stories || []),
+          idea_title:      inputs.idea_title      || idea.title      || '',
+          idea_mvp_scope:  inputs.idea_mvp_scope  || idea.mvpScope   || '',
+          project_id:      inputs.project_id      || idea.projectId  || '',
+        };
+      })()
+
+  # ── 1. Parse plan from inputs ─────────────────────────────────────────────
+  - id: parse_plan
+    type: transform
+    expression: |
+      (function() {
+        var enriched = artifacts.enrich_inputs || {};
+        var raw = enriched.stories_json || inputs.stories_json || '[]';
+        var stories;
+        try { stories = JSON.parse(raw); } catch(e) {
+          throw new Error('parse_plan: stories_json is not valid JSON — got: ' + String(raw).slice(0, 200));
+        }
+        if (!Array.isArray(stories)) {
+          throw new Error('parse_plan: stories_json must be a JSON array, got ' + typeof stories);
+        }
+        if (stories.length === 0) {
+          throw new Error('parse_plan: stories_json is an empty array — cannot build with zero stories');
+        }
+        var enriched = artifacts.enrich_inputs || {};
+        return {
+          stories: stories,
+          idea: {
+            title: enriched.idea_title || inputs.idea_title,
+            mvpScope: enriched.idea_mvp_scope || inputs.idea_mvp_scope
+          }
+        };
+      })()
+
+  # ── 1b. Set up isolated workspace ────────────────────────────────────────
+  # Clones the relevant repo (wintermute or ripline) into /workspace/repo,
+  # then creates feature branch feat/<idea_id>.  The clone source is the
+  # read-only host mount at /home/openclaw/<project>.
+  #
+  # project_id is expected to be "wintermute" or "ripline"; falls back to
+  # wintermute if unrecognised.
+  - id: setup_workspace
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 120
+    prompt: |
+      Set up an isolated git workspace for this build run. Use the Bash tool.
+
+      ## Inputs
+      Idea ID:    {{idea_id}}
+      Project ID: {{enrich_inputs.project_id}}
+
+      ## Steps
+
+      1. Determine the source repo path:
+         - If project_id contains "ripline": SOURCE=/home/openclaw/ripline
+         - Otherwise (default): SOURCE=/home/openclaw/wintermute
+
+      2. Clone the source repo into /workspace/repo (the /home/openclaw mount is
+         read-only, so we clone from there):
+         ```
+         git clone file://$SOURCE /workspace/repo
+         ```
+
+      3. Configure git identity inside the clone (needed for commits):
+         ```
+         git -C /workspace/repo config user.email "ripline-build@openclaw.local"
+         git -C /workspace/repo config user.name "Ripline Build"
+         ```
+
+      4. Create and switch to the feature branch:
+         ```
+         git -C /workspace/repo checkout -b feat/{{idea_id}}
+         ```
+
+      5. Output exactly:
+         WORKSPACE=/workspace/repo
+         BRANCH=feat/{{idea_id}}
+         SOURCE=<resolved source path>
+
+      If any step fails, output the error and stop — do not proceed.
+
+  # ── 2. Loop over stories sequentially ────────────────────────────────────
+  - id: story_loop
+    type: loop
+    collection: "(function() { var enriched = artifacts.enrich_inputs || {}; var s = JSON.parse(enriched.stories_json || inputs.stories_json || '[]'); if (!Array.isArray(s) || s.length === 0) throw new Error('story_loop: stories_json must be a non-empty JSON array'); return s; })()"
+    itemVar: story
+    body:
+      entry:
+        - implement_story
+      nodes:
+        - id: implement_story
+          type: agent
+          runner: claude-code
+          mode: execute
+          dangerouslySkipPermissions: true
+          # Work inside the isolated clone, not the shared checkout
+          cwd: /workspace/repo
+          timeoutSeconds: 900
+          prompt: |
+            You are implementing a development story as part of a larger feature build.
+            Work exclusively in the isolated workspace at /workspace/repo — do NOT touch
+            /home/openclaw/wintermute or /home/openclaw/ripline directly.
+
+            ## Context
+            Idea:    {{enrich_inputs.idea_title}}
+            Idea ID: {{idea_id}}
+            Feature branch: feat/{{idea_id}}
+
+            ## Story to Implement
+            ID:    {{loop.story.id}}
+            Title: {{loop.story.title}}
+            Description: {{loop.story.description}}
+            Acceptance Criteria:
+            {{(loop.story.acceptanceCriteria || []).map(function(c){return '- '+c}).join('\n')}}
+
+            ## Full Implementation Spec
+            {{enrich_inputs.idea_mvp_scope}}
+
+            ## Instructions
+            1. Verify you are on branch feat/{{idea_id}}:
+               git -C /workspace/repo branch --show-current
+               If not on the feature branch, run: git -C /workspace/repo checkout feat/{{idea_id}}
+            2. Implement the story described above. Make focused, clean changes.
+            3. Do NOT write tests — that happens in a dedicated write_tests step.
+            4. Commit your work to the feature branch:
+               git -C /workspace/repo add -A && git -C /workspace/repo commit -m "{{loop.story.id}}: {{loop.story.title}}"
+            5. Output a brief summary of what was implemented (1-3 sentences).
+
+  # ── 3. Write tests ────────────────────────────────────────────────────────
+  - id: write_tests
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /workspace/repo
+    timeoutSeconds: 900
+    prompt: |
+      All stories for the feature below have been implemented. Your job is to write
+      tests that cover the acceptance criteria for each story and any integration
+      points between them.  Work in the isolated workspace at /workspace/repo.
+
+      ## Idea
+      Title: {{enrich_inputs.idea_title}}
+      ID:    {{idea_id}}
+
+      ## MVP Scope / Stories
+      {{enrich_inputs.idea_mvp_scope}}
+
+      ## Story Implementation Summaries
+      {{story_loop.text}}
+
+      ## Steps
+      1. Verify you are on branch feat/{{idea_id}}; switch if needed.
+      2. Write tests covering:
+         - Each story's acceptance criteria (regression tests)
+         - Integration points between stories, if relevant
+      3. Tests should document correct behavior — they are not driving implementation.
+      4. Do NOT run the tests — that happens in build_verify.
+      5. Commit with message: test: add coverage for {{enrich_inputs.idea_title}} [{{idea_id}}]
+
+      Output a summary: what tests were written, what scenarios they cover, which files were added or modified.
+
+  # ── 4. Build verification ─────────────────────────────────────────────────
+  # Runs entirely inside /workspace/repo — no network push yet.
+  - id: build_verify
+    type: shell
+    cwd: /workspace/repo
+    timeoutSeconds: 120
+    failOnNonZero: false
+    command: |
+      npm run build 2>&1 | tail -10
+      echo "---BUILD_EXIT:$?"
+      npm test -- --passWithNoTests --testPathIgnorePatterns=e2e 2>&1 | \
+        grep -E "(FAIL|PASS|Tests:|Test Suites:|✕|✗|×|●|ERROR|error TS)" || true
+      echo "---TEST_EXIT:${PIPESTATUS[0]}"
+
+  # ── 5. Reload staging ────────────────────────────────────────────────────
+  # NOTE: staging reload still uses the host checkout via the host PM2.
+  # This step runs on the host side (cwd outside container) — it instructs
+  # an agent that can invoke host commands via the mounted filesystem.
+  - id: reload_staging
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 120
+    prompt: |
+      Sync the production vault to staging, then reload both staging services so they
+      pick up the freshly-built code. Use the Bash tool to run these three commands:
+
+      1. ~/wintermute/scripts/vault-sync
+      2. /home/openclaw/.npm-global/bin/pm2 reload wintermute-staging
+      3. /home/openclaw/.npm-global/bin/pm2 reload ripline-staging
+
+      Output "staging ready" when all three succeed, or report the error and stop.
+
+  # ── 6. E2E smoke test against staging ────────────────────────────────────
+  - id: verify_staging
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw/wintermute
+    timeoutSeconds: 300
+    prompt: |
+      Run the e2e smoke tests against the staging stack to verify the feature
+      end-to-end before promoting to production.
+
+      Use the Bash tool:
+
+        cd /home/openclaw/wintermute && \
+          WINTERMUTE_URL=http://localhost:3001 RIPLINE_URL=http://localhost:4002 \
+          npx jest tests/e2e/smoke-consolidated-flow.test.ts --no-coverage 2>&1 | tail -30
+
+      If all tests pass, output "staging verified — ready to promote".
+      If any tests fail, output "STAGING VERIFICATION FAILED" followed by the failure
+      details. Do not proceed — the pipeline will continue to the promote step but
+      promote_isolated will see this failure and refuse to reload production.
+
+  # ── 6b. Validate build artifacts before completing ──────────────────────
+  - id: validate_build_output
+    type: transform
+    expression: |
+      (function() {
+        var loopResult = artifacts.story_loop;
+        if (!loopResult) {
+          throw new Error('validate_build_output: story_loop produced no output — build may have failed silently');
+        }
+        var results = Array.isArray(loopResult) ? loopResult : (loopResult.value || loopResult);
+        if (!Array.isArray(results)) {
+          throw new Error('validate_build_output: story_loop output is not an array — got: ' + typeof results);
+        }
+        var nullCount = 0;
+        for (var i = 0; i < results.length; i++) {
+          if (results[i] == null || results[i] === '') nullCount++;
+        }
+        if (nullCount === results.length && results.length > 0) {
+          throw new Error('validate_build_output: all ' + results.length + ' story results are null/empty — likely a rate-limit or API failure');
+        }
+        return { validated: true, totalStories: results.length, nullStories: nullCount };
+      })()
+
+  # ── 7. Create tech-debt follow-up items ─────────────────────────────────
+  - id: create_tech_debt_items
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 180
+    prompt: |
+      Create tech-debt follow-up items from the source idea's techDebt field.
+
+      ## Source Idea
+      ID: {{idea_id}}
+      Title: {{enrich_inputs.idea_title}}
+      Project ID: {{enrich_inputs.project_id}}
+      Wintermute URL: {{wintermute_base_url}}
+
+      ## Instructions
+      1. Fetch the source idea to get its techDebt field:
+         curl -s {{wintermute_base_url}}/api/ideas/{{idea_id}}
+
+      2. Parse the techDebt field. It is a markdown string with bullet points.
+         Extract each bullet (lines starting with "- " or "* ") as a separate item.
+         If techDebt is empty, null, undefined, or has no bullet points, output
+         "No tech debt items to create — skipping." and stop. Do NOT error.
+
+      3. For each bullet, POST a new idea:
+         curl -s -X POST {{wintermute_base_url}}/api/ideas \
+           -H "Content-Type: application/json" \
+           -d '{
+             "title": "<short summary of the bullet>",
+             "description": "Tech debt from: {{enrich_inputs.idea_title}} ({{idea_id}})\n\n<full bullet text>",
+             "projectId": "{{enrich_inputs.project_id}}",
+             "tags": ["tech-debt", "auto-generated"]
+           }'
+
+         If a POST fails, log the error (output it) but continue to the next bullet.
+         Do NOT throw or exit early.
+
+      4. Collect the IDs of all successfully created ideas into an array.
+         If any were created, PATCH them back to the source idea:
+         curl -s -X PATCH {{wintermute_base_url}}/api/ideas/{{idea_id}} \
+           -H "Content-Type: application/json" \
+           -d '{"techDebtItemIds": ["<id1>", "<id2>", ...]}'
+
+      5. Output a summary: how many tech-debt items were created, their IDs,
+         and whether the PATCH succeeded. If none were created, say so.
+
+  # ── 8. Isolated promote ───────────────────────────────────────────────────
+  # Merges the feature branch back to main in the workspace clone, runs tests,
+  # pushes to the host repo via file:// URL, then calls the existing promote
+  # script to reload production.
+  #
+  # A flock on /tmp/ripline-promote.lock serialises concurrent promote steps
+  # so two parallel runs cannot race to push to the host repo simultaneously.
+  #
+  # Image rebuild: after a successful promote, rebuilds the wintermute-build-env
+  # Docker image from ~/wintermute/docker/Dockerfile and pushes to GHCR if
+  # GHCR_TOKEN is set in the environment.
+  - id: promote_isolated
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /workspace/repo
+    timeoutSeconds: 600
+    prompt: |
+      Merge the isolated feature branch back to main and promote to production.
+
+      ## Staging verification result
+      {{verify_staging.text}}
+
+      If the staging result contains "STAGING VERIFICATION FAILED", output
+      "promote_isolated: ABORTED — staging verification failed, production NOT reloaded"
+      and stop immediately. Do not run any further commands.
+
+      ## Merge + test + push flow
+      Use the Bash tool for all steps. Acquire the promote lock first to prevent
+      races with any other parallel run.
+
+      ```bash
+      # 1. Acquire promote lock (wait up to 10 minutes for it)
+      exec 9>/tmp/ripline-promote.lock
+      flock -w 600 9 || { echo "promote_isolated: FAILED — could not acquire promote lock"; exit 1; }
+
+      # 2. Determine the host repo path from the git remote "origin"
+      ORIGIN=$(git -C /workspace/repo remote get-url origin)
+      # origin is a file:// URL pointing at the host repo
+
+      # 3. Fetch latest main from origin (host) into the clone
+      git -C /workspace/repo fetch origin main
+
+      # 4. Rebase the feature branch onto origin/main
+      git -C /workspace/repo rebase origin/main
+
+      # 5. Switch to a local main that tracks origin/main
+      git -C /workspace/repo checkout -B main origin/main
+
+      # 6. Merge the feature branch (fast-forward or squash as appropriate)
+      git -C /workspace/repo merge --no-ff feat/{{idea_id}} \
+        -m "feat({{idea_id}}): {{enrich_inputs.idea_title}} — isolated build merge"
+
+      # 7. Run the full test suite on the merged result
+      npm --prefix /workspace/repo test -- --passWithNoTests --testPathIgnorePatterns=e2e 2>&1 | tail -40
+      TEST_EXIT=${PIPESTATUS[0]}
+      if [ "$TEST_EXIT" != "0" ]; then
+        echo "promote_isolated: FAILED — tests red after merge, production NOT reloaded"
+        exit 1
+      fi
+
+      # 8. Push main back to the host repo
+      git -C /workspace/repo push origin main
+
+      echo "promote_isolated: pushed main to host repo"
+      ```
+
+      If the push succeeds, continue:
+
+      ```bash
+      # 9. Run the existing promote script (reads from the host repo, reloads PM2)
+      ~/wintermute/bin/promote
+      PROMOTE_EXIT=$?
+      if [ "$PROMOTE_EXIT" != "0" ]; then
+        echo "promote_isolated: FAILED — promote script failed, production may not have reloaded"
+        exit 1
+      fi
+      echo "promote_isolated: success — production reloaded"
+      ```
+
+      After a successful promote, attempt to rebuild the Docker build image:
+
+      ```bash
+      # 10. Rebuild wintermute-build-env image (non-blocking; failure does not abort)
+      #     Dockerfile lives at ~/wintermute/docker/Dockerfile
+      #     build-image.sh handles tagging and optional GHCR push.
+      bash /home/openclaw/wintermute/docker/build-image.sh openclaw/build-env latest 2>&1 || \
+        echo "promote_isolated: image rebuild failed (non-blocking)"
+      ```
+
+      Output a final status line:
+      - "promote_isolated: success — production reloaded" on success
+      - "promote_isolated: FAILED — <reason>" on any failure
+
+  # ── 9. Backup after successful deploy ────────────────────────────────────
+  - id: backup
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 120
+    prompt: |
+      Run the backup script after a successful deployment.
+
+      Use the Bash tool to run:
+
+        ~/backups/wintermuteos-backup/backup.sh 2>&1
+
+      If it exits 0, output "backup: success".
+      If it exits non-zero, log the error output but output "backup: completed with errors (non-blocking)"
+      — do NOT fail or stop the pipeline.
+
+  - id: result
+    type: output
+    source: backup
+
+edges:
+  - { from: { node: intake },               to: { node: fetch_idea } }
+  - { from: { node: fetch_idea },           to: { node: enrich_inputs } }
+  - { from: { node: enrich_inputs },        to: { node: parse_plan } }
+  - { from: { node: parse_plan },           to: { node: setup_workspace } }
+  - { from: { node: setup_workspace },      to: { node: story_loop } }
+  - { from: { node: story_loop },           to: { node: write_tests } }
+  - { from: { node: write_tests },          to: { node: build_verify } }
+  - { from: { node: build_verify },         to: { node: reload_staging } }
+  - { from: { node: reload_staging },       to: { node: verify_staging } }
+  - { from: { node: verify_staging },       to: { node: validate_build_output } }
+  - { from: { node: validate_build_output }, to: { node: create_tech_debt_items } }
+  - { from: { node: create_tech_debt_items }, to: { node: promote_isolated } }
+  - { from: { node: promote_isolated },     to: { node: backup } }
+  - { from: { node: backup },              to: { node: result } }
