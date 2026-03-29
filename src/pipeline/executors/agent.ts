@@ -5,6 +5,7 @@ import type { Logger } from "../../log.js";
 import { interpolateTemplate } from "../../expression.js";
 import type { ExecutorContext, NodeResult } from "./types.js";
 import { detectHttpError, HttpResponseError } from "../../lib/http-response-guard.js";
+import { normalizeContainerConfig, DEFAULT_BUILD_IMAGE } from "../../run-container-pool.js";
 
 /** Result of a single agent (sessions_spawn) call. */
 export type AgentResult = {
@@ -169,24 +170,50 @@ export async function executeAgent(
   })();
 
   const resetSession = node.resetSession ?? true;
-  const result = await runner({
-    agentId,
-    prompt,
-    resetSession,
-    // Pass sessionId when available in context (resume scenarios always carry session from cursor,
-    // and resetSession:false nodes use it for shared-conversation continuity).
-    ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
-    ...(effectiveThinking !== undefined && { thinking: effectiveThinking }),
-    ...(effectiveTimeout !== undefined && { timeoutSeconds: effectiveTimeout }),
-    ...(useClaudeCode && { runner: "claude-code" }),
-    ...(effectiveMode !== undefined && { mode: effectiveMode }),
-    ...(resolvedCwd !== undefined && { cwd: resolvedCwd }),
-    ...(effectiveDangerously !== undefined && { dangerouslySkipPermissions: effectiveDangerously }),
-    ...(effectiveModel !== undefined && { model: effectiveModel }),
-    ...(effectiveMcpServers !== undefined && { mcpServers: effectiveMcpServers }),
-    ...(context.runId !== undefined && { runId: context.runId, nodeId: node.id }),
-    ...(context.log !== undefined && { log: context.log }),
-  });
+
+  // --- Container routing ---
+  // When a containerPool is present AND the node has a container config (or the pool
+  // already holds a run-level container), exec the claude CLI inside the container
+  // rather than calling the in-process runner.
+  const useContainer =
+    context.containerPool !== undefined &&
+    context.runId !== undefined &&
+    (node.container !== undefined || context.containerPool.hasContainer(context.runId));
+
+  let result: AgentResult;
+  if (useContainer && context.containerPool && context.runId) {
+    result = await runAgentInContainer(
+      prompt,
+      context.containerPool,
+      context.runId,
+      node.container,
+      resolvedCwd,
+      effectiveModel,
+      effectiveDangerously,
+      effectiveMode,
+      effectiveTimeout,
+      context.defaultContainerImage,
+    );
+  } else {
+    result = await runner({
+      agentId,
+      prompt,
+      resetSession,
+      // Pass sessionId when available in context (resume scenarios always carry session from cursor,
+      // and resetSession:false nodes use it for shared-conversation continuity).
+      ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
+      ...(effectiveThinking !== undefined && { thinking: effectiveThinking }),
+      ...(effectiveTimeout !== undefined && { timeoutSeconds: effectiveTimeout }),
+      ...(useClaudeCode && { runner: "claude-code" }),
+      ...(effectiveMode !== undefined && { mode: effectiveMode }),
+      ...(resolvedCwd !== undefined && { cwd: resolvedCwd }),
+      ...(effectiveDangerously !== undefined && { dangerouslySkipPermissions: effectiveDangerously }),
+      ...(effectiveModel !== undefined && { model: effectiveModel }),
+      ...(effectiveMcpServers !== undefined && { mcpServers: effectiveMcpServers }),
+      ...(context.runId !== undefined && { runId: context.runId, nodeId: node.id }),
+      ...(context.log !== undefined && { log: context.log }),
+    });
+  }
 
   // AC1: Check agent output for HTTP error responses (e.g. rate-limit 429).
   // curl exits 0 even on 4xx/5xx, so the agent "succeeds" but the output is an
@@ -210,4 +237,62 @@ export async function executeAgent(
   };
   context.artifacts[node.id] = value;
   return { artifactKey: node.id, value };
+}
+
+/**
+ * Run a Claude Code agent invocation inside the run-level persistent container.
+ * Builds a `claude -p <prompt>` CLI command and execs it via the container pool.
+ */
+async function runAgentInContainer(
+  prompt: string,
+  pool: import("../../run-container-pool.js").RunContainerPool,
+  runId: string,
+  nodeContainer: import("../../types.js").NodeContainerConfig | undefined,
+  workdir: string | undefined,
+  model: string | undefined,
+  dangerouslySkipPermissions: boolean | undefined,
+  mode: "plan" | "execute" | undefined,
+  timeoutSeconds: number | undefined,
+  defaultImage?: string,
+): Promise<AgentResult> {
+  // Resolve node-level container config for extra env / workdir override
+  const resolved = nodeContainer !== undefined
+    ? normalizeContainerConfig(nodeContainer, {
+        image: defaultImage ?? DEFAULT_BUILD_IMAGE,
+        ...(workdir !== undefined && { workdir }),
+      })
+    : undefined;
+
+  const effectiveWorkdir = resolved?.workdir ?? workdir;
+  const env = resolved?.env;
+
+  // Build the claude CLI invocation
+  const args: string[] = ["claude", "-p", prompt, "--output-format", "text"];
+
+  if (dangerouslySkipPermissions) {
+    args.push("--dangerously-skip-permissions");
+  }
+
+  if (model) {
+    args.push("--model", model);
+  }
+
+  if (mode === "plan") {
+    // Read-only: no write/edit tools
+    args.push("--disallowed-tools", "Write,Edit,MultiEdit");
+  }
+
+  if (timeoutSeconds !== undefined) {
+    args.push("--timeout", String(timeoutSeconds));
+  }
+
+  const result = await pool.exec(runId, args, env, effectiveWorkdir);
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `agent container exec failed with exit code ${result.exitCode}: ${(result.stderr || result.stdout).slice(0, 500)}`,
+    );
+  }
+
+  return { text: result.stdout.trim() };
 }

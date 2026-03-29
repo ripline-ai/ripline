@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import type { ShellNode } from "../../types.js";
 import type { ExecutorContext, NodeResult } from "./types.js";
+import { normalizeContainerConfig, DEFAULT_BUILD_IMAGE } from "../../run-container-pool.js";
 
 const DEFAULT_TIMEOUT_S = 120;
 
@@ -32,7 +33,24 @@ export async function executeShell(
   const timeoutMs = (node.timeoutSeconds ?? DEFAULT_TIMEOUT_S) * 1000;
   const failOnNonZero = node.failOnNonZero !== false;
 
-  const { exitCode, output } = await runCommand(command, cwd, timeoutMs);
+  // Route through container pool when:
+  //   1. A containerPool is in context, AND
+  //   2. Either the node has an explicit container config OR the pool already holds
+  //      a run-level container (acquired by the runner before node execution).
+  const { exitCode, output } = await (
+    context.containerPool &&
+    context.runId &&
+    (node.container !== undefined || context.containerPool.hasContainer(context.runId))
+      ? runCommandInContainer(
+          command,
+          context.containerPool,
+          context.runId,
+          node.container,
+          cwd,
+          context.defaultContainerImage,
+        )
+      : runCommand(command, cwd, timeoutMs)
+  );
 
   // Filter to only failing test lines if output looks like jest/npm test output
   const failingOutput = extractFailures(output);
@@ -51,6 +69,33 @@ export async function executeShell(
   const artifactKey = node.assigns ?? node.id;
   context.artifacts[artifactKey] = value;
   return { artifactKey, value };
+}
+
+/**
+ * Execute a shell command inside the run-level persistent container.
+ * If the node has an isolated container config, the pool must already hold a
+ * container for the run (acquired by the runner).  Env from the node's container
+ * config is merged into the exec call.
+ */
+async function runCommandInContainer(
+  command: string,
+  pool: import("../../run-container-pool.js").RunContainerPool,
+  runId: string,
+  nodeContainer: import("../../types.js").NodeContainerConfig | undefined,
+  workdir: string,
+  defaultImage?: string,
+): Promise<{ exitCode: number; output: string }> {
+  // Resolve node-level container config for extra env / workdir override
+  const resolved = nodeContainer !== undefined
+    ? normalizeContainerConfig(nodeContainer, { image: defaultImage ?? DEFAULT_BUILD_IMAGE, workdir })
+    : undefined;
+
+  const effectiveWorkdir = resolved?.workdir ?? workdir;
+  const env = resolved?.env;
+
+  const result = await pool.exec(runId, ["sh", "-c", command], env, effectiveWorkdir);
+  const output = result.stdout + (result.stderr ? result.stderr : "");
+  return { exitCode: result.exitCode, output };
 }
 
 function runCommand(command: string, cwd: string, timeoutMs: number): Promise<{ exitCode: number; output: string }> {
