@@ -160,6 +160,18 @@ export function loadUserConfig(homedir?: string): RiplineUserConfig {
   }
 }
 
+/** Default queue configuration: concurrency 1, no resource limits. */
+const DEFAULT_QUEUE_CONFIG: QueueConfig = { concurrency: 1 };
+
+/**
+ * Retrieve the effective queue config for a given queue name.
+ * Falls back to default (concurrency 1, no resource limits) if not configured.
+ */
+export function getQueueConfig(queueName: string, homedir?: string): QueueConfig {
+  const userConfig = loadUserConfig(homedir);
+  return userConfig.queues?.[queueName] ?? DEFAULT_QUEUE_CONFIG;
+}
+
 /**
  * Resolve pipeline directory in order: flag > user config pipelineDir >
  * ripline.config.json in cwd pipelineDir > default ~/.ripline/pipelines.

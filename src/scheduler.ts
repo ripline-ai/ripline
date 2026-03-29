@@ -178,7 +178,18 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
   // Stored so getDetailedMetrics can read concurrency config
   let effectiveConcurrencies: Map<string, number> = new Map();
 
+  /** Returns how many concurrent slots are currently in use for a given queue. */
+  function activeSlotCount(queueName: string): number {
+    return activeWorkersPerQueue.get(queueName) ?? 0;
+  }
+
+  /** Returns the configured concurrency limit for a given queue. */
+  function concurrencyLimit(queueName: string): number {
+    return effectiveConcurrencies.get(queueName) ?? 1;
+  }
+
   async function worker(queueName: string): Promise<void> {
+    const log = createLogger();
     while (!stopped) {
       const record = await queue.claimNext(queueName);
       if (!record) {
@@ -186,6 +197,9 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
         continue;
       }
       activeWorkersPerQueue.set(queueName, (activeWorkersPerQueue.get(queueName) ?? 0) + 1);
+      const slots = activeSlotCount(queueName);
+      const maxSlots = concurrencyLimit(queueName);
+      log.log("info", `[scheduler] queue "${queueName}": claimed run ${record.id} (slot ${slots}/${maxSlots})`);
       const startMs = Date.now();
       try {
         const entry = await registry.get(record.pipelineId);
@@ -430,6 +444,9 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
         }
       } finally {
         activeWorkersPerQueue.set(queueName, Math.max(0, (activeWorkersPerQueue.get(queueName) ?? 1) - 1));
+        const slotsAfter = activeSlotCount(queueName);
+        const maxSlots = concurrencyLimit(queueName);
+        log.log("info", `[scheduler] queue "${queueName}": slot freed (${slotsAfter}/${maxSlots} active), polling for next job`);
       }
     }
   }
@@ -469,6 +486,9 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
           }
         }
       }
+
+      // Log effective concurrency configuration summary
+      console.log(`[scheduler] concurrency configuration loaded — changes take effect on next restart`);
 
       // Auto-discover named queues from the pipeline registry. Pipelines may
       // declare `queue: "build"` etc. — ensure each referenced queue has at

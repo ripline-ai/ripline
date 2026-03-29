@@ -30,6 +30,8 @@ export type RunQueue = {
   depth(): Promise<number>;
   /** Pending counts grouped by queue name. */
   depthByQueue(): Promise<Map<string, number>>;
+  /** Number of runs with status running, grouped by queue name. */
+  runningByQueue(): Promise<Map<string, number>>;
 };
 
 export function createRunQueue(store: RunStore): RunQueue {
@@ -83,6 +85,16 @@ export function createRunQueue(store: RunStore): RunQueue {
       const pending = await store.list({ status: "pending" });
       const counts = new Map<string, number>();
       for (const run of pending) {
+        const name = run.queueName ?? "default";
+        counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+      return counts;
+    },
+
+    async runningByQueue(): Promise<Map<string, number>> {
+      const running = await store.list({ status: "running" });
+      const counts = new Map<string, number>();
+      for (const run of running) {
         const name = run.queueName ?? "default";
         counts.set(name, (counts.get(name) ?? 0) + 1);
       }
