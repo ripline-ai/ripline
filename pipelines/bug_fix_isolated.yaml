@@ -1,0 +1,395 @@
+# Bug Fix (Isolated)
+# Identical intent to bug_fix, but each run gets its own git workspace.
+# The fix is implemented on a branch fix/<bug_id> inside a cloned copy of the
+# repo at /workspace/repo — the shared /home/openclaw checkout is NEVER mutated.
+# After build_verify the promote_isolated step rebases onto main, runs tests,
+# and pushes back to the host repo before calling the existing promote script
+# to reload production.
+#
+# Inputs:
+#   bug_id — Wintermute bug ID (required)
+#
+# Flow:
+#   intake → fetch_bug → parse_bug → pm_triage → setup_workspace
+#          → fix → write_tests → build_verify
+#          → reload_staging → verify_staging → patch_bug
+#          → promote_isolated → result
+#
+# Isolation design:
+#   - Container mounts /home/openclaw read-only (for git source + secrets)
+#   - setup_workspace clones the target repo to /workspace/repo and creates
+#     a fix branch fix/<bug_id>
+#   - All fix / test / verify work uses /workspace/repo as cwd
+#   - promote_isolated: rebase onto main → npm test → push to host via
+#     file:/// URL → call ~/wintermute/bin/promote
+#   - flock /tmp/ripline-promote.lock serialises concurrent promote steps
+
+id: bug_fix_isolated
+name: Bug Fix Pipeline (Isolated)
+queue: build
+entry: [intake]
+container:
+  # Read-only bind of /home/openclaw so the container can read git sources,
+  # SSH keys, and ~/.config/claude without being able to mutate the host.
+  # /workspace is an ephemeral directory inside the container (not mounted).
+  volumes:
+    /home/openclaw: /home/openclaw:ro
+
+nodes:
+  - id: intake
+    type: input
+
+  # ── 1. Fetch bug from Wintermute ─────────────────────────────────────────
+  - id: fetch_bug
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 90
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
+
+      curl -s {{env.WINTERMUTE_URL}}/api/bugs/{{bug_id}}
+
+  - id: parse_bug
+    type: transform
+    expression: "(function(text) { var t = text.trim(); var start = t.indexOf('{'); var end = t.lastIndexOf('}'); if (start !== -1 && end !== -1 && end > start) { try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {} } var m = t.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); return JSON.parse(m ? m[1].trim() : t); })(artifacts.fetch_bug.text)"
+
+  # ── 2. Triage ─────────────────────────────────────────────────────────────
+  - id: pm_triage
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw/wintermute
+    timeoutSeconds: 300
+    prompt: |
+      QA has filed a bug report. Triage it from a product perspective and produce a clear brief for engineering.
+
+      Bug Report:
+      ID: {{parse_bug.id}}
+      Title: {{parse_bug.title}}
+      Description: {{parse_bug.description}}
+      Severity: {{parse_bug.severity}}
+
+      1. Confirm it is a real product issue (vs. won't-fix or out-of-scope)
+      2. Assign priority: P1 (blocking), P2 (important), P3 (nice-to-fix)
+      3. Add product context that helps engineering fix it correctly
+      4. Write clear, testable acceptance criteria for the fix
+
+      Output a structured engineering brief:
+      - Priority, title, product context, acceptance criteria
+      - Call out any won't-fix decisions and why
+
+  # ── 2b. Set up isolated workspace ────────────────────────────────────────
+  # Clones the relevant repo (wintermute or ripline) into /workspace/repo,
+  # then creates fix branch fix/<bug_id>.  The clone source is the read-only
+  # host mount at /home/openclaw/<project>.
+  #
+  # The project is inferred from the bug's project field; falls back to wintermute
+  # if unrecognised or absent.
+  - id: setup_workspace
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 120
+    prompt: |
+      Set up an isolated git workspace for this bug fix run. Use the Bash tool.
+
+      ## Inputs
+      Bug ID:      {{parse_bug.id}}
+      Bug Project: {{parse_bug.project}}
+
+      ## Steps
+
+      1. Determine the source repo path:
+         - If the bug project field contains "ripline": SOURCE=/home/openclaw/ripline
+         - Otherwise (default): SOURCE=/home/openclaw/wintermute
+
+      2. Clone the source repo into /workspace/repo (the /home/openclaw mount is
+         read-only, so we clone from there):
+         ```
+         git clone file://$SOURCE /workspace/repo
+         ```
+
+      3. Configure git identity inside the clone (needed for commits):
+         ```
+         git -C /workspace/repo config user.email "ripline-build@openclaw.local"
+         git -C /workspace/repo config user.name "Ripline Build"
+         ```
+
+      4. Create and switch to the fix branch:
+         ```
+         git -C /workspace/repo checkout -b fix/{{parse_bug.id}}
+         ```
+
+      5. Output exactly:
+         WORKSPACE=/workspace/repo
+         BRANCH=fix/{{parse_bug.id}}
+         SOURCE=<resolved source path>
+
+      If any step fails, output the error and stop — do not proceed.
+
+  # ── 3. Fix ────────────────────────────────────────────────────────────────
+  - id: fix
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /workspace/repo
+    timeoutSeconds: 1800
+    prompt: |
+      Fix the following bug. Work exclusively in the isolated workspace at /workspace/repo —
+      do NOT touch /home/openclaw/wintermute or /home/openclaw/ripline directly.
+
+      Bug ID: {{parse_bug.id}}
+      Title: {{parse_bug.title}}
+      Description: {{parse_bug.description}}
+
+      Engineering brief from triage:
+      {{pm_triage.text}}
+
+      Steps:
+      1. Verify you are on branch fix/{{parse_bug.id}}:
+         git -C /workspace/repo branch --show-current
+         If not on the fix branch, run: git -C /workspace/repo checkout fix/{{parse_bug.id}}
+      2. Identify the affected files and root cause
+      3. Implement the fix
+      4. Do NOT write tests — that happens in the next step
+      5. Do NOT run the test suite
+      6. Commit with message: fix: {{parse_bug.title}} [{{parse_bug.id}}]
+
+      Output a summary: what the root cause was, what was changed and why, which files were modified.
+
+  # ── 4. Write tests ────────────────────────────────────────────────────────
+  - id: write_tests
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /workspace/repo
+    timeoutSeconds: 900
+    prompt: |
+      The bug below has been fixed. Your job is to write tests that cover the bug scenario
+      and any edge cases discovered during the fix. Work exclusively in the isolated workspace
+      at /workspace/repo — do NOT touch /home/openclaw/wintermute or /home/openclaw/ripline directly.
+
+      Bug ID: {{parse_bug.id}}
+      Title: {{parse_bug.title}}
+      Description: {{parse_bug.description}}
+
+      Fix summary from the previous step:
+      {{fix.text}}
+
+      Steps:
+      1. Verify you are on branch fix/{{parse_bug.id}}; switch if needed.
+      2. Read the fix summary to understand what changed and why
+      3. Write tests that document the correct behavior and cover:
+         - The specific bug scenario (regression test)
+         - Edge cases identified during the fix
+      4. Tests should document correct behavior — they are not driving the implementation
+      5. Do NOT run the tests — that happens in build_verify
+      6. Commit with message: test: add coverage for {{parse_bug.title}} [{{parse_bug.id}}]
+
+      Output a summary: what tests were written, what scenarios they cover, which files were added or modified.
+
+  # ── 5. Build verification ─────────────────────────────────────────────────
+  # Runs entirely inside /workspace/repo — no network push yet.
+  - id: build_verify
+    type: shell
+    cwd: /workspace/repo
+    timeoutSeconds: 120
+    failOnNonZero: false
+    command: |
+      npm run build 2>&1 | tail -10
+      echo "---BUILD_EXIT:$?"
+      npm test -- --passWithNoTests --testPathIgnorePatterns=e2e 2>&1 | \
+        grep -E "(FAIL|PASS|Tests:|Test Suites:|✕|✗|×|●|ERROR|error TS)" || true
+      echo "---TEST_EXIT:${PIPESTATUS[0]}"
+
+  # ── 6. Reload staging ────────────────────────────────────────────────────
+  - id: reload_staging
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 120
+    prompt: |
+      Sync the production vault to staging, then reload both staging services so they
+      pick up the freshly-built code. Use the Bash tool to run these three commands:
+
+      1. ~/wintermute/scripts/vault-sync
+      2. /home/openclaw/.npm-global/bin/pm2 reload wintermute-staging
+      3. /home/openclaw/.npm-global/bin/pm2 reload ripline-staging
+
+      Output "staging ready" when all three succeed, or report the error and stop.
+
+  # ── 7. E2E smoke test against staging ────────────────────────────────────
+  - id: verify_staging
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw/wintermute
+    timeoutSeconds: 300
+    prompt: |
+      Run the e2e smoke tests against the staging stack to verify the fix end-to-end
+      before promoting to production.
+
+      Use the Bash tool:
+
+        cd /home/openclaw/wintermute && \
+          WINTERMUTE_URL=http://localhost:3001 RIPLINE_URL=http://localhost:4002 \
+          npx jest tests/e2e/smoke-consolidated-flow.test.ts --no-coverage 2>&1 | tail -30
+
+      If all tests pass, output "staging verified — ready to promote".
+      If any tests fail, output "STAGING VERIFICATION FAILED" followed by the failure
+      details. Do not proceed — the pipeline will continue to the promote step but
+      promote_isolated will see this failure and refuse to reload production.
+
+  # ── 8. Patch bug status to fixed ─────────────────────────────────────────
+  - id: patch_bug
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 90
+    prompt: |
+      Run this Python script using the Bash tool:
+
+      python3 << 'PYEOF'
+      import json, os, subprocess
+
+      bug_id = "{{bug_id}}"
+      wintermute_url = os.environ.get("WINTERMUTE_URL", "http://localhost:3000")
+      body = {"status": "fixed"}
+
+      r = subprocess.run(
+          ["curl", "-s", "-X", "PATCH",
+           f"{wintermute_url}/api/bugs/{bug_id}",
+           "-H", "Content-Type: application/json",
+           "-d", json.dumps(body)],
+          capture_output=True, text=True
+      )
+      print(r.stdout)
+      PYEOF
+
+      After the script runs, echo "patch_bug complete" and stop.
+
+  # ── 9. Isolated promote ───────────────────────────────────────────────────
+  # Merges the fix branch back to main in the workspace clone, runs tests,
+  # pushes to the host repo via file:// URL, then calls the existing promote
+  # script to reload production.
+  #
+  # A flock on /tmp/ripline-promote.lock serialises concurrent promote steps
+  # so two parallel runs cannot race to push to the host repo simultaneously.
+  #
+  # Image rebuild: after a successful promote, rebuilds the wintermute-build-env
+  # Docker image from ~/wintermute/docker/Dockerfile and pushes to GHCR if
+  # GHCR_TOKEN is set in the environment.
+  - id: promote_isolated
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /workspace/repo
+    timeoutSeconds: 600
+    prompt: |
+      Merge the isolated fix branch back to main and promote to production.
+
+      ## Staging verification result
+      {{verify_staging.text}}
+
+      If the staging result contains "STAGING VERIFICATION FAILED", output
+      "promote_isolated: ABORTED — staging verification failed, production NOT reloaded"
+      and stop immediately. Do not run any further commands.
+
+      ## Merge + test + push flow
+      Use the Bash tool for all steps. Acquire the promote lock first to prevent
+      races with any other parallel run.
+
+      ```bash
+      # 1. Acquire promote lock (wait up to 10 minutes for it)
+      exec 9>/tmp/ripline-promote.lock
+      flock -w 600 9 || { echo "promote_isolated: FAILED — could not acquire promote lock"; exit 1; }
+
+      # 2. Determine the host repo path from the git remote "origin"
+      ORIGIN=$(git -C /workspace/repo remote get-url origin)
+      # origin is a file:// URL pointing at the host repo
+
+      # 3. Fetch latest main from origin (host) into the clone
+      git -C /workspace/repo fetch origin main
+
+      # 4. Rebase the fix branch onto origin/main
+      git -C /workspace/repo rebase origin/main
+
+      # 5. Switch to a local main that tracks origin/main
+      git -C /workspace/repo checkout -B main origin/main
+
+      # 6. Merge the fix branch (fast-forward or squash as appropriate)
+      git -C /workspace/repo merge --no-ff fix/{{parse_bug.id}} \
+        -m "fix({{parse_bug.id}}): {{parse_bug.title}} — isolated fix merge"
+
+      # 7. Run the full test suite on the merged result
+      npm --prefix /workspace/repo test -- --passWithNoTests --testPathIgnorePatterns=e2e 2>&1 | tail -40
+      TEST_EXIT=${PIPESTATUS[0]}
+      if [ "$TEST_EXIT" != "0" ]; then
+        echo "promote_isolated: FAILED — tests red after merge, production NOT reloaded"
+        exit 1
+      fi
+
+      # 8. Push main back to the host repo
+      git -C /workspace/repo push origin main
+
+      echo "promote_isolated: pushed main to host repo"
+      ```
+
+      If the push succeeds, continue:
+
+      ```bash
+      # 9. Run the existing promote script (reads from the host repo, reloads PM2)
+      ~/wintermute/bin/promote
+      PROMOTE_EXIT=$?
+      if [ "$PROMOTE_EXIT" != "0" ]; then
+        echo "promote_isolated: FAILED — promote script failed, production may not have reloaded"
+        exit 1
+      fi
+      echo "promote_isolated: success — production reloaded"
+      ```
+
+      After a successful promote, attempt to rebuild the Docker build image:
+
+      ```bash
+      # 10. Rebuild wintermute-build-env image (non-blocking; failure does not abort)
+      #     Dockerfile lives at ~/wintermute/docker/Dockerfile
+      #     build-image.sh handles tagging and optional GHCR push.
+      bash /home/openclaw/wintermute/docker/build-image.sh openclaw/build-env latest 2>&1 || \
+        echo "promote_isolated: image rebuild failed (non-blocking)"
+      ```
+
+      Output a final status line:
+      - "promote_isolated: success — production reloaded" on success
+      - "promote_isolated: FAILED — <reason>" on any failure
+
+  - id: result
+    type: output
+    source: promote_isolated
+
+edges:
+  - { from: { node: intake },           to: { node: fetch_bug } }
+  - { from: { node: fetch_bug },        to: { node: parse_bug } }
+  - { from: { node: parse_bug },        to: { node: pm_triage } }
+  - { from: { node: pm_triage },        to: { node: setup_workspace } }
+  - { from: { node: setup_workspace },  to: { node: fix } }
+  - { from: { node: fix },              to: { node: write_tests } }
+  - { from: { node: write_tests },      to: { node: build_verify } }
+  - { from: { node: build_verify },     to: { node: reload_staging } }
+  - { from: { node: reload_staging },   to: { node: verify_staging } }
+  - { from: { node: verify_staging },   to: { node: patch_bug } }
+  - { from: { node: patch_bug },        to: { node: promote_isolated } }
+  - { from: { node: promote_isolated }, to: { node: result } }
