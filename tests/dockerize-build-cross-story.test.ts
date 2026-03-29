@@ -252,8 +252,8 @@ describe("Cross-story: Scheduler eligibility + event contract (Story 6)", () => 
       switch (promoteStatus) {
         case "merged":
           return "completed";
-        case "merge-conflict":
-          return "merge-conflict";
+        case "needs-conflict-resolution":
+          return "needs-conflict-resolution";
         case "test-failure":
           return "errored";
         case "error":
@@ -262,7 +262,7 @@ describe("Cross-story: Scheduler eligibility + event contract (Story 6)", () => 
     };
 
     expect(mapPromoteToRunStatus("merged")).toBe("completed");
-    expect(mapPromoteToRunStatus("merge-conflict")).toBe("merge-conflict");
+    expect(mapPromoteToRunStatus("needs-conflict-resolution")).toBe("needs-conflict-resolution");
     expect(mapPromoteToRunStatus("test-failure")).toBe("errored");
     expect(mapPromoteToRunStatus("error")).toBe("errored");
   });
@@ -434,7 +434,7 @@ describe("Cross-story: PromoteStep ordering guarantee (Story 3 + real git)", () 
     expect(branches).not.toContain("build/delete-on-merge");
   });
 
-  it("merge-conflict preserves feature branch for manual resolution", async () => {
+  it("needs-conflict-resolution preserves feature branch for manual resolution", async () => {
     const { work } = repo;
 
     // Set up conflicting changes
@@ -465,7 +465,7 @@ describe("Cross-story: PromoteStep ordering guarantee (Story 3 + real git)", () 
       gitTimeoutMs: 10_000,
     });
 
-    expect(result.status).toBe("merge-conflict");
+    expect(result.status).toBe("needs-conflict-resolution");
 
     // Branch MUST still exist for manual resolution
     const branches = git(work, "branch");
@@ -713,31 +713,31 @@ describe("Cross-story: Docker availability caching (Story 4)", () => {
   });
 });
 
-describe("Cross-story: PipelineRunStatus includes merge-conflict (Story 6)", () => {
-  it("merge-conflict is a valid PipelineRunStatus value", () => {
+describe("Cross-story: PipelineRunStatus includes needs-conflict-resolution (Story 6)", () => {
+  it("needs-conflict-resolution is a valid PipelineRunStatus value", () => {
     const validStatuses: PipelineRunStatus[] = [
       "pending",
       "running",
       "paused",
       "errored",
       "completed",
-      "merge-conflict",
+      "needs-conflict-resolution",
     ];
 
-    expect(validStatuses).toContain("merge-conflict");
+    expect(validStatuses).toContain("needs-conflict-resolution");
   });
 
-  it("run record can hold merge-conflict status with error and branch", () => {
+  it("run record can hold needs-conflict-resolution status with error and branch", () => {
     const record: Partial<PipelineRunRecord> = {
       id: "run-conflict",
       pipelineId: "build",
-      status: "merge-conflict",
+      status: "needs-conflict-resolution",
       error: "Merge conflict detected when merging 'build/run-conflict' into 'main'",
       featureBranch: "build/run-conflict",
       containerLogFile: "/repo/.ripline/runs/run-conflict/container.log",
     };
 
-    expect(record.status).toBe("merge-conflict");
+    expect(record.status).toBe("needs-conflict-resolution");
     expect(record.error).toContain("Merge conflict");
     expect(record.featureBranch).toBeDefined();
   });

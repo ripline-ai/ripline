@@ -214,15 +214,15 @@ describe("Story 2 — ContainerManager acceptance criteria", () => {
 /* ── Story 3: PromoteStep acceptance ───────────────────────────────────── */
 
 describe("Story 3 — PromoteStep type contracts", () => {
-  it("promoteStep result has exactly one of: merged, merge-conflict, test-failure, error", () => {
+  it("promoteStep result has exactly one of: merged, needs-conflict-resolution, test-failure, error", () => {
     // Verify the PromoteStepResult type constrains status correctly
-    type PromoteStatus = "merged" | "merge-conflict" | "test-failure" | "error";
-    const validStatuses: PromoteStatus[] = ["merged", "merge-conflict", "test-failure", "error"];
+    type PromoteStatus = "merged" | "needs-conflict-resolution" | "test-failure" | "error";
+    const validStatuses: PromoteStatus[] = ["merged", "needs-conflict-resolution", "test-failure", "error"];
 
     expect(validStatuses).toHaveLength(4);
     // Each status maps to a distinct run outcome
     expect(validStatuses).toContain("merged");
-    expect(validStatuses).toContain("merge-conflict");
+    expect(validStatuses).toContain("needs-conflict-resolution");
     expect(validStatuses).toContain("test-failure");
     expect(validStatuses).toContain("error");
   });
@@ -247,13 +247,13 @@ describe("Story 3 — PromoteStep type contracts", () => {
     expect(result.status).toBe("test-failure");
   });
 
-  it("merge-conflict result preserves feature branch for manual resolution", () => {
+  it("needs-conflict-resolution result preserves feature branch for manual resolution", () => {
     const result = {
-      status: "merge-conflict" as const,
+      status: "needs-conflict-resolution" as const,
       message: "Merge conflict detected. Branch preserved for manual resolution.",
       gitOutput: "CONFLICT (content): Merge conflict in src/index.ts",
     };
-    expect(result.status).toBe("merge-conflict");
+    expect(result.status).toBe("needs-conflict-resolution");
     expect(result.gitOutput).toContain("CONFLICT");
   });
 
@@ -938,18 +938,18 @@ describe("Story 6 — Cross-story integration tests", () => {
       // The scheduler calls store.completeRun()
     });
 
-    it("scheduler sets merge-conflict status when promoteResult indicates conflict", () => {
+    it("scheduler sets needs-conflict-resolution status when promoteResult indicates conflict", () => {
       const buildResult = {
         usedContainer: true,
         promoteResult: {
-          status: "merge-conflict" as const,
+          status: "needs-conflict-resolution" as const,
           message: "Merge conflict detected",
         },
         featureBranch: "build/run-1",
       };
 
-      expect(buildResult.promoteResult!.status).toBe("merge-conflict");
-      // The scheduler sets record.status = "merge-conflict" and saves
+      expect(buildResult.promoteResult!.status).toBe("needs-conflict-resolution");
+      // The scheduler sets record.status = "needs-conflict-resolution" and saves
     });
   });
 

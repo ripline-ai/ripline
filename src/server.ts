@@ -598,7 +598,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           lastUpdated = current.updatedAt;
           send(current);
         }
-        if (current.status === "completed" || current.status === "errored" || current.status === "merge-conflict") {
+        if (current.status === "completed" || current.status === "errored" || current.status === "needs-conflict-resolution") {
           clearInterval(interval);
           reply.raw.end();
         }
@@ -737,7 +737,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         }
         try {
           const current = await loadRunWithRetry(request.params.runId);
-          if (current?.status === "completed" || current?.status === "errored" || current?.status === "merge-conflict") {
+          if (current?.status === "completed" || current?.status === "errored" || current?.status === "needs-conflict-resolution") {
             clearInterval(interval);
             reply.raw.end();
           }

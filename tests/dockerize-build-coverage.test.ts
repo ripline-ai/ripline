@@ -13,7 +13,7 @@
  *           RIPLINE_REPO_URL detection
  *  Story 5: Queue config — negative concurrency, float concurrency rounding
  *  Story 6: Status mapping exhaustiveness, containerLogFile + featureBranch
- *           on PipelineRunRecord, merge-conflict as valid PipelineRunStatus
+ *           on PipelineRunRecord, needs-conflict-resolution as valid PipelineRunStatus
  *
  * Integration points:
  *  - Container env vars contract between host and container entrypoint
@@ -129,7 +129,7 @@ describe("Story 3 — PromoteStep code structure guarantees", () => {
   it("PromoteStepResult covers all four status variants", () => {
     const allStatuses: PromoteStepResult["status"][] = [
       "merged",
-      "merge-conflict",
+      "needs-conflict-resolution",
       "test-failure",
       "error",
     ];
@@ -518,7 +518,7 @@ describe("Story 6 — Status mapping covers all container outcomes", () => {
   it("every promote status has a corresponding run status", () => {
     const promoteStatuses: PromoteStepResult["status"][] = [
       "merged",
-      "merge-conflict",
+      "needs-conflict-resolution",
       "test-failure",
       "error",
     ];
@@ -549,7 +549,7 @@ describe("Story 6 — Status mapping covers all container outcomes", () => {
       "paused",
       "errored",
       "completed",
-      "merge-conflict",
+      "needs-conflict-resolution",
     ];
 
     const scenarios: ContainerBuildResult[] = [
@@ -595,7 +595,7 @@ describe("Story 6 — Status mapping covers all container outcomes", () => {
           timedOut: false,
           logFile: "/l",
         },
-        promoteResult: { status: "merge-conflict", message: "conflict" },
+        promoteResult: { status: "needs-conflict-resolution", message: "conflict" },
       },
       // Test failure
       {
@@ -682,7 +682,7 @@ describe("Cross-project: Wintermute lifecycle states map to Ripline statuses", (
     expect(mapping.status).toBe("completed");
   });
 
-  it("Wintermute 'merge-conflict' state corresponds to Ripline 'merge-conflict' status", () => {
+  it("Wintermute 'needs-conflict-resolution' state corresponds to Ripline 'needs-conflict-resolution' status", () => {
     const result: ContainerBuildResult = {
       usedContainer: true,
       containerResult: {
@@ -691,11 +691,11 @@ describe("Cross-project: Wintermute lifecycle states map to Ripline statuses", (
         timedOut: false,
         logFile: "/l",
       },
-      promoteResult: { status: "merge-conflict", message: "conflict" },
+      promoteResult: { status: "needs-conflict-resolution", message: "conflict" },
     };
 
     const mapping = mapContainerBuildToRunStatus(result);
-    expect(mapping.status).toBe("merge-conflict");
+    expect(mapping.status).toBe("needs-conflict-resolution");
   });
 
   it("Wintermute 'timed-out' state corresponds to Ripline 'errored' status", () => {
@@ -767,11 +767,11 @@ describe("PipelineRunRecord container metadata fields", () => {
     expect(record.featureBranch).toBeUndefined();
   });
 
-  it("merge-conflict is a valid PipelineRunStatus", () => {
+  it("needs-conflict-resolution is a valid PipelineRunStatus", () => {
     const record: PipelineRunRecord = {
       id: "run-mc",
       pipelineId: "pipe-mc",
-      status: "merge-conflict",
+      status: "needs-conflict-resolution",
       startedAt: Date.now(),
       updatedAt: Date.now(),
       inputs: {},
@@ -781,6 +781,6 @@ describe("PipelineRunRecord container metadata fields", () => {
       featureBranch: "build/run-mc",
     };
 
-    expect(record.status).toBe("merge-conflict");
+    expect(record.status).toBe("needs-conflict-resolution");
   });
 });

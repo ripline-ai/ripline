@@ -386,7 +386,7 @@ export type PipelineRunStatus =
   | "paused"
   | "errored"
   | "completed"
-  | "merge-conflict";
+  | "needs-conflict-resolution";
 
 export type PipelineRunStep = {
   nodeId: string;

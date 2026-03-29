@@ -4,7 +4,7 @@
  * Validates the full lifecycle from feature branch creation through
  * promote-step merging, including:
  *  - Two concurrent non-overlapping builds both merge successfully
- *  - Two concurrent overlapping builds: first merges, second flagged as merge-conflict
+ *  - Two concurrent overlapping builds: first merges, second flagged as needs-conflict-resolution
  *  - Failed build cleanup and status tracking
  *  - Timed-out build kill and cleanup
  *  - Pipeline status mapping for container-based execution states
@@ -204,7 +204,7 @@ describe("E2E: Concurrent overlapping builds — merge conflict detection", () =
     cleanupTestRepo(repo.work);
   });
 
-  it("first to finish merges, second is flagged as merge-conflict", async () => {
+  it("first to finish merges, second is flagged as needs-conflict-resolution", async () => {
     const { work } = repo;
 
     // Create a shared file on main
@@ -249,7 +249,7 @@ describe("E2E: Concurrent overlapping builds — merge conflict detection", () =
       testTimeoutMs: 5_000,
       gitTimeoutMs: 10_000,
     });
-    expect(resultB.status).toBe("merge-conflict");
+    expect(resultB.status).toBe("needs-conflict-resolution");
     expect(resultB.message).toContain("Merge conflict");
 
     // Verify the conflicting branch is preserved for manual resolution
@@ -257,7 +257,7 @@ describe("E2E: Concurrent overlapping builds — merge conflict detection", () =
     expect(branches).toContain("build/overlap-b");
   });
 
-  it("merge-conflict result includes git output for debugging", async () => {
+  it("needs-conflict-resolution result includes git output for debugging", async () => {
     const { work } = repo;
 
     // Set up conflicting branches
@@ -300,7 +300,7 @@ describe("E2E: Concurrent overlapping builds — merge conflict detection", () =
       gitTimeoutMs: 10_000,
     });
 
-    expect(result.status).toBe("merge-conflict");
+    expect(result.status).toBe("needs-conflict-resolution");
     expect(result.gitOutput).toBeDefined();
     // Git output should mention the conflicting file
     expect(result.gitOutput!.toLowerCase()).toContain("conflict");
@@ -453,14 +453,14 @@ describe("E2E: Container build result → run status mapping", () => {
       usedContainer: true,
       containerResult: { containerId: "def", exitCode: 0, timedOut: false, logFile: "/tmp/log" },
       promoteResult: {
-        status: "merge-conflict",
+        status: "needs-conflict-resolution",
         message: "CONFLICT in shared.ts",
         gitOutput: "CONFLICT (content): Merge conflict in shared.ts",
       },
       featureBranch: "build/run-2",
     };
 
-    expect(result.promoteResult!.status).toBe("merge-conflict");
+    expect(result.promoteResult!.status).toBe("needs-conflict-resolution");
     expect(result.featureBranch).toBeDefined(); // Branch preserved for manual resolution
   });
 
@@ -502,14 +502,14 @@ describe("E2E: Container build result → run status mapping", () => {
   it("all promote statuses have a defined run-status mapping", () => {
     const promoteStatuses: PromoteStepResult["status"][] = [
       "merged",
-      "merge-conflict",
+      "needs-conflict-resolution",
       "test-failure",
       "error",
     ];
 
     const statusMapping: Record<string, string> = {
       "merged": "completed",
-      "merge-conflict": "errored",
+      "needs-conflict-resolution": "errored",
       "test-failure": "errored",
       "error": "errored",
     };

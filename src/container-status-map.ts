@@ -7,7 +7,7 @@
  *
  * Mapping rules:
  *   container exit 0 + promote "merged"         → "completed"
- *   container exit 0 + promote "merge-conflict"  → "merge-conflict"
+ *   container exit 0 + promote "needs-conflict-resolution"  → "needs-conflict-resolution"
  *   container exit 0 + promote "test-failure"     → "errored"
  *   container exit 0 + promote "error"            → "errored"
  *   container exit non-zero (build failure)       → "errored"
@@ -30,7 +30,7 @@ export type ContainerStatusMapping = {
   summary: string;
   /** Error message (if any) for the run record. */
   error?: string;
-  /** Whether the feature branch should be preserved (for manual merge-conflict resolution). */
+  /** Whether the feature branch should be preserved (for manual needs-conflict-resolution resolution). */
   preserveFeatureBranch: boolean;
 };
 
@@ -97,9 +97,9 @@ export function mapContainerBuildToRunStatus(
           preserveFeatureBranch: false,
         };
 
-      case "merge-conflict":
+      case "needs-conflict-resolution":
         return {
-          status: "merge-conflict",
+          status: "needs-conflict-resolution",
           usedContainer: true,
           summary: result.promoteResult.message,
           error: result.promoteResult.message,
@@ -152,7 +152,7 @@ export function mapContainerBuildToRunStatus(
  */
 export const PROMOTE_STATUS_TO_RUN_STATUS: Record<string, PipelineRunStatus> = {
   "merged": "completed",
-  "merge-conflict": "merge-conflict",
+  "needs-conflict-resolution": "needs-conflict-resolution",
   "test-failure": "errored",
   "error": "errored",
 };

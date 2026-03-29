@@ -282,8 +282,8 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                   mergeCommit: buildResult.promoteResult?.mergeCommit,
                   featureBranch: buildResult.featureBranch,
                 });
-              } else if (mapping.status === "merge-conflict") {
-                loaded.status = "merge-conflict";
+              } else if (mapping.status === "needs-conflict-resolution") {
+                loaded.status = "needs-conflict-resolution";
                 loaded.error = mapping.error ?? mapping.summary;
                 loaded.updatedAt = Date.now();
                 await store.save(loaded);

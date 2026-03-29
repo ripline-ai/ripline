@@ -316,9 +316,9 @@ describe("Story 3 — PromoteStep type contracts and boundary values", () => {
     expect(result.message).toContain("aborted");
   });
 
-  it("merge-conflict message mentions branch preservation", () => {
+  it("needs-conflict-resolution message mentions branch preservation", () => {
     const result: PromoteStepResult = {
-      status: "merge-conflict",
+      status: "needs-conflict-resolution",
       message:
         "Merge conflict detected when merging 'build/run-mc' into 'main'. Branch preserved for manual resolution.",
       gitOutput: "CONFLICT (content): Merge conflict in src/index.ts",
@@ -332,7 +332,7 @@ describe("Story 3 — PromoteStep type contracts and boundary values", () => {
   it("all four promote statuses map exhaustively to PipelineRunStatus", () => {
     const statuses: PromoteStepResult["status"][] = [
       "merged",
-      "merge-conflict",
+      "needs-conflict-resolution",
       "test-failure",
       "error",
     ];
@@ -820,7 +820,7 @@ describe("Story 6 — mapContainerBuildToRunStatus: full decision tree", () => {
     expect(m.preserveFeatureBranch).toBe(false);
   });
 
-  it("container success + merge-conflict → merge-conflict, preserve branch", () => {
+  it("container success + needs-conflict-resolution → needs-conflict-resolution, preserve branch", () => {
     const m = mapContainerBuildToRunStatus({
       usedContainer: true,
       containerResult: {
@@ -830,12 +830,12 @@ describe("Story 6 — mapContainerBuildToRunStatus: full decision tree", () => {
         logFile: "/tmp/log",
       },
       promoteResult: {
-        status: "merge-conflict",
+        status: "needs-conflict-resolution",
         message: "Conflict in file.ts",
       },
       featureBranch: "build/r4",
     });
-    expect(m.status).toBe("merge-conflict");
+    expect(m.status).toBe("needs-conflict-resolution");
     expect(m.preserveFeatureBranch).toBe(true);
   });
 
@@ -1107,7 +1107,7 @@ describe("Story 6 — Run record metadata through container lifecycle", () => {
     expect(record.featureBranch).toBeDefined();
   });
 
-  it("metadata persists through status=merge-conflict", () => {
+  it("metadata persists through status=needs-conflict-resolution", () => {
     const record: Partial<PipelineRunRecord> = {
       id: "run-mc",
       status: "running",
@@ -1115,23 +1115,23 @@ describe("Story 6 — Run record metadata through container lifecycle", () => {
       featureBranch: "build/run-mc",
     };
 
-    record.status = "merge-conflict";
+    record.status = "needs-conflict-resolution";
     record.error = "Merge conflict detected";
     expect(record.containerLogFile).toBeDefined();
     expect(record.featureBranch).toBe("build/run-mc");
   });
 
-  it("PipelineRunStatus includes merge-conflict as valid value", () => {
+  it("PipelineRunStatus includes needs-conflict-resolution as valid value", () => {
     const allStatuses: PipelineRunStatus[] = [
       "pending",
       "running",
       "paused",
       "errored",
       "completed",
-      "merge-conflict",
+      "needs-conflict-resolution",
     ];
 
-    expect(allStatuses).toContain("merge-conflict");
+    expect(allStatuses).toContain("needs-conflict-resolution");
     expect(allStatuses).toHaveLength(6);
   });
 });
@@ -1298,7 +1298,7 @@ describe("Cross-story: Config → Container → Status → Record pipeline", () 
         logFile: "/runs/run-mc/container.log",
       },
       promoteResult: {
-        status: "merge-conflict",
+        status: "needs-conflict-resolution",
         message: "Merge conflict in shared.ts. Branch preserved.",
         gitOutput: "CONFLICT (content): shared.ts",
       },
@@ -1306,7 +1306,7 @@ describe("Cross-story: Config → Container → Status → Record pipeline", () 
     };
 
     const mapping = mapContainerBuildToRunStatus(buildResult);
-    expect(mapping.status).toBe("merge-conflict");
+    expect(mapping.status).toBe("needs-conflict-resolution");
     expect(mapping.preserveFeatureBranch).toBe(true);
 
     const record: Partial<PipelineRunRecord> = {
@@ -1317,7 +1317,7 @@ describe("Cross-story: Config → Container → Status → Record pipeline", () 
       containerLogFile: buildResult.containerResult!.logFile,
     };
 
-    expect(record.status).toBe("merge-conflict");
+    expect(record.status).toBe("needs-conflict-resolution");
     expect(record.featureBranch).toBe("build/run-mc");
     expect(record.error).toContain("Merge conflict");
   });

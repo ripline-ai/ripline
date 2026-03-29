@@ -13,7 +13,7 @@
 #   intake → fetch_bug → parse_bug → pm_triage → setup_workspace
 #          → fix → write_tests → build_verify
 #          → reload_staging → verify_staging → patch_bug
-#          → promote_isolated → result
+#          → rebase_branch → resolve_conflicts → promote_isolated → result
 #
 # Isolation design:
 #   - Container mounts /home/openclaw read-only (for git source + secrets)
@@ -281,7 +281,59 @@ nodes:
 
       After the script runs, echo "patch_bug complete" and stop.
 
-  # ── 9. Isolated promote ───────────────────────────────────────────────────
+  # ── 9a. Rebase fix branch onto main ──────────────────────────────────────
+  # Attempts a clean rebase. If conflicts are found, emits REBASE_STATUS=conflict
+  # and lists the conflicted files so resolve_conflicts can fix them.
+  - id: rebase_branch
+    type: shell
+    cwd: /workspace/repo
+    timeoutSeconds: 120
+    failOnNonZero: false
+    command: |
+      git fetch origin main
+      git checkout fix/{{parse_bug.id}}
+      git rebase origin/main
+      if [ $? -eq 0 ]; then
+        echo "REBASE_STATUS=clean"
+      else
+        CONFLICTED=$(git diff --name-only --diff-filter=U | tr '\n' ',' | sed 's/,$//')
+        echo "REBASE_STATUS=conflict"
+        echo "CONFLICTED_FILES=$CONFLICTED"
+      fi
+
+  # ── 9b. Resolve rebase conflicts (if any) ────────────────────────────────
+  # Claude reads each conflicted file, understands both sides, writes a resolved
+  # version, then continues the rebase.
+  - id: resolve_conflicts
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /workspace/repo
+    timeoutSeconds: 600
+    prompt: |
+      A git rebase of fix/{{parse_bug.id}} onto origin/main may have produced conflicts.
+
+      ## Rebase status
+      {{rebase_branch.output}}
+
+      If the output contains "REBASE_STATUS=clean", output "resolve_conflicts: nothing to do — rebase was clean" and stop.
+
+      Otherwise, for each path listed in CONFLICTED_FILES:
+      1. Read the file (it contains conflict markers: <<<<<<<, =======, >>>>>>>)
+      2. Understand both sides of the conflict in the context of what fix/{{parse_bug.id}} is fixing
+      3. Write the fully-resolved file content (no conflict markers) back to disk
+      4. Stage the file: git add <path>
+
+      After all files are resolved, continue the rebase:
+      ```bash
+      GIT_EDITOR=true git rebase --continue
+      ```
+
+      If `git rebase --continue` exits non-zero, output "resolve_conflicts: FAILED — <reason>" and stop.
+      Otherwise output "resolve_conflicts: success — all conflicts resolved".
+
+  # ── 10. Isolated promote ──────────────────────────────────────────────────
   # Merges the fix branch back to main in the workspace clone, runs tests,
   # pushes to the host repo via file:// URL, then calls the existing promote
   # script to reload production.
@@ -309,6 +361,13 @@ nodes:
       "promote_isolated: ABORTED — staging verification failed, production NOT reloaded"
       and stop immediately. Do not run any further commands.
 
+      ## Conflict resolution result
+      {{resolve_conflicts.text}}
+
+      If the conflict resolution result contains "resolve_conflicts: FAILED", output
+      "promote_isolated: ABORTED — conflict resolution failed, production NOT reloaded"
+      and stop immediately. Do not run any further commands.
+
       ## Merge + test + push flow
       Use the Bash tool for all steps. Acquire the promote lock first to prevent
       races with any other parallel run.
@@ -323,19 +382,17 @@ nodes:
       # origin is a file:// URL pointing at the host repo
 
       # 3. Fetch latest main from origin (host) into the clone
+      # (rebase onto origin/main was already handled by rebase_branch + resolve_conflicts)
       git -C /workspace/repo fetch origin main
 
-      # 4. Rebase the fix branch onto origin/main
-      git -C /workspace/repo rebase origin/main
-
-      # 5. Switch to a local main that tracks origin/main
+      # 4. Switch to a local main that tracks origin/main
       git -C /workspace/repo checkout -B main origin/main
 
-      # 6. Merge the fix branch (fast-forward or squash as appropriate)
+      # 5. Merge the fix branch (fast-forward or squash as appropriate)
       git -C /workspace/repo merge --no-ff fix/{{parse_bug.id}} \
         -m "fix({{parse_bug.id}}): {{parse_bug.title}} — isolated fix merge"
 
-      # 7. Run the full test suite on the merged result
+      # 6. Run the full test suite on the merged result
       npm --prefix /workspace/repo test -- --passWithNoTests --testPathIgnorePatterns=e2e 2>&1 | tail -40
       TEST_EXIT=${PIPESTATUS[0]}
       if [ "$TEST_EXIT" != "0" ]; then
@@ -343,7 +400,7 @@ nodes:
         exit 1
       fi
 
-      # 8. Push main back to the host repo
+      # 7. Push main back to the host repo
       git -C /workspace/repo push origin main
 
       echo "promote_isolated: pushed main to host repo"
@@ -352,7 +409,7 @@ nodes:
       If the push succeeds, continue:
 
       ```bash
-      # 9. Run the existing promote script (reads from the host repo, reloads PM2)
+      # 8. Run the existing promote script (reads from the host repo, reloads PM2)
       ~/wintermute/bin/promote
       PROMOTE_EXIT=$?
       if [ "$PROMOTE_EXIT" != "0" ]; then
@@ -365,7 +422,7 @@ nodes:
       After a successful promote, attempt to rebuild the Docker build image:
 
       ```bash
-      # 10. Rebuild wintermute-build-env image (non-blocking; failure does not abort)
+      # 9. Rebuild wintermute-build-env image (non-blocking; failure does not abort)
       #     Dockerfile lives at ~/wintermute/docker/Dockerfile
       #     build-image.sh handles tagging and optional GHCR push.
       bash /home/openclaw/wintermute/docker/build-image.sh openclaw/build-env latest 2>&1 || \
@@ -391,5 +448,7 @@ edges:
   - { from: { node: build_verify },     to: { node: reload_staging } }
   - { from: { node: reload_staging },   to: { node: verify_staging } }
   - { from: { node: verify_staging },   to: { node: patch_bug } }
-  - { from: { node: patch_bug },        to: { node: promote_isolated } }
+  - { from: { node: patch_bug },         to: { node: rebase_branch } }
+  - { from: { node: rebase_branch },    to: { node: resolve_conflicts } }
+  - { from: { node: resolve_conflicts }, to: { node: promote_isolated } }
   - { from: { node: promote_isolated }, to: { node: result } }

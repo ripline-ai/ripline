@@ -137,13 +137,13 @@ describe("Integration: Container build eligibility rules", () => {
     // This documents the mapping from promoteStep result → run record status
     const statusMapping: Record<string, string> = {
       merged: "completed",
-      "merge-conflict": "merge-conflict",
+      "needs-conflict-resolution": "needs-conflict-resolution",
       "test-failure": "errored",
       error: "errored",
     };
 
     expect(statusMapping["merged"]).toBe("completed");
-    expect(statusMapping["merge-conflict"]).toBe("merge-conflict");
+    expect(statusMapping["needs-conflict-resolution"]).toBe("needs-conflict-resolution");
     expect(statusMapping["test-failure"]).toBe("errored");
     expect(statusMapping["error"]).toBe("errored");
   });

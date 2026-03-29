@@ -6,7 +6,7 @@
  *  - Pipeline status in Wintermute correctly reflects container-based execution states
  *  - A failed build is cleaned up and marked as failed with accessible logs
  *  - A timed-out build is killed, cleaned up, and marked as timed-out
- *  - Two concurrent overlapping builds: first to finish merges, second is flagged as merge-conflict
+ *  - Two concurrent overlapping builds: first to finish merges, second is flagged as needs-conflict-resolution
  *
  * Also validates:
  *  - Every code path in mapContainerBuildToRunStatus
@@ -198,15 +198,15 @@ describe("mapContainerBuildToRunStatus — container success + merged", () => {
   });
 });
 
-/* ── Container exit 0 + promote "merge-conflict" ─────────────────────── */
+/* ── Container exit 0 + promote "needs-conflict-resolution" ─────────────────────── */
 
-describe("mapContainerBuildToRunStatus — container success + merge-conflict", () => {
-  it("returns merge-conflict status and preserves feature branch", () => {
+describe("mapContainerBuildToRunStatus — container success + needs-conflict-resolution", () => {
+  it("returns needs-conflict-resolution status and preserves feature branch", () => {
     const result: ContainerBuildResult = {
       usedContainer: true,
       containerResult: makeContainerResult(),
       promoteResult: makePromoteResult({
-        status: "merge-conflict",
+        status: "needs-conflict-resolution",
         message: "Merge conflict detected when merging 'build/run-mc' into 'main'. Branch preserved.",
         mergeCommit: undefined,
         gitOutput: "CONFLICT (content): src/index.ts",
@@ -215,7 +215,7 @@ describe("mapContainerBuildToRunStatus — container success + merge-conflict", 
     };
     const mapping = mapContainerBuildToRunStatus(result);
 
-    expect(mapping.status).toBe("merge-conflict");
+    expect(mapping.status).toBe("needs-conflict-resolution");
     expect(mapping.preserveFeatureBranch).toBe(true);
     expect(mapping.error).toContain("Merge conflict");
   });
@@ -300,8 +300,8 @@ describe("PROMOTE_STATUS_TO_RUN_STATUS", () => {
     expect(PROMOTE_STATUS_TO_RUN_STATUS["merged"]).toBe("completed");
   });
 
-  it("maps 'merge-conflict' to 'merge-conflict'", () => {
-    expect(PROMOTE_STATUS_TO_RUN_STATUS["merge-conflict"]).toBe("merge-conflict");
+  it("maps 'needs-conflict-resolution' to 'needs-conflict-resolution'", () => {
+    expect(PROMOTE_STATUS_TO_RUN_STATUS["needs-conflict-resolution"]).toBe("needs-conflict-resolution");
   });
 
   it("maps 'test-failure' to 'errored'", () => {
@@ -315,8 +315,8 @@ describe("PROMOTE_STATUS_TO_RUN_STATUS", () => {
   it("covers all four promote statuses", () => {
     expect(Object.keys(PROMOTE_STATUS_TO_RUN_STATUS).sort()).toEqual([
       "error",
-      "merge-conflict",
       "merged",
+      "needs-conflict-resolution",
       "test-failure",
     ]);
   });
@@ -324,7 +324,7 @@ describe("PROMOTE_STATUS_TO_RUN_STATUS", () => {
   it("matches mapContainerBuildToRunStatus for every promote status", () => {
     const promoteStatuses: Array<PromoteStepResult["status"]> = [
       "merged",
-      "merge-conflict",
+      "needs-conflict-resolution",
       "test-failure",
       "error",
     ];
@@ -390,11 +390,11 @@ describe("preserveFeatureBranch correctness", () => {
       expectedPreserve: false,
     },
     {
-      name: "merge-conflict",
+      name: "needs-conflict-resolution",
       result: {
         usedContainer: true,
         containerResult: makeContainerResult(),
-        promoteResult: makePromoteResult({ status: "merge-conflict" }),
+        promoteResult: makePromoteResult({ status: "needs-conflict-resolution" }),
         featureBranch: "build/x",
       },
       expectedPreserve: true,

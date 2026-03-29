@@ -104,7 +104,7 @@ describe("promoteStep", () => {
     expect(result.testOutput).toBeDefined();
   });
 
-  it("returns 'merge-conflict' when rebase detects conflicts", async () => {
+  it("returns 'needs-conflict-resolution' when rebase detects conflicts", async () => {
     mockSpawnForCommands({
       "fetch origin": { exitCode: 0 },
       "checkout main": { exitCode: 0 },
@@ -118,7 +118,7 @@ describe("promoteStep", () => {
 
     const result = await promoteStep(baseParams);
 
-    expect(result.status).toBe("merge-conflict");
+    expect(result.status).toBe("needs-conflict-resolution");
     expect(result.message).toContain("Merge conflict");
     expect(result.message).toContain("preserved for manual resolution");
     expect(result.gitOutput).toBeDefined();
@@ -200,7 +200,7 @@ describe("promoteStep", () => {
 
     const result = await promoteStep(baseParams);
 
-    expect(result.status).toBe("merge-conflict");
+    expect(result.status).toBe("needs-conflict-resolution");
     expect(result.message).toContain("Branch preserved");
   });
 
@@ -250,9 +250,9 @@ describe("promoteStep", () => {
   });
 
   it("returns all four possible status values", () => {
-    const statuses: Array<"merged" | "merge-conflict" | "test-failure" | "error"> = [
+    const statuses: Array<"merged" | "needs-conflict-resolution" | "test-failure" | "error"> = [
       "merged",
-      "merge-conflict",
+      "needs-conflict-resolution",
       "test-failure",
       "error",
     ];
