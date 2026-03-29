@@ -135,6 +135,12 @@ const loopNode = baseNode.extend({
   maxIterations: z.number().int().positive().optional(),
   exitCondition: z.string().optional(),
   body: loopBodySchema,
+  /** Execution mode: 'sequential' (default) or 'parallel' (dependency-wave). */
+  mode: z.enum(["sequential", "parallel"]).optional(),
+  /** Max concurrent items in parallel mode. */
+  maxConcurrency: z.number().int().positive().optional(),
+  /** Field on each collection item holding dependency IDs. Default 'dependsOn'. */
+  dependsOnField: z.string().optional(),
 });
 
 const switchNode = baseNode.extend({

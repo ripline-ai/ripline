@@ -176,6 +176,12 @@ export type LoopNode = NodeBase & {
   maxIterations?: number;
   exitCondition?: string;
   body: LoopBody;
+  /** Execution mode: 'sequential' processes items one-by-one; 'parallel' uses dependency waves. Default 'sequential'. */
+  mode?: "sequential" | "parallel";
+  /** Maximum number of items to execute concurrently in parallel mode. */
+  maxConcurrency?: number;
+  /** Field name on each item that holds an array of dependency item IDs. Default 'dependsOn'. */
+  dependsOnField?: string;
 };
 
 export type LoopBody = {
