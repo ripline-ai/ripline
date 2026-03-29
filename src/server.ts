@@ -945,6 +945,76 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     },
   });
 
+  /** GET /config/queues - return current per-queue concurrency and resource limits config */
+  fastify.get("/config/queues", {
+    preHandler: requireAuth,
+    handler: async (_request, reply) => {
+      const currentConfig = loadUserConfig();
+      const queues = currentConfig.queues ?? {};
+      // Include effective concurrencies from scheduler if available
+      const effective: Record<string, { concurrency: number; resourceLimits?: ContainerResourceLimits }> = {};
+      for (const [name, qc] of Object.entries(mergedQueueConcurrencies)) {
+        effective[name] = {
+          concurrency: qc,
+          ...(mergedQueueResourceLimits[name] !== undefined && { resourceLimits: mergedQueueResourceLimits[name] }),
+        };
+      }
+      return reply.send({ configured: queues, effective });
+    },
+  });
+
+  /** PUT /config/queues - update per-queue concurrency and resource limits in config (takes effect on restart) */
+  fastify.put<{ Body: { queues?: Record<string, { concurrency?: number; resourceLimits?: { cpus?: string; memory?: string } }> } }>("/config/queues", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const body = (request.body as Record<string, unknown>) ?? {};
+      if (!body.queues || typeof body.queues !== "object" || Array.isArray(body.queues)) {
+        return reply.status(400).send({ error: "Bad Request", message: "queues is required and must be an object" });
+      }
+
+      // Validate each queue entry
+      const queuesInput = body.queues as Record<string, unknown>;
+      const validated: Record<string, { concurrency: number; resourceLimits?: { cpus?: string; memory?: string } }> = {};
+      for (const [name, raw] of Object.entries(queuesInput)) {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+          return reply.status(400).send({ error: "Bad Request", message: `Queue "${name}" must be an object` });
+        }
+        const q = raw as Record<string, unknown>;
+        const concurrency = typeof q.concurrency === "number" ? Math.max(1, Math.floor(q.concurrency)) : 1;
+        const entry: { concurrency: number; resourceLimits?: { cpus?: string; memory?: string } } = { concurrency };
+        if (q.resourceLimits && typeof q.resourceLimits === "object" && !Array.isArray(q.resourceLimits)) {
+          const rl = q.resourceLimits as Record<string, unknown>;
+          const limits: { cpus?: string; memory?: string } = {};
+          if (typeof rl.cpus === "string") limits.cpus = rl.cpus;
+          if (typeof rl.memory === "string") limits.memory = rl.memory;
+          if (Object.keys(limits).length > 0) entry.resourceLimits = limits;
+        }
+        validated[name] = entry;
+      }
+
+      // Persist to config.json
+      const configPath = path.join(
+        process.env.HOME ?? path.resolve("."),
+        ".ripline",
+        "config.json",
+      );
+      let existing: Record<string, unknown> = {};
+      try {
+        const raw = await fs.readFile(configPath, "utf-8");
+        existing = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        // file missing or invalid — start fresh
+      }
+      existing.queues = validated;
+
+      const dir = path.dirname(configPath);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
+
+      return reply.send({ queues: validated, note: "Changes take effect on next Ripline restart" });
+    },
+  });
+
   /** PUT /config/background-queue - toggle backgroundQueue.enabled at runtime and persist */
   fastify.put<{ Body: { enabled?: boolean } }>("/config/background-queue", {
     preHandler: requireAuth,

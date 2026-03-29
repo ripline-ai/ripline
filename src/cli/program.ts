@@ -641,13 +641,24 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       const agentRunner = llmConfig ? createLlmAgentRunner(llmConfig) : undefined;
       const claudeCodeConfig = resolveClaudeCodeConfig({ cwd: process.cwd(), homedir: os.homedir() });
       const claudeCodeRunner = claudeCodeConfig ? createClaudeCodeRunner(claudeCodeConfig) : undefined;
+      // Load user config early so queue logging and container build config are both available
+      const serveUserConfig = loadUserConfig(os.homedir());
       console.log(chalk.cyan(`Starting HTTP server on port ${port}`));
       console.log(chalk.gray(`  pipelines: ${pipelinesDir}`));
       console.log(chalk.gray(`  runs: ${runsDir}`));
       console.log(chalk.gray(`  maxConcurrency (default queue): ${maxConcurrency}`));
       if (queueConcurrencies) {
         for (const [name, n] of Object.entries(queueConcurrencies)) {
-          console.log(chalk.gray(`  queue "${name}": ${n} worker(s)`));
+          console.log(chalk.gray(`  queue "${name}": ${n} worker(s) (CLI override)`));
+        }
+      }
+      // Log per-queue config from user config (concurrency + resource limits)
+      if (serveUserConfig.queues) {
+        for (const [name, qc] of Object.entries(serveUserConfig.queues)) {
+          const limitsStr = qc.resourceLimits
+            ? ` [cpus=${qc.resourceLimits.cpus ?? "unlimited"}, mem=${qc.resourceLimits.memory ?? "unlimited"}]`
+            : "";
+          console.log(chalk.gray(`  queue "${name}": concurrency=${qc.concurrency}${limitsStr} (config)`));
         }
       }
       if (opts.authToken) console.log(chalk.gray("  auth: Bearer token required"));
@@ -655,7 +666,6 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       if (claudeCodeRunner) console.log(chalk.gray("  agent: Claude Code runner (standalone)"));
 
       // Resolve container build config from user config
-      const serveUserConfig = loadUserConfig(os.homedir());
       let containerBuild: ContainerBuildConfig | undefined;
       if (serveUserConfig.containerBuild?.enabled) {
         const cbUser = serveUserConfig.containerBuild;
