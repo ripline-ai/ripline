@@ -86,7 +86,13 @@ export class AutoExecutor {
    */
   private async handleRunFinished(event: RunEvent): Promise<void> {
     const queueItemId = this.activeRunMap.get(event.runId);
-    if (!queueItemId) return; // Not our run
+    if (!queueItemId) {
+      // Not our run, but still try to dispatch next in case we missed a completion
+      if (this.enabled) {
+        await this.tryDispatchNext();
+      }
+      return;
+    }
 
     this.activeRunMap.delete(event.runId);
 

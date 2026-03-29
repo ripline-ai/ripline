@@ -445,7 +445,7 @@ export class DeterministicRunner extends EventEmitter {
             // (used by multi-wave parallel loops to process the next wave).
             const rerun = !!nodeResult.rerunOnResume;
             step.status = rerun ? "pending" : "completed";
-            step.finishedAt = rerun ? undefined : Date.now();
+            if (!rerun) step.finishedAt = Date.now();
             const nextIndex = rerun ? i : i + 1;
             await this.store.updateCursor(record, {
               nextNodeIndex: nextIndex,

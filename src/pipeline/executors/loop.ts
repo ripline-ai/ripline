@@ -104,7 +104,7 @@ function collectionToStories(
     const obj = item as Record<string, unknown>;
     const id = typeof obj.id === "string" ? obj.id : String(index);
     const deps = Array.isArray(obj[dependsOnField]) ? (obj[dependsOnField] as string[]) : undefined;
-    return { id, dependsOn: deps, order: index };
+    return deps !== undefined ? { id, dependsOn: deps, order: index } : { id, order: index };
   });
 }
 
