@@ -317,6 +317,24 @@ nodes:
       idea_id = "{{idea_id}}"
       include_stories = "{{includeStories}}"
 
+      # Check current idea status before patching — do not overwrite terminal
+      # success states (done, built) with "specced".  This prevents stale or
+      # duplicate pipeline runs from resetting an already-completed idea.
+      check = subprocess.run(
+          ["curl", "-s", f"{{resolve_urls.wintermute_url}}/api/ideas/{idea_id}"],
+          capture_output=True, text=True
+      )
+      try:
+          current = json.loads(check.stdout)
+          current_status = current.get("status", "")
+      except Exception:
+          current_status = ""
+
+      TERMINAL_SUCCESS = {"done", "built"}
+      if current_status in TERMINAL_SUCCESS:
+          print(f"Skipping patch: idea {idea_id} is already in terminal status '{current_status}'. Not overwriting with 'specced'.")
+          sys.exit(0)
+
       spec = json.loads('''{{parse_spec}}'''.replace("'", "'"))
 
       # Build the patch body
