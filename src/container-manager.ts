@@ -32,6 +32,8 @@ export interface ContainerSpawnOptions {
   name?: string;
   /** Timeout in milliseconds. Container is killed if it exceeds this. 0 = no timeout. */
   timeoutMs?: number;
+  /** Resource limits (CPU, memory) applied to the container. */
+  resourceLimits?: { cpus?: string; memory?: string };
 }
 
 export interface ContainerResult {
@@ -89,6 +91,7 @@ export class ContainerManager {
       logFile,
       name,
       timeoutMs = 0,
+      resourceLimits,
     } = options;
 
     // Ensure log directory exists
@@ -102,6 +105,7 @@ export class ContainerManager {
       ...(volumes !== undefined && { volumes }),
       ...(workdir !== undefined && { workdir }),
       ...(name !== undefined && { name }),
+      ...(resourceLimits !== undefined && { resourceLimits }),
     });
 
     this.logger.log("info", `Spawning container: docker run ${args.join(" ")}`);
@@ -180,6 +184,7 @@ export class ContainerManager {
     volumes?: Record<string, string>;
     workdir?: string;
     name?: string;
+    resourceLimits?: { cpus?: string; memory?: string };
   }): string[] {
     const args: string[] = ["run", "--detach"];
 
@@ -200,6 +205,16 @@ export class ContainerManager {
     if (opts.volumes) {
       for (const [hostPath, containerPath] of Object.entries(opts.volumes)) {
         args.push("--volume", `${hostPath}:${containerPath}`);
+      }
+    }
+
+    // Apply resource limits (CPU and memory)
+    if (opts.resourceLimits) {
+      if (opts.resourceLimits.cpus) {
+        args.push("--cpus", opts.resourceLimits.cpus);
+      }
+      if (opts.resourceLimits.memory) {
+        args.push("--memory", opts.resourceLimits.memory);
       }
     }
 

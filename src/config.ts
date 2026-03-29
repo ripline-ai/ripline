@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { RiplineUserConfig } from "./types.js";
+import type { RiplineUserConfig, QueueConfig } from "./types.js";
 
 /* ── Stage-aware configuration ──────────────────────────────────────── */
 
@@ -90,6 +90,30 @@ export function loadUserConfig(homedir?: string): RiplineUserConfig {
           botToken: tg.botToken,
           chatId: tg.chatId,
         };
+      }
+    }
+
+    // Per-queue configuration (concurrency + resource limits)
+    const queuesBlock = parsed.queues;
+    if (queuesBlock && typeof queuesBlock === "object" && !Array.isArray(queuesBlock)) {
+      const queues: Record<string, QueueConfig> = {};
+      for (const [name, raw] of Object.entries(queuesBlock as Record<string, unknown>)) {
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          const q = raw as Record<string, unknown>;
+          const concurrency = typeof q.concurrency === "number" ? Math.max(1, q.concurrency) : 1;
+          const qc: QueueConfig = { concurrency };
+          if (q.resourceLimits && typeof q.resourceLimits === "object" && !Array.isArray(q.resourceLimits)) {
+            const rl = q.resourceLimits as Record<string, unknown>;
+            const limits: { cpus?: string; memory?: string } = {};
+            if (typeof rl.cpus === "string") limits.cpus = rl.cpus;
+            if (typeof rl.memory === "string") limits.memory = rl.memory;
+            if (Object.keys(limits).length > 0) qc.resourceLimits = limits;
+          }
+          queues[name] = qc;
+        }
+      }
+      if (Object.keys(queues).length > 0) {
+        result.queues = queues;
       }
     }
 

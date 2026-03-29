@@ -7,7 +7,7 @@ import Fastify, {
 } from "fastify";
 import cors from "@fastify/cors";
 import os from "node:os";
-import type { AgentDefinition, SkillsRegistry, PipelinePluginConfig } from "./types.js";
+import type { AgentDefinition, SkillsRegistry, PipelinePluginConfig, ContainerResourceLimits } from "./types.js";
 import type { ContainerBuildConfig } from "./container-build-runner.js";
 import { resolveSkillsDir, resolveStageConfig } from "./config.js";
 import type { PipelineRunRecord } from "./types.js";
@@ -83,7 +83,42 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
   const skillsDir = config.skillsDir ?? resolveSkillsDir({ homedir: os.homedir() });
   const maxConcurrency = config.maxConcurrency ?? 0;
   const queue = createRunQueue(store);
-  const hasQueues = config.queueConcurrencies && Object.keys(config.queueConcurrencies).length > 0;
+
+  // Merge per-queue config from user config (queues field) with CLI overrides (queueConcurrencies).
+  // User config provides both concurrency and resource limits per queue.
+  const userConfig2 = loadUserConfig();
+  const mergedQueueConcurrencies: Record<string, number> = {};
+  const mergedQueueResourceLimits: Record<string, ContainerResourceLimits> = {};
+
+  // First, apply user config queues (concurrency + resource limits)
+  if (userConfig2.queues) {
+    for (const [name, qc] of Object.entries(userConfig2.queues)) {
+      mergedQueueConcurrencies[name] = qc.concurrency;
+      if (qc.resourceLimits) {
+        mergedQueueResourceLimits[name] = qc.resourceLimits;
+      }
+    }
+  }
+
+  // Then, apply config.queues (programmatic / plugin config)
+  if (config.queues) {
+    for (const [name, qc] of Object.entries(config.queues)) {
+      mergedQueueConcurrencies[name] = qc.concurrency;
+      if (qc.resourceLimits) {
+        mergedQueueResourceLimits[name] = qc.resourceLimits;
+      }
+    }
+  }
+
+  // CLI --queue flags override concurrency (backward compat)
+  if (config.queueConcurrencies) {
+    for (const [name, concurrency] of Object.entries(config.queueConcurrencies)) {
+      mergedQueueConcurrencies[name] = concurrency;
+    }
+  }
+
+  const hasQueues = Object.keys(mergedQueueConcurrencies).length > 0;
+  const hasResourceLimits = Object.keys(mergedQueueResourceLimits).length > 0;
   const scheduler =
     maxConcurrency > 0 || hasQueues
       ? createScheduler({
@@ -91,13 +126,14 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           queue,
           registry,
           maxConcurrency,
-          ...(hasQueues && { queueConcurrencies: config.queueConcurrencies }),
+          ...(hasQueues && { queueConcurrencies: mergedQueueConcurrencies }),
           agentRunner,
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
           ...(agentDefinitions !== undefined && { agentDefinitions }),
           ...(skillsRegistry !== undefined && { skillsRegistry }),
           skillsDir,
           ...(config.containerBuild !== undefined && { containerBuild: config.containerBuild }),
+          ...(hasResourceLimits && { queueResourceLimits: mergedQueueResourceLimits }),
         })
       : null;
   if (scheduler) scheduler.start();

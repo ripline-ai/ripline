@@ -49,6 +49,8 @@ export type RiplineUserConfig = {
   backgroundQueue?: BackgroundQueueConfig;
   /** Telegram notification configuration. */
   telegram?: TelegramConfig;
+  /** Per-queue configuration (concurrency + resource limits). e.g. { build: { concurrency: 3 } } */
+  queues?: Record<string, QueueConfig>;
 };
 
 export type PipelinePluginConfig = {
@@ -61,6 +63,8 @@ export type PipelinePluginConfig = {
   runsDir?: string;
   /** File path for the background queue YAML store (default ~/obsidian/Ops/queue.yaml). */
   queueFilePath?: string;
+  /** Per-queue configuration (concurrency + resource limits). e.g. { build: { concurrency: 3, resourceLimits: { cpus: "1", memory: "2g" } } } */
+  queues?: Record<string, QueueConfig>;
 };
 
 export type NodeContract = {
@@ -343,6 +347,22 @@ export type BackgroundQueueItem = {
 export type BackgroundQueueConfig = {
   enabled: boolean;
   maxRetries: number;
+};
+
+/** Resource limits applied to each build container. */
+export type ContainerResourceLimits = {
+  /** CPU limit (e.g. "1.5" for 1.5 cores, "0.5" for half a core). Maps to Docker --cpus. */
+  cpus?: string;
+  /** Memory limit (e.g. "512m", "2g"). Maps to Docker --memory. */
+  memory?: string;
+};
+
+/** Per-queue configuration with concurrency and optional resource limits. */
+export type QueueConfig = {
+  /** Maximum number of concurrent jobs for this queue. Default 1. */
+  concurrency: number;
+  /** Resource limits applied to containers spawned by this queue. */
+  resourceLimits?: ContainerResourceLimits;
 };
 
 /** Configuration for Telegram notifications. */

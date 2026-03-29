@@ -31,6 +31,8 @@ export interface ContainerBuildConfig {
   secretsMountPath?: string;
   /** Timeout in ms for the container. Default 600_000 (10 min). */
   containerTimeoutMs?: number;
+  /** Resource limits (CPU, memory) for each container. */
+  resourceLimits?: { cpus?: string; memory?: string };
   /** Logger instance. */
   logger?: Logger;
 }
@@ -122,6 +124,7 @@ export async function runContainerBuild(
     testCommand = "npm test",
     secretsMountPath,
     containerTimeoutMs = 600_000,
+    resourceLimits,
     logger = createLogger(),
   } = config;
 
@@ -181,6 +184,7 @@ export async function runContainerBuild(
       logFile,
       name: `ripline-build-${runId.slice(0, 8)}`,
       timeoutMs: containerTimeoutMs,
+      ...(resourceLimits !== undefined && { resourceLimits }),
     });
     logger.log("info", `[container-build] Container exited: code=${containerResult.exitCode}, timedOut=${containerResult.timedOut}`);
   } catch (err) {

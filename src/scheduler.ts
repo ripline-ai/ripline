@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { RunStore } from "./run-store.js";
 import type { RunQueue } from "./run-queue.js";
-import type { AgentDefinition, SkillsRegistry, PipelineRegistryEntry, RetryPolicy, ErrorCategory } from "./types.js";
+import type { AgentDefinition, SkillsRegistry, PipelineRegistryEntry, RetryPolicy, ErrorCategory, ContainerResourceLimits } from "./types.js";
 import { createLogger } from "./log.js";
 import { createRunScopedFileSink } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
@@ -28,6 +28,8 @@ export type SchedulerConfig = {
   pollIntervalMs?: number;
   /** Container build configuration. When set, scheduler attempts container-based execution. */
   containerBuild?: ContainerBuildConfig;
+  /** Per-queue resource limits for containers. Key = queue name. */
+  queueResourceLimits?: Record<string, ContainerResourceLimits>;
 };
 
 export type SchedulerMetrics = {
@@ -160,6 +162,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
     skillsDir,
     pollIntervalMs = 500,
     containerBuild,
+    queueResourceLimits,
   } = config;
 
   let stopped = false;
@@ -199,11 +202,17 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
         // Only attempt for top-level runs (no parentRunId) with no existing cursor (fresh runs).
         let containerHandled = false;
         if (containerBuild && !record.parentRunId && record.cursor === undefined) {
+          // Merge per-queue resource limits into container build config
+          const queueLimits = queueResourceLimits?.[queueName];
           const buildResult = await runContainerBuild(
             record.id,
             record.pipelineId,
             { inputs: record.inputs, pipelineId: record.pipelineId },
-            { ...containerBuild, ...(log !== undefined && { logger: log }) },
+            {
+              ...containerBuild,
+              ...(log !== undefined && { logger: log }),
+              ...(queueLimits !== undefined && { resourceLimits: queueLimits }),
+            },
           );
 
           if (buildResult.usedContainer) {
@@ -389,11 +398,12 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
       // Build the effective per-queue concurrency map.
       // maxConcurrency sets concurrency for the "default" queue (backwards compat).
       // queueConcurrencies allows overriding per named queue.
+      // Default concurrency is 1 if not specified for safety.
       effectiveConcurrencies = new Map();
-      effectiveConcurrencies.set("default", maxConcurrency);
+      effectiveConcurrencies.set("default", maxConcurrency > 0 ? maxConcurrency : 1);
       if (queueConcurrencies) {
         for (const [name, concurrency] of Object.entries(queueConcurrencies)) {
-          effectiveConcurrencies.set(name, concurrency);
+          effectiveConcurrencies.set(name, concurrency > 0 ? concurrency : 1);
         }
       }
 
