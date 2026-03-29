@@ -57,6 +57,12 @@ export {
 } from "./agent-runner-config.js";
 export { promoteStep, type PromoteStepParams, type PromoteStepResult } from "./promote-step.js";
 export {
+  ContainerManager,
+  type ContainerSpawnOptions,
+  type ContainerResult,
+  type ContainerManagerConfig,
+} from "./container-manager.js";
+export {
   runContainerBuild,
   isDockerAvailable,
   type ContainerBuildConfig,
