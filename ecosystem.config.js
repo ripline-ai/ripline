@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "ripline-prod",
       script: "dist/cli/run.js",
-      args: "serve --pipelines-dir /home/openclaw/.ripline/pipelines --runs-dir /home/openclaw/ripline/.ripline/runs --max-concurrency 1 --queue spec:3 --queue build:1",
+      args: "serve --pipelines-dir /home/openclaw/.ripline/pipelines --runs-dir /home/openclaw/ripline/.ripline/runs --max-concurrency 1 --queue spec:3 --queue build:2",
       cwd: "/home/openclaw/ripline",
       watch: false,
       env: {
@@ -14,7 +14,7 @@ module.exports = {
     {
       name: "ripline-staging",
       script: "dist/cli/run.js",
-      args: "serve --pipelines-dir /home/openclaw/.ripline/pipelines --runs-dir /home/openclaw/ripline/.ripline/runs-staging --max-concurrency 1 --queue spec:3 --queue build:1",
+      args: "serve --pipelines-dir /home/openclaw/.ripline/pipelines --runs-dir /home/openclaw/ripline/.ripline/runs-staging --max-concurrency 1 --queue spec:3 --queue build:2",
       cwd: "/home/openclaw/ripline",
       watch: true,
       watch_delay: 1000,
