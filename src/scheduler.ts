@@ -8,6 +8,7 @@ import { DeterministicRunner } from "./pipeline/runner.js";
 import { EventBus } from "./event-bus.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
 import { runContainerBuild, type ContainerBuildConfig } from "./container-build-runner.js";
+import { mapContainerBuildToRunStatus } from "./container-status-map.js";
 
 export type SchedulerConfig = {
   store: RunStore;

@@ -68,6 +68,19 @@ export {
   type ContainerBuildConfig,
   type ContainerBuildResult,
 } from "./container-build-runner.js";
+export {
+  mapContainerBuildToRunStatus,
+  PROMOTE_STATUS_TO_RUN_STATUS,
+  type ContainerStatusMapping,
+} from "./container-status-map.js";
+export {
+  validatePipelineDefinition,
+  validateContainerBuildPipeline,
+  smokeTestPipelineDefinition,
+  type ValidationResult,
+  type ValidationIssue,
+  type ValidationSeverity,
+} from "./pipeline-validator.js";
 
 export function normalizeConfig(raw: unknown): NormalizedConfig {
   const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
