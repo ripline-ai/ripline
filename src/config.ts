@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import type { RiplineUserConfig, QueueConfig } from "./types.js";
+import type { RiplineUserConfig, QueueConfig, ContainerBuildUserConfig } from "./types.js";
 
 /* ── Stage-aware configuration ──────────────────────────────────────── */
 
@@ -91,6 +91,21 @@ export function loadUserConfig(homedir?: string): RiplineUserConfig {
           chatId: tg.chatId,
         };
       }
+    }
+
+    // Container build configuration
+    const cbBlock = parsed.containerBuild;
+    if (cbBlock && typeof cbBlock === "object" && !Array.isArray(cbBlock)) {
+      const cb = cbBlock as Record<string, unknown>;
+      const containerBuild: ContainerBuildUserConfig = {};
+      if (cb.enabled === true) containerBuild.enabled = true;
+      if (typeof cb.repoPath === "string") containerBuild.repoPath = expandTilde(cb.repoPath.trim(), home);
+      if (typeof cb.targetBranch === "string") containerBuild.targetBranch = cb.targetBranch.trim();
+      if (typeof cb.buildImage === "string") containerBuild.buildImage = cb.buildImage.trim();
+      if (typeof cb.testCommand === "string") containerBuild.testCommand = cb.testCommand.trim();
+      if (typeof cb.secretsMountPath === "string") containerBuild.secretsMountPath = expandTilde(cb.secretsMountPath.trim(), home);
+      if (typeof cb.containerTimeoutMs === "number") containerBuild.containerTimeoutMs = cb.containerTimeoutMs;
+      result.containerBuild = containerBuild;
     }
 
     // Per-queue configuration (concurrency + resource limits)

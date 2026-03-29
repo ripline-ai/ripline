@@ -229,7 +229,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         const runBgP: Promise<void> = runner.run({
           inputs,
           ...(body.env !== undefined && { env: body.env }),
-        }).catch((err) => {
+        }).then(() => {}).catch((err) => {
           console.error(`[server] pipeline run failed: ${err instanceof Error ? err.message : String(err)}`);
         });
         backgroundRunPromises.add(runBgP);
@@ -523,7 +523,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           const runP = strategy === "from-start"
             ? inlineRunner.run({ startRunId: runId, inputs: record.inputs })
             : inlineRunner.run({ resumeRunId: runId });
-          const bgPromise: Promise<void> = runP.catch((err) => {
+          const bgPromise: Promise<void> = runP.then(() => {}).catch((err) => {
             console.error(`[server] retry run failed: ${err instanceof Error ? err.message : String(err)}`);
           });
           backgroundRunPromises.add(bgPromise);
@@ -640,6 +640,44 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
             return reply.status(404).send({
               error: "Not Found",
               message: `No logs yet for run ${request.params.runId}`,
+            });
+          }
+          return reply.status(500).send({
+            error: "Internal Server Error",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      },
+    }
+  );
+
+  /** GET /runs/:runId/container-logs - container execution log (plain text) */
+  fastify.get<{ Params: { runId: string } }>(
+    "/runs/:runId/container-logs",
+    {
+      preHandler: requireAuth,
+      handler: async (request, reply) => {
+        let record: PipelineRunRecord | null;
+        try {
+          record = await loadRunWithRetry(request.params.runId);
+        } catch (err) {
+          return reply.status(500).send({
+            error: "Internal Server Error",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+        if (!record) {
+          return reply.status(404).send({ error: "Not Found", message: `Run ${request.params.runId} not found` });
+        }
+        const containerLogPath = path.join(runsDir, request.params.runId, "container.log");
+        try {
+          const content = await fs.readFile(containerLogPath, "utf8");
+          return reply.type("text/plain").send(content);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+            return reply.status(404).send({
+              error: "Not Found",
+              message: `No container logs for run ${request.params.runId}`,
             });
           }
           return reply.status(500).send({

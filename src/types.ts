@@ -38,6 +38,24 @@ export type RiplineProfile = {
   inputs: Record<string, unknown>;
 };
 
+/** User-level container build configuration (from ~/.ripline/config.json). */
+export type ContainerBuildUserConfig = {
+  /** Enable container-based builds. Default false. */
+  enabled?: boolean;
+  /** Absolute path to the host git repository (auto-detected from cwd if omitted). */
+  repoPath?: string;
+  /** Target branch to merge into (e.g. "main"). Default "main". */
+  targetBranch?: string;
+  /** Docker image to use for builds. Default "ripline-builder:latest". */
+  buildImage?: string;
+  /** Shell command to run the project test suite during promote. Default "npm test". */
+  testCommand?: string;
+  /** Path on host to mount as secrets inside the container. */
+  secretsMountPath?: string;
+  /** Timeout in ms for the container. Default 600_000 (10 min). */
+  containerTimeoutMs?: number;
+};
+
 export type RiplineUserConfig = {
   pipelineDir?: string;
   profileDir?: string;
@@ -51,6 +69,8 @@ export type RiplineUserConfig = {
   telegram?: TelegramConfig;
   /** Per-queue configuration (concurrency + resource limits). e.g. { build: { concurrency: 3 } } */
   queues?: Record<string, QueueConfig>;
+  /** Container build configuration. When enabled, scheduler attempts container-based execution. */
+  containerBuild?: ContainerBuildUserConfig;
 };
 
 export type PipelinePluginConfig = {

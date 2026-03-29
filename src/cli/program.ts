@@ -22,6 +22,7 @@ import {
   loadSkillsRegistryFromFile,
 } from "../agent-runner-config.js";
 import { loadUserConfig, resolvePipelineDir, resolveProfileDir, resolveSkillsDir } from "../config.js";
+import type { ContainerBuildConfig } from "../container-build-runner.js";
 import { loadProfile, listProfiles, mergeInputs, mergeAgents, mergeSkills } from "../profiles.js";
 
 export type RiplineCliOptions = {
@@ -652,6 +653,24 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       if (opts.authToken) console.log(chalk.gray("  auth: Bearer token required"));
       if (agentRunner) console.log(chalk.gray("  agent: LLM runner (standalone)"));
       if (claudeCodeRunner) console.log(chalk.gray("  agent: Claude Code runner (standalone)"));
+
+      // Resolve container build config from user config
+      const serveUserConfig = loadUserConfig(os.homedir());
+      let containerBuild: ContainerBuildConfig | undefined;
+      if (serveUserConfig.containerBuild?.enabled) {
+        const cbUser = serveUserConfig.containerBuild;
+        const repoPath = cbUser.repoPath ?? process.cwd();
+        containerBuild = {
+          repoPath,
+          ...(cbUser.targetBranch !== undefined && { targetBranch: cbUser.targetBranch }),
+          ...(cbUser.buildImage !== undefined && { buildImage: cbUser.buildImage }),
+          ...(cbUser.testCommand !== undefined && { testCommand: cbUser.testCommand }),
+          ...(cbUser.secretsMountPath !== undefined && { secretsMountPath: cbUser.secretsMountPath }),
+          ...(cbUser.containerTimeoutMs !== undefined && { containerTimeoutMs: cbUser.containerTimeoutMs }),
+        };
+        console.log(chalk.gray(`  containerBuild: enabled (repo=${repoPath}, target=${cbUser.targetBranch ?? "main"})`));
+      }
+
       const { close } = await startServer({
         pipelinesDir,
         runsDir,
@@ -661,6 +680,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         ...(opts.authToken && { authToken: opts.authToken }),
         ...(agentRunner && { agentRunner }),
         ...(claudeCodeRunner && { claudeCodeRunner }),
+        ...(containerBuild !== undefined && { containerBuild }),
       });
       process.on("SIGINT", () => close().then(() => process.exit(0)));
       process.on("SIGTERM", () => close().then(() => process.exit(0)));
