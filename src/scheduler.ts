@@ -12,7 +12,11 @@ import { runContainerBuild, type ContainerBuildConfig } from "./container-build-
 export type SchedulerConfig = {
   store: RunStore;
   queue: RunQueue;
-  registry: { get(id: string): Promise<PipelineRegistryEntry | null> };
+  registry: {
+    get(id: string): Promise<PipelineRegistryEntry | null>;
+    /** Optional: list all pipeline definitions (used for queue auto-discovery). */
+    list?(): Promise<import("./types.js").PipelineDefinition[]>;
+  };
   maxConcurrency: number;
   /** Per-queue concurrency overrides. Key = queue name, value = concurrency limit. */
   queueConcurrencies?: Record<string, number>;
@@ -495,11 +499,34 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
         }
       }
 
-      for (const [queueName, concurrency] of effectiveConcurrencies) {
-        console.log(`[scheduler] queue "${queueName}": ${concurrency} worker(s)`);
-        for (let i = 0; i < concurrency; i++) {
-          workers.push(worker(queueName));
+      // Auto-discover named queues from the pipeline registry. Pipelines may
+      // declare `queue: "build"` etc. — ensure each referenced queue has at
+      // least one worker (default concurrency 1) even if not explicitly
+      // configured, so jobs are never orphaned.
+      const startWorkers = () => {
+        for (const [queueName, concurrency] of effectiveConcurrencies) {
+          console.log(`[scheduler] queue "${queueName}": ${concurrency} worker(s)`);
+          for (let i = 0; i < concurrency; i++) {
+            workers.push(worker(queueName));
+          }
         }
+      };
+
+      if (typeof registry.list === "function") {
+        registry.list().then((pipelines) => {
+          for (const def of pipelines) {
+            if (def.queue && !effectiveConcurrencies.has(def.queue)) {
+              effectiveConcurrencies.set(def.queue, 1);
+              console.log(`[scheduler] auto-discovered queue "${def.queue}" from pipeline "${def.id}" (concurrency: 1)`);
+            }
+          }
+          startWorkers();
+        }).catch(() => {
+          // If listing fails, just start with the configured queues
+          startWorkers();
+        });
+      } else {
+        startWorkers();
       }
     },
 
