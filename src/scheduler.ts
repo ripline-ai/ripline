@@ -222,6 +222,9 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
             },
           );
 
+          // Use the authoritative status mapping
+          const mapping = mapContainerBuildToRunStatus(buildResult);
+
           if (buildResult.usedContainer) {
             containerHandled = true;
 
@@ -246,99 +249,53 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
               await store.save(metaLoaded);
             }
 
-            if (buildResult.error) {
-              // Container execution failed — mark the run as errored
-              const errMsg = buildResult.error;
-              const loaded = await store.load(record.id);
-              if (loaded) {
-                // Preserve container metadata across the failRun call
-                if (buildResult.containerResult?.logFile) {
-                  loaded.containerLogFile = buildResult.containerResult.logFile;
-                }
-                if (buildResult.featureBranch) {
-                  loaded.featureBranch = buildResult.featureBranch;
-                }
-                await store.failRun(loaded, errMsg);
+            // Apply the mapped status to the run record
+            const loaded = await store.load(record.id);
+            if (loaded) {
+              // Preserve container metadata
+              if (buildResult.containerResult?.logFile) {
+                loaded.containerLogFile = buildResult.containerResult.logFile;
               }
+              if (buildResult.featureBranch) {
+                loaded.featureBranch = buildResult.featureBranch;
+              }
+
+              if (mapping.status === "completed") {
+                await store.completeRun(loaded, {
+                  containerExitCode: buildResult.containerResult?.exitCode,
+                  promoteStatus: buildResult.promoteResult?.status,
+                  mergeCommit: buildResult.promoteResult?.mergeCommit,
+                  featureBranch: buildResult.featureBranch,
+                });
+              } else if (mapping.status === "merge-conflict") {
+                loaded.status = "merge-conflict";
+                loaded.error = mapping.error ?? mapping.summary;
+                loaded.updatedAt = Date.now();
+                await store.save(loaded);
+              } else if (mapping.status === "errored") {
+                await store.failRun(loaded, mapping.error ?? mapping.summary);
+              }
+            }
+
+            // Emit appropriate completion/failure event
+            if (mapping.status === "completed") {
+              bus.emitRunEvent({
+                event: "run.container-completed",
+                runId: record.id,
+                pipelineId: record.pipelineId,
+                status: "completed",
+                timestamp: Date.now(),
+              });
+            } else {
               bus.emitRunEvent({
                 event: "run.container-failed",
                 runId: record.id,
                 pipelineId: record.pipelineId,
-                status: "errored",
+                status: mapping.status ?? "errored",
                 timestamp: Date.now(),
               });
               activeWorkersPerQueue.set(queueName, Math.max(0, (activeWorkersPerQueue.get(queueName) ?? 1) - 1));
               continue;
-            }
-            // Container succeeded — check promote result
-            if (buildResult.promoteResult) {
-              const ps = buildResult.promoteResult;
-              if (ps.status === "merged") {
-                // Mark run as completed
-                const loaded = await store.load(record.id);
-                if (loaded) {
-                  if (buildResult.containerResult?.logFile) {
-                    loaded.containerLogFile = buildResult.containerResult.logFile;
-                  }
-                  if (buildResult.featureBranch) {
-                    loaded.featureBranch = buildResult.featureBranch;
-                  }
-                  await store.completeRun(loaded, {
-                    containerExitCode: buildResult.containerResult?.exitCode,
-                    promoteStatus: ps.status,
-                    mergeCommit: ps.mergeCommit,
-                    featureBranch: buildResult.featureBranch,
-                  });
-                }
-                bus.emitRunEvent({
-                  event: "run.container-completed",
-                  runId: record.id,
-                  pipelineId: record.pipelineId,
-                  status: "completed",
-                  timestamp: Date.now(),
-                });
-              } else if (ps.status === "merge-conflict") {
-                // Mark as merge-conflict status
-                const loaded = await store.load(record.id);
-                if (loaded) {
-                  loaded.status = "merge-conflict";
-                  loaded.error = ps.message;
-                  loaded.updatedAt = Date.now();
-                  if (buildResult.containerResult?.logFile) {
-                    loaded.containerLogFile = buildResult.containerResult.logFile;
-                  }
-                  if (buildResult.featureBranch) {
-                    loaded.featureBranch = buildResult.featureBranch;
-                  }
-                  await store.save(loaded);
-                }
-                bus.emitRunEvent({
-                  event: "run.container-failed",
-                  runId: record.id,
-                  pipelineId: record.pipelineId,
-                  status: "merge-conflict",
-                  timestamp: Date.now(),
-                });
-              } else {
-                // test-failure or error from promote
-                const loaded = await store.load(record.id);
-                if (loaded) {
-                  if (buildResult.containerResult?.logFile) {
-                    loaded.containerLogFile = buildResult.containerResult.logFile;
-                  }
-                  if (buildResult.featureBranch) {
-                    loaded.featureBranch = buildResult.featureBranch;
-                  }
-                  await store.failRun(loaded, ps.message);
-                }
-                bus.emitRunEvent({
-                  event: "run.container-failed",
-                  runId: record.id,
-                  pipelineId: record.pipelineId,
-                  status: "errored",
-                  timestamp: Date.now(),
-                });
-              }
             }
           } else {
             // Docker wasn't available — emit fallback event and fall through to direct execution
