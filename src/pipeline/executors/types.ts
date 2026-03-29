@@ -11,6 +11,8 @@ export type NodeResult = {
   value: unknown;
   /** Set by enqueue node: child run IDs so runner can pause parent until they complete. */
   childRunIds?: string[];
+  /** When true, the runner should re-execute this same node after resuming (used for multi-wave parallel loops). */
+  rerunOnResume?: boolean;
 };
 
 /** Context passed to every node executor. */

@@ -4,6 +4,8 @@ import type { ExecutorContext, NodeResult } from "./types.js";
 import type { AgentRunner } from "./agent.js";
 import { executeAgent } from "./agent.js";
 import { executeTransform } from "./transform.js";
+import { computeDependencyWaves } from "../../lib/dependency-waves.js";
+import type { Story } from "../../lib/dependency-waves.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
@@ -14,6 +16,28 @@ type LoopOptions = {
   skillsRegistry?: SkillsRegistry;
   skillsDir?: string;
 };
+
+/**
+ * Internal state for a parallel loop, stored in context.artifacts under a
+ * private key so it survives pause/resume cycles.
+ */
+type ParallelLoopState = {
+  /** Pre-computed dependency waves (each wave is an array of original collection indices). */
+  waves: number[][];
+  /** Index of the next wave to dispatch. */
+  nextWaveIndex: number;
+  /** Accumulated iteration results (in dependency order). */
+  iterationResults: unknown[];
+  /** Child run IDs from the most recently dispatched wave (for result collection on resume). */
+  lastWaveChildRunIds: string[];
+  /** Map from child runId → original collection index, for the last dispatched wave. */
+  childRunIdToIndex: Record<string, number>;
+};
+
+/** Artifact key used to persist parallel-loop state across pause/resume cycles. */
+function parallelStateKey(nodeId: string): string {
+  return `__parallel_loop_state_${nodeId}`;
+}
 
 /**
  * Execute a single body node inside a loop iteration.
@@ -46,9 +70,197 @@ async function executeBodyNode(
 }
 
 /**
+ * Convert collection items to Story objects for computeDependencyWaves.
+ * Each item must have an `id` field. Dependencies are read from the
+ * field specified by `dependsOnField` (default: "dependsOn").
+ */
+function collectionToStories(
+  collection: unknown[],
+  dependsOnField: string,
+): Story[] {
+  return collection.map((item, index) => {
+    const obj = item as Record<string, unknown>;
+    const id = typeof obj.id === "string" ? obj.id : String(index);
+    const deps = Array.isArray(obj[dependsOnField]) ? (obj[dependsOnField] as string[]) : undefined;
+    return { id, dependsOn: deps, order: index };
+  });
+}
+
+/**
+ * Build a map from story ID back to collection index.
+ */
+function storyIdToIndex(collection: unknown[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (let i = 0; i < collection.length; i++) {
+    const obj = collection[i] as Record<string, unknown>;
+    const id = typeof obj.id === "string" ? obj.id : String(i);
+    map.set(id, i);
+  }
+  return map;
+}
+
+/**
+ * Execute a parallel loop: dispatch items in dependency waves via the queue,
+ * pausing after each wave until all children complete.
+ */
+async function executeParallelLoop(
+  node: LoopNode,
+  context: ExecutorContext,
+  collection: unknown[],
+): Promise<NodeResult> {
+  const { runId, queue, store } = context;
+  if (!runId || !queue || !store) {
+    throw new Error(
+      `Loop node "${node.id}" with mode: 'parallel' requires runId, queue, and store in executor context`,
+    );
+  }
+
+  if (!node.body.pipelineId) {
+    throw new Error(
+      `Loop node "${node.id}" with mode: 'parallel' requires body.pipelineId (child pipeline to run per item)`,
+    );
+  }
+
+  const stateKey = parallelStateKey(node.id);
+  const itemVar = node.itemVar ?? "item";
+  const dependsOnField = node.dependsOnField ?? "dependsOn";
+
+  // ── Check for existing parallel state (resume path) ────────────
+  let state = context.artifacts[stateKey] as ParallelLoopState | undefined;
+
+  if (state && state.nextWaveIndex > 0) {
+    // Resuming after a wave completed — collect child results.
+    const results = await collectWaveResults(
+      store,
+      state.lastWaveChildRunIds,
+      state.childRunIdToIndex,
+    );
+    // Place results in dependency order into iterationResults.
+    for (const { index, result } of results) {
+      state.iterationResults[index] = result;
+    }
+  }
+
+  // ── First invocation: compute waves ────────────────────────────
+  if (!state) {
+    const stories = collectionToStories(collection, dependsOnField);
+    const idToIdx = storyIdToIndex(collection);
+    const storyWaves = computeDependencyWaves(stories, {
+      maxPerWave: node.maxConcurrency,
+    });
+    // Convert story waves to index waves.
+    const waves = storyWaves.map((wave) =>
+      wave.map((s) => idToIdx.get(s.id)!),
+    );
+
+    state = {
+      waves,
+      nextWaveIndex: 0,
+      iterationResults: new Array(collection.length).fill(null),
+      lastWaveChildRunIds: [],
+      childRunIdToIndex: {},
+    };
+  }
+
+  // ── Dispatch next wave ─────────────────────────────────────────
+  if (state.nextWaveIndex < state.waves.length) {
+    const waveIndices = state.waves[state.nextWaveIndex]!;
+    const childRunIds: string[] = [];
+    const childRunIdToIndex: Record<string, number> = {};
+
+    for (const idx of waveIndices) {
+      const item = collection[idx];
+      const childRunId = await queue.enqueue(
+        node.body.pipelineId!,
+        {
+          ...context.inputs,
+          [itemVar]: item,
+          __loop: {
+            index: idx,
+            item,
+            parentNodeId: node.id,
+          },
+        },
+        { parentRunId: runId, taskId: String(idx), queueMode: "per-item" },
+      );
+      const id = Array.isArray(childRunId) ? childRunId[0]! : childRunId;
+      childRunIds.push(id);
+      childRunIdToIndex[id] = idx;
+    }
+
+    state.lastWaveChildRunIds = childRunIds;
+    state.childRunIdToIndex = childRunIdToIndex;
+    state.nextWaveIndex++;
+
+    // Persist state so it survives the pause/resume cycle.
+    context.artifacts[stateKey] = state;
+
+    const isLastWave = state.nextWaveIndex >= state.waves.length;
+
+    // Return childRunIds to trigger runner pause.
+    // If more waves remain, set rerunOnResume so the runner re-executes this node.
+    return {
+      artifactKey: node.id,
+      value: state.iterationResults,
+      childRunIds,
+      ...(!isLastWave && { rerunOnResume: true }),
+    };
+  }
+
+  // ── All waves complete — finalize ──────────────────────────────
+  // Expose loop context one final time for downstream consumption.
+  context.artifacts["loop"] = {
+    [itemVar]: null,
+    index: collection.length,
+    results: state.iterationResults,
+  };
+
+  // Clean up internal state.
+  delete context.artifacts[stateKey];
+  delete context.artifacts["loop"];
+
+  const value = state.iterationResults;
+  context.artifacts[node.id] = value;
+  return { artifactKey: node.id, value };
+}
+
+/**
+ * Collect results from completed child runs for a wave.
+ */
+async function collectWaveResults(
+  store: import("../../run-store.js").RunStore,
+  childRunIds: string[],
+  childRunIdToIndex: Record<string, number>,
+): Promise<Array<{ index: number; result: unknown }>> {
+  const results: Array<{ index: number; result: unknown }> = [];
+  for (const childId of childRunIds) {
+    const record = await store.load(childId);
+    const index = childRunIdToIndex[childId]!;
+    if (record?.status === "completed" && record.outputs) {
+      // Use the full outputs object as the iteration result.
+      results.push({ index, result: record.outputs });
+    } else {
+      results.push({
+        index,
+        result: {
+          __error: true,
+          status: record?.status ?? "unknown",
+          error: record?.error ?? "Child run not found or not completed",
+        },
+      });
+    }
+  }
+  return results;
+}
+
+/**
  * Loop node executor: iterates over a collection artifact, running body nodes
  * for each item. The current item is exposed as `loop.{itemVar}` (default: `loop.item`)
  * in the interpolation context (via context.artifacts.loop).
+ *
+ * When mode is 'parallel', items are grouped into dependency waves using
+ * computeDependencyWaves and dispatched as concurrent child runs per wave,
+ * pausing between waves.
  */
 export async function executeLoop(
   node: LoopNode,
@@ -73,6 +285,12 @@ export async function executeLoop(
     );
   }
 
+  // ── Parallel mode: dependency-wave execution via child runs ────
+  if (node.mode === "parallel") {
+    return executeParallelLoop(node, context, collection);
+  }
+
+  // ── Sequential mode (default): inline body execution ───────────
   const maxIterations = node.maxIterations ?? collection.length;
   const itemVar = node.itemVar ?? "item";
   const indexVar = node.indexVar;
