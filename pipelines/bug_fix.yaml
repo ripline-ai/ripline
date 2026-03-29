@@ -2,6 +2,7 @@ id: bug_fix
 name: Bug Fix Pipeline (Fetch → Triage → Fix → Verify → Stage → Promote)
 queue: build
 entry: [intake]
+container: {}
 retry:
   maxAttempts: 2
   backoffMs: 30000

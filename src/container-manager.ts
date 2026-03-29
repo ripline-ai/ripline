@@ -186,7 +186,7 @@ export class ContainerManager {
     name?: string;
     resourceLimits?: { cpus?: string; memory?: string };
   }): string[] {
-    const args: string[] = ["run", "--detach"];
+    const args: string[] = ["run", "--detach", "--network", "host"];
 
     if (opts.name) {
       args.push("--name", opts.name);
