@@ -2,6 +2,7 @@ import type { PipelineNode } from "../../types.js";
 import type { RunStore } from "../../run-store.js";
 import type { RunQueue } from "../../run-queue.js";
 import type { Logger } from "../../log.js";
+import type { RunContainerPool } from "../../run-container-pool.js";
 
 /** Result of executing a single node. Used for telemetry (artifact id + size). */
 export type NodeResult = {
@@ -34,6 +35,16 @@ export type ExecutorContext = {
   sessionId?: string;
   /** Run-scoped logger (child with runId/nodeId). When set, agent runners can use it for run log capture. */
   log?: Logger;
+  /**
+   * Run-level container pool.  When set and the pipeline (or node) has a container config,
+   * executors route execution through the pool's persistent container instead of running locally.
+   */
+  containerPool?: RunContainerPool;
+  /**
+   * Default build image for container nodes that don't specify one.
+   * Comes from containerBuild.buildImage in user config.
+   */
+  defaultContainerImage?: string;
 };
 
 export type NodeExecutor = (

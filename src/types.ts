@@ -132,6 +132,35 @@ export type ExternalAgentDefinition = {
 
 export type AgentDefinition = ClaudeCodeAgentDefinition | ExternalAgentDefinition;
 
+/**
+ * Container configuration for node-level or run-level container execution.
+ *
+ * `"isolated"` is shorthand for a fresh container per-node using the default build image.
+ * An object form allows full control over image, env, volumes, and resource limits.
+ *
+ * Run-level: set `container` on `PipelineDefinition` — a single container is started at
+ * run begin and shared across all nodes that opt in, allowing file/artifact hand-off.
+ *
+ * Node-level: set `container: "isolated"` on an individual node — that node gets its own
+ * fresh container, independent of any run-level container.
+ */
+export type NodeContainerConfig =
+  | "isolated"
+  | {
+      /** Docker image to use. Defaults to the build image configured in containerBuild. */
+      image?: string;
+      /** Extra environment variables to inject (merged with run env). */
+      env?: Record<string, string>;
+      /** Volume mounts as host:container pairs. */
+      volumes?: Record<string, string>;
+      /** Working directory inside the container. Default "/workspace". */
+      workdir?: string;
+      /** Timeout in milliseconds. Default 600_000 (10 min). */
+      timeoutMs?: number;
+      /** Resource limits (CPU, memory). */
+      resourceLimits?: ContainerResourceLimits;
+    };
+
 export type NodeBase = {
   id: string;
   name?: string;
@@ -183,6 +212,13 @@ export type AgentNode = NodeBase & {
   skills?: string[];
   /** Node-level explicit MCP server configs (merged on top of agent-definition mcpServers; node wins). */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * Container execution mode for this node.
+   * "isolated" = fresh container per node using the configured build image.
+   * Object form = custom image/env/volumes.
+   * When unset, inherits from run-level container config (if any).
+   */
+  container?: NodeContainerConfig;
 };
 
 export type RunPipelineNode = NodeBase & {
@@ -270,6 +306,13 @@ export type ShellNode = NodeBase & {
   timeoutSeconds?: number;
   /** If true, non-zero exit code throws and fails the pipeline node. Default true. */
   failOnNonZero?: boolean;
+  /**
+   * Container execution mode for this node.
+   * "isolated" = fresh container per node using the configured build image.
+   * Object form = custom image/env/volumes.
+   * When unset, inherits from run-level container config (if any).
+   */
+  container?: NodeContainerConfig;
 };
 
 export type PipelineNode =
@@ -315,6 +358,20 @@ export type PipelineDefinition = {
   queue?: string;
   /** Pipeline-level retry policy for automatic run resumption on failure. */
   retry?: RetryPolicy;
+  /**
+   * Run-level container configuration.
+   *
+   * When set, a single container is started at the beginning of the run and shared across
+   * all nodes that participate in container execution (agent and shell nodes).  This allows
+   * steps to hand off files and artifacts through the shared container filesystem.
+   *
+   * Individual nodes can still override with `container: "isolated"` to get a fresh
+   * container for that specific node.
+   *
+   * Can also be supplied via run inputs as `_container` (object form only) to allow
+   * per-run container overrides without modifying the pipeline YAML.
+   */
+  container?: NodeContainerConfig;
 };
 
 export type PipelineRegistryEntry = {

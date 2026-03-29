@@ -8,6 +8,29 @@ import type {
 
 const jsonSchema = z.record(z.string(), z.any());
 
+/* ── Container node config schema ───────────────────────────────────── */
+
+const containerConfigObjectSchema = z.object({
+  image: z.string().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  volumes: z.record(z.string(), z.string()).optional(),
+  workdir: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+  resourceLimits: z.object({
+    cpus: z.string().optional(),
+    memory: z.string().optional(),
+  }).optional(),
+}).strict();
+
+/**
+ * NodeContainerConfig: "isolated" | ContainerConfigObject
+ * "isolated" means a fresh container per node (shorthand).
+ */
+export const nodeContainerConfigSchema = z.union([
+  z.literal("isolated"),
+  containerConfigObjectSchema,
+]);
+
 const baseNode = z.object({
   id: z.string().min(1),
   name: z.string().optional(),
@@ -92,6 +115,8 @@ const agentNode = baseNode.extend({
   skills: z.array(z.string()).optional(),
   /** Node-level explicit MCP server configs (merged on top of agent-definition mcpServers; node wins). */
   mcpServers: z.record(z.string(), mcpServerConfigSchema).optional(),
+  /** Container execution mode for this node. "isolated" = fresh container; object = custom config. */
+  container: nodeContainerConfigSchema.optional(),
 });
 
 const runPipelineNode = baseNode.extend({
@@ -181,6 +206,8 @@ const shellNode = baseNode.extend({
   assigns: z.string().optional(),
   timeoutSeconds: z.number().int().positive().optional(),
   failOnNonZero: z.boolean().optional(),
+  /** Container execution mode for this node. "isolated" = fresh container; object = custom config. */
+  container: nodeContainerConfigSchema.optional(),
 });
 
 const nodeSchema = z.lazy(() =>
@@ -276,6 +303,8 @@ export const pipelineDefinitionSchema = z
     queue: z.string().optional(),
     metadata: z.record(z.string(), z.any()).optional(),
     retry: retryPolicySchema.optional(),
+    /** Run-level container config — shared container for all nodes in this pipeline run. */
+    container: nodeContainerConfigSchema.optional(),
   })
   .superRefine((value, ctx) => {
     const nodeIds = new Set<string>();

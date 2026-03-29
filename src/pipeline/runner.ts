@@ -25,6 +25,11 @@ import type { ActivityEvent } from "../types/activity.js";
 import { evaluateExpression } from "../expression.js";
 import { HttpResponseError, computeBackoffMs } from "../lib/http-response-guard.js";
 import { classifyError } from "./error-classifier.js";
+import type { RunContainerPool } from "../run-container-pool.js";
+import {
+  normalizeContainerConfig,
+  DEFAULT_BUILD_IMAGE,
+} from "../run-container-pool.js";
 
 export type RunContext = {
   inputs: Record<string, unknown>;
@@ -65,6 +70,16 @@ export type RunnerOptions = {
   outPath?: string;
   /** Optional run-scoped logger; when set, a child logger (runId/nodeId) is passed to executors for log capture. */
   log?: Logger;
+  /**
+   * Run-level container pool.  When provided and the pipeline definition has a `container`
+   * field, the runner will acquire a persistent container before executing nodes and release
+   * it when the run completes or errors.
+   */
+  containerPool?: RunContainerPool;
+  /**
+   * Default Docker image for container nodes that don't specify one (from containerBuild.buildImage).
+   */
+  defaultContainerImage?: string;
 };
 
 export type NodeStartedEvent = { nodeId: string; nodeType: string; at: number };
@@ -295,11 +310,46 @@ export class DeterministicRunner extends EventEmitter {
     // Flush any buffered activity events from previous runs (fire-and-forget).
     flushActivityBuffer().catch(() => {});
 
+    // --- Run-level container lifecycle ---
+    // When the pipeline definition has a `container` field AND a containerPool is provided,
+    // acquire a persistent container before executing nodes so steps can share the filesystem.
+    // The container is released in a finally block below.
+    if (
+      this.definition.container &&
+      this.runnerOptions.containerPool &&
+      record.id
+    ) {
+      try {
+        const containerDef = this.definition.container;
+        const normalized = normalizeContainerConfig(containerDef, {
+          image: this.runnerOptions.defaultContainerImage ?? DEFAULT_BUILD_IMAGE,
+        });
+        const runsDir = path.resolve(this.runnerOptions.runsDir ?? DEFAULT_RUNS_DIR);
+        const logFile = path.join(runsDir, record.id, "container.log");
+        const acquireOpts: import("../run-container-pool.js").PoolContainerOptions = {
+          image: normalized.image ?? DEFAULT_BUILD_IMAGE,
+          logFile,
+        };
+        if (normalized.env !== undefined) acquireOpts.env = normalized.env;
+        if (normalized.volumes !== undefined) acquireOpts.volumes = normalized.volumes;
+        if (normalized.workdir !== undefined) acquireOpts.workdir = normalized.workdir;
+        if (normalized.resourceLimits !== undefined) acquireOpts.resourceLimits = normalized.resourceLimits;
+        await this.runnerOptions.containerPool.acquire(record.id, acquireOpts);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.runnerOptions.containerPool.release(record.id);
+        await this.store.failRun(record, `Failed to start run-level container: ${msg}`);
+        this.emitBusEvent("run.errored", record);
+        throw err;
+      }
+    }
+
     const steps = record.steps;
     const skippedNodes = new Set<string>();
     /** Nodes activated via on_error edge routing (execute even if only on_error edges point to them). */
     const errorActivatedNodes = new Set<string>();
 
+    try {
     for (let i = startIndex; i < order.length; i++) {
       const nodeId = order[i]!;
       const node = this.nodeById.get(nodeId)!;
@@ -588,6 +638,12 @@ export class DeterministicRunner extends EventEmitter {
     }
 
     return record;
+    } finally {
+      // Release run-level container if one was acquired
+      if (this.definition.container && this.runnerOptions.containerPool && record?.id) {
+        this.runnerOptions.containerPool.release(record.id);
+      }
+    }
   }
 
   private getExecutorContext(
@@ -607,6 +663,12 @@ export class DeterministicRunner extends EventEmitter {
         queue: this.runnerOptions.queue,
         ...(this.runnerOptions.log && {
           log: this.runnerOptions.log.child({ runId: record.id, nodeId: node.id }),
+        }),
+        ...(this.runnerOptions.containerPool !== undefined && {
+          containerPool: this.runnerOptions.containerPool,
+        }),
+        ...(this.runnerOptions.defaultContainerImage !== undefined && {
+          defaultContainerImage: this.runnerOptions.defaultContainerImage,
         }),
       }),
     };
