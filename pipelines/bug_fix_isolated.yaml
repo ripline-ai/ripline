@@ -292,7 +292,7 @@ nodes:
     command: |
       git fetch origin main
       git checkout fix/{{parse_bug.id}}
-      git rebase origin/main
+      git rebase -X theirs origin/main
       if [ $? -eq 0 ]; then
         echo "REBASE_STATUS=clean"
       else

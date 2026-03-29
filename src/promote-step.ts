@@ -67,14 +67,26 @@ async function rebaseAndMerge(repoPath: string, featureBranch: string, targetBra
     const output = rebaseResult.output.toLowerCase();
     const isConflict = output.includes("conflict") || output.includes("could not apply") || output.includes("merge conflict");
     if (isConflict) {
-      const conflictListResult = await git("diff --name-only --diff-filter=U");
-      const conflictedPaths = conflictListResult.output.split("\n").map((p: string) => p.trim()).filter(Boolean);
-      const conflictedFiles: ConflictedFile[] = [];
-      for (const filePath of conflictedPaths) {
-        try { conflictedFiles.push({ path: filePath, content: readFileSync(join(repoPath, filePath), "utf-8") }); }
-        catch { conflictedFiles.push({ path: filePath, content: "" }); }
+      // First attempt: abort the failed plain rebase, then retry with -X theirs (prefer feature branch on conflict)
+      console.log(`[promote-step] Rebase conflict on '${featureBranch}' — retrying with -X theirs (auto-resolution)`);
+      await git("rebase --abort");
+      await git(`checkout ${featureBranch}`);
+      const xTheirsResult = await git(`rebase -X theirs ${targetBranch}`);
+      if (xTheirsResult.exitCode === 0) {
+        // Auto-resolution succeeded — fall through to FF merge below
+        console.log(`[promote-step] Auto-resolution succeeded for '${featureBranch}' using -X theirs`);
+      } else {
+        // -X theirs also failed — collect conflicted files and leave rebase in-progress for manual resolution
+        console.log(`[promote-step] Auto-resolution failed for '${featureBranch}' — leaving rebase in-progress for manual review`);
+        const conflictListResult = await git("diff --name-only --diff-filter=U");
+        const conflictedPaths = conflictListResult.output.split("\n").map((p: string) => p.trim()).filter(Boolean);
+        const conflictedFiles: ConflictedFile[] = [];
+        for (const filePath of conflictedPaths) {
+          try { conflictedFiles.push({ path: filePath, content: readFileSync(join(repoPath, filePath), "utf-8") }); }
+          catch { conflictedFiles.push({ path: filePath, content: "" }); }
+        }
+        return { success: false, conflict: true, output: xTheirsResult.output, conflictedFiles };
       }
-      return { success: false, conflict: true, output: rebaseResult.output, conflictedFiles };
     } else {
       await git("rebase --abort");
       await git(`checkout ${targetBranch}`);

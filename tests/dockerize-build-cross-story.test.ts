@@ -434,7 +434,7 @@ describe("Cross-story: PromoteStep ordering guarantee (Story 3 + real git)", () 
     expect(branches).not.toContain("build/delete-on-merge");
   });
 
-  it("needs-conflict-resolution preserves feature branch for manual resolution", async () => {
+  it("conflicting changes are auto-resolved via -X theirs, keeping feature branch value", async () => {
     const { work } = repo;
 
     // Set up conflicting changes
@@ -465,11 +465,13 @@ describe("Cross-story: PromoteStep ordering guarantee (Story 3 + real git)", () 
       gitTimeoutMs: 10_000,
     });
 
-    expect(result.status).toBe("needs-conflict-resolution");
+    // -X theirs auto-resolves: feature branch wins, result is merged
+    expect(result.status).toBe("merged");
+    expect(result.message).toContain("Successfully merged");
 
-    // Branch MUST still exist for manual resolution
-    const branches = git(work, "branch");
-    expect(branches).toContain("build/preserve-branch");
+    // Feature branch value ('branch') should be in the file
+    const content = fs.readFileSync(path.join(work, "conflict.ts"), "utf-8");
+    expect(content).toContain("'branch'");
   });
 
   it("test output is truncated to 4000 chars", async () => {

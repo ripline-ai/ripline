@@ -375,7 +375,7 @@ nodes:
     command: |
       git fetch origin main
       git checkout feat/{{idea_id}}
-      git rebase origin/main
+      git rebase -X theirs origin/main
       if [ $? -eq 0 ]; then
         echo "REBASE_STATUS=clean"
       else

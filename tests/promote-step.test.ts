@@ -7,6 +7,19 @@ const { spawnMockFn } = vi.hoisted(() => ({ spawnMockFn: vi.fn() }));
 
 vi.mock("node:child_process", () => ({ spawn: spawnMockFn }));
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    readFileSync: vi.fn((path: unknown) => {
+      if (String(path).includes("conflicted")) {
+        return "<<<<<<< HEAD\nold content\n=======\nnew content\n>>>>>>> feature";
+      }
+      return "";
+    }),
+  };
+});
+
 /* ── Helpers ──────────────────────────────────────────────────────────── */
 
 function mockSpawnForCommands(
@@ -104,14 +117,16 @@ describe("promoteStep", () => {
     expect(result.testOutput).toBeDefined();
   });
 
-  it("returns 'needs-conflict-resolution' when rebase detects conflicts", async () => {
+  it("returns 'needs-conflict-resolution' when both plain rebase and -X theirs detect conflicts", async () => {
     mockSpawnForCommands({
       "fetch origin": { exitCode: 0 },
       "checkout main": { exitCode: 0 },
       "pull origin main": { exitCode: 0 },
       "merge --ff-only": { exitCode: 1 },
       "reset --hard HEAD": { exitCode: 0 },
+      "rebase --abort": { exitCode: 0 },
       "checkout build/run-123": { exitCode: 0 },
+      "rebase -X theirs main": { exitCode: 1, output: "CONFLICT (content): Merge conflict in src/index.ts" },
       "rebase main": { exitCode: 1, output: "CONFLICT (content): Merge conflict in src/index.ts" },
       "diff --name-only --diff-filter=U": { exitCode: 0, output: "src/conflicted.ts\n" },
     });
@@ -122,6 +137,46 @@ describe("promoteStep", () => {
     expect(result.message).toContain("Rebase conflict");
     expect(result.message).toContain("in-progress");
     expect(result.gitOutput).toBeDefined();
+  });
+
+  it("returns 'merged' when -X theirs auto-resolves a rebase conflict", async () => {
+    let ffMergeCallCount = 0;
+    spawnMockFn.mockImplementation((cmd: string, args: string[]) => {
+      const fullCommand = Array.isArray(args) ? args.join(" ") : String(args);
+      let exitCode = 0;
+      let output = "";
+      if (fullCommand.includes("merge --ff-only")) {
+        ffMergeCallCount++;
+        if (ffMergeCallCount === 1) { exitCode = 1; output = "Not possible to fast-forward"; }
+      } else if (fullCommand.includes("rebase main")) {
+        exitCode = 1; output = "CONFLICT (content): Merge conflict in src/index.ts";
+      } else if (fullCommand.includes("rev-parse")) {
+        output = "autoresolvedsha\n";
+      }
+      // "rebase -X theirs main" is NOT a substring match of "rebase main", so it gets exitCode 0 (auto-resolved)
+      const handlers: Record<string, ((...a: any[]) => void)[]> = {};
+      const proc = {
+        on: vi.fn((event: string, handler: any) => {
+          if (!handlers[event]) handlers[event] = [];
+          handlers[event]!.push(handler);
+          if (event === "close") setTimeout(() => handler(exitCode), 5);
+        }),
+        kill: vi.fn((sig?: string) => {
+          const closeHandlers = handlers["close"] ?? [];
+          for (const h of closeHandlers) h(124);
+        }),
+        stdout: { on: vi.fn((event: string, handler: any) => { if (event === "data" && output) handler(Buffer.from(output)); }) },
+        stderr: { on: vi.fn((_e: string, _h: any) => {}) },
+        pid: 1234,
+      };
+      return proc as any;
+    });
+
+    const result = await promoteStep(baseParams);
+
+    expect(result.status).toBe("merged");
+    expect(result.message).toContain("Successfully merged");
+    expect(result.mergeCommit).toBeDefined();
   });
 
   it("returns 'error' when checkout of target branch fails", async () => {
@@ -186,14 +241,16 @@ describe("promoteStep", () => {
     expect(result.mergeCommit).toBeDefined();
   });
 
-  it("preserves feature branch on merge conflict for manual resolution", async () => {
+  it("preserves feature branch on merge conflict when -X theirs also fails", async () => {
     mockSpawnForCommands({
       "fetch origin": { exitCode: 0 },
       "checkout main": { exitCode: 0 },
       "pull origin main": { exitCode: 0 },
       "merge --ff-only": { exitCode: 1 },
       "reset --hard HEAD": { exitCode: 0 },
+      "rebase --abort": { exitCode: 0 },
       "checkout build/run-123": { exitCode: 0 },
+      "rebase -X theirs main": { exitCode: 1, output: "CONFLICT merge conflict in file.ts" },
       "rebase main": { exitCode: 1, output: "CONFLICT merge conflict in file.ts" },
       "diff --name-only --diff-filter=U": { exitCode: 0, output: "src/conflicted.ts\n" },
     });

@@ -204,7 +204,7 @@ describe("E2E: Concurrent overlapping builds — merge conflict detection", () =
     cleanupTestRepo(repo.work);
   });
 
-  it("first to finish merges, second is flagged as needs-conflict-resolution", async () => {
+  it("first to finish merges, second auto-resolves via -X theirs and also merges", async () => {
     const { work } = repo;
 
     // Create a shared file on main
@@ -240,7 +240,8 @@ describe("E2E: Concurrent overlapping builds — merge conflict detection", () =
     });
     expect(resultA.status).toBe("merged");
 
-    // ── Second build hits merge conflict ──────────────────────────
+    // ── Second build: plain rebase fails but -X theirs auto-resolves ─
+    // -X theirs keeps the feature branch version ('version-b')
     const resultB = await promoteStep({
       repoPath: work,
       featureBranch: "build/overlap-b",
@@ -249,15 +250,15 @@ describe("E2E: Concurrent overlapping builds — merge conflict detection", () =
       testTimeoutMs: 5_000,
       gitTimeoutMs: 10_000,
     });
-    expect(resultB.status).toBe("needs-conflict-resolution");
-    expect(resultB.message).toContain("Rebase conflict");
+    expect(resultB.status).toBe("merged");
+    expect(resultB.message).toContain("Successfully merged");
 
-    // Verify the conflicting branch is preserved for manual resolution
-    const branches = git(work, "branch");
-    expect(branches).toContain("build/overlap-b");
+    // Verify the feature branch content won (version-b)
+    const content = fs.readFileSync(path.join(work, "shared.ts"), "utf-8");
+    expect(content).toContain("version-b");
   });
 
-  it("needs-conflict-resolution result includes git output for debugging", async () => {
+  it("auto-resolves overlapping port changes via -X theirs, keeping feature branch value", async () => {
     const { work } = repo;
 
     // Set up conflicting branches
@@ -280,7 +281,7 @@ describe("E2E: Concurrent overlapping builds — merge conflict detection", () =
     git(work, "push origin build/conflict-2");
     git(work, "checkout main");
 
-    // First merges
+    // First merges cleanly
     await promoteStep({
       repoPath: work,
       featureBranch: "build/conflict-1",
@@ -290,7 +291,7 @@ describe("E2E: Concurrent overlapping builds — merge conflict detection", () =
       gitTimeoutMs: 10_000,
     });
 
-    // Second conflicts
+    // Second auto-resolves via -X theirs (keeps port-5000)
     const result = await promoteStep({
       repoPath: work,
       featureBranch: "build/conflict-2",
@@ -300,10 +301,11 @@ describe("E2E: Concurrent overlapping builds — merge conflict detection", () =
       gitTimeoutMs: 10_000,
     });
 
-    expect(result.status).toBe("needs-conflict-resolution");
-    expect(result.gitOutput).toBeDefined();
-    // Git output should mention the conflicting file
-    expect(result.gitOutput!.toLowerCase()).toContain("conflict");
+    expect(result.status).toBe("merged");
+    expect(result.message).toContain("Successfully merged");
+    // Feature branch value (port-5000) should win
+    const content = fs.readFileSync(path.join(work, "config.ts"), "utf-8");
+    expect(content).toContain("5000");
   });
 });
 
