@@ -4,12 +4,13 @@ import { spawn } from "node:child_process";
  * promoteStep — post-build merge workflow for feature branches.
  *
  * 1. Fetch latest from remote
- * 2. Checkout the target branch
- * 3. Run the project's test suite
- * 4. Attempt fast-forward merge of the feature branch
- * 5. Fall back to rebase if FF not possible
- * 6. Detect and flag merge conflicts
- * 7. Clean up feature branch on success
+ * 2. Checkout the feature branch and run the project's test suite
+ * 3. Abort if tests fail (before any merge is attempted)
+ * 4. Checkout the target branch (up-to-date)
+ * 5. Attempt fast-forward merge of the feature branch
+ * 6. Fall back to rebase if FF not possible
+ * 7. Detect and flag merge conflicts (status 'merge-conflict', branch preserved)
+ * 8. Clean up the feature branch after successful merge
  */
 
 export type PromoteStepParams = {
@@ -44,6 +45,7 @@ export type PromoteStepResult = {
 /**
  * Execute the promote (merge) step for a pipeline run.
  *
+ * Flow: pull feature branch → run tests → merge into target.
  * On merge conflict the feature branch is left intact so the user can resolve manually.
  * On success the feature branch is deleted locally.
  */
@@ -62,30 +64,50 @@ export async function promoteStep(params: PromoteStepParams): Promise<PromoteSte
     runCommand(`git ${args}`, repoPath, timeout);
 
   try {
-    // 1. Fetch latest refs from remote
+    // ── 1. Fetch latest refs from remote ──────────────────────────────
     await git(`fetch ${remote}`);
 
-    // 2. Checkout target branch and ensure it's up to date
-    const checkoutResult = await git(`checkout ${targetBranch}`);
-    if (checkoutResult.exitCode !== 0) {
+    // ── 2. Checkout feature branch ────────────────────────────────────
+    const featureCheckout = await git(`checkout ${featureBranch}`);
+    if (featureCheckout.exitCode !== 0) {
+      return {
+        status: "error",
+        message: `Failed to checkout feature branch '${featureBranch}'`,
+        gitOutput: featureCheckout.output.slice(-2000),
+      };
+    }
+
+    // ── 3. Run project test suite on the feature branch ───────────────
+    //    Tests must pass BEFORE we attempt any merge.
+    const testResult = await runCommand(testCommand, repoPath, testTimeoutMs);
+
+    if (testResult.exitCode !== 0) {
+      // Switch back to target so repo is in a clean state
+      await git(`checkout ${targetBranch}`);
+      return {
+        status: "test-failure",
+        message: `Test suite failed on '${featureBranch}'. Merge aborted.`,
+        testOutput: testResult.output.slice(-4000),
+      };
+    }
+
+    // ── 4. Checkout target branch and ensure it's up to date ──────────
+    const targetCheckout = await git(`checkout ${targetBranch}`);
+    if (targetCheckout.exitCode !== 0) {
       return {
         status: "error",
         message: `Failed to checkout target branch '${targetBranch}'`,
-        gitOutput: checkoutResult.output.slice(-2000),
+        gitOutput: targetCheckout.output.slice(-2000),
       };
     }
 
     await git(`pull ${remote} ${targetBranch}`);
 
-    // 3. Merge feature branch into target (in-memory first) to check for conflicts
-    //    before running tests — but we want tests to run against the merged state.
-    //    Strategy: merge first, run tests on merged result, abort if tests fail.
-
-    // 3a. Attempt fast-forward merge
+    // ── 5. Attempt fast-forward merge ─────────────────────────────────
     const ffResult = await git(`merge --ff-only ${featureBranch}`);
 
     if (ffResult.exitCode !== 0) {
-      // 3b. FF not possible — try rebase of feature onto target, then merge
+      // ── 6. FF not possible — try rebase of feature onto target, then FF merge
       const rebaseResult = await rebaseAndMerge(
         repoPath,
         featureBranch,
@@ -94,6 +116,7 @@ export async function promoteStep(params: PromoteStepParams): Promise<PromoteSte
       );
 
       if (rebaseResult.conflict) {
+        // ── 7. Merge conflict — flag and preserve branch ──────────────
         return {
           status: "merge-conflict",
           message: `Merge conflict detected when merging '${featureBranch}' into '${targetBranch}'. Branch preserved for manual resolution.`,
@@ -110,24 +133,11 @@ export async function promoteStep(params: PromoteStepParams): Promise<PromoteSte
       }
     }
 
-    // 4. Run the project test suite against the merged state
-    const testResult = await runCommand(testCommand, repoPath, testTimeoutMs);
-
-    if (testResult.exitCode !== 0) {
-      // Tests failed — undo the merge so target branch is clean
-      await git(`reset --hard ${remote}/${targetBranch}`);
-      return {
-        status: "test-failure",
-        message: `Test suite failed after merging '${featureBranch}'. Merge reverted.`,
-        testOutput: testResult.output.slice(-4000),
-      };
-    }
-
-    // 5. Get the merge commit SHA
+    // ── 8. Get the merge/HEAD commit SHA ──────────────────────────────
     const headResult = await git("rev-parse HEAD");
     const mergeCommit = headResult.output.trim();
 
-    // 6. Clean up — delete the feature branch locally
+    // ── 9. Clean up — delete the feature branch locally ───────────────
     await git(`branch -d ${featureBranch}`);
 
     return {
@@ -188,7 +198,7 @@ async function rebaseAndMerge(
     // Abort the in-progress rebase
     await git("rebase --abort");
 
-    // Return to target branch
+    // Return to target branch — leave feature branch intact for manual resolution
     await git(`checkout ${targetBranch}`);
 
     return { success: false, conflict: isConflict, output: rebaseResult.output };
