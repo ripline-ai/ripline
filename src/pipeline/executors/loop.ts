@@ -151,9 +151,18 @@ async function executeParallelLoop(
   if (!state) {
     const stories = collectionToStories(collection, dependsOnField);
     const idToIdx = storyIdToIndex(collection);
-    const storyWaves = computeDependencyWaves(stories, {
-      maxPerWave: node.maxConcurrency,
-    });
+
+    // Resolve maxConcurrency: support numeric values and input references.
+    // Falls back to maxParallelStories from inputs (default 3) when not set on the node.
+    let resolvedMaxConcurrency = node.maxConcurrency;
+    if (resolvedMaxConcurrency === undefined) {
+      const fromInputs = (context.inputs as Record<string, unknown>)?.maxParallelStories;
+      resolvedMaxConcurrency = fromInputs !== undefined ? (Number(fromInputs) || 3) : 3;
+    }
+
+    const storyWaves = computeDependencyWaves(stories,
+      resolvedMaxConcurrency !== undefined ? { maxPerWave: resolvedMaxConcurrency } : {},
+    );
     // Convert story waves to index waves.
     const waves = storyWaves.map((wave) =>
       wave.map((s) => idToIdx.get(s.id)!),

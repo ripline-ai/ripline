@@ -1,0 +1,52 @@
+# Implement Story
+# Child pipeline invoked by build_from_plan's parallel story_loop.
+# Receives all parent inputs plus the current story item as `story`.
+
+id: implement_story
+name: Implement Story
+entry: [task_in]
+
+nodes:
+  - id: task_in
+    type: input
+
+  - id: implement
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 900
+    prompt: |
+      You are implementing a development story as part of a larger feature build.
+
+      ## Context
+      Idea: {{idea_title}}
+      Idea ID: {{idea_id}}
+
+      ## Story to Implement
+      ID: {{story.id}}
+      Title: {{story.title}}
+      Description: {{story.description}}
+      Acceptance Criteria:
+      {{(story.acceptanceCriteria || []).map(function(c){return '- '+c}).join('\n')}}
+
+      ## Full Implementation Spec
+      {{idea_mvp_scope}}
+
+      ## Instructions
+      1. Determine the project directory from the idea's projectId (~/wintermute or ~/ripline).
+      2. Ensure you are on the main branch (or master for Wintermute):
+         git -C <project-dir> checkout main 2>/dev/null || git -C <project-dir> checkout master
+      3. Implement the story described above. Make focused, clean changes.
+      4. Do NOT write tests — that happens in a dedicated write_tests step after all stories are done.
+      5. Commit your work directly to that branch with message: "{{story.id}}: {{story.title}}"
+      6. Output a brief summary of what was implemented (1-3 sentences).
+
+  - id: result
+    type: output
+    source: implement
+
+edges:
+  - { from: { node: task_in },   to: { node: implement } }
+  - { from: { node: implement }, to: { node: result } }
