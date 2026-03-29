@@ -41,7 +41,7 @@ export async function executeShell(
     exitCode,
     passed: exitCode === 0,
     output: failingOutput || output.slice(-3000), // fall back to last 3KB if no failures found
-    rawOutput: output.slice(-5000),
+    rawOutput: output.slice(-200000), // up to 200KB for data-fetching use cases
   };
 
   if (failOnNonZero && exitCode !== 0) {
