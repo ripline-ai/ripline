@@ -200,6 +200,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
 
         // --- Container-based execution attempt ---
         // Only attempt for top-level runs (no parentRunId) with no existing cursor (fresh runs).
+        const bus = EventBus.getInstance();
         let containerHandled = false;
         if (containerBuild && !record.parentRunId && record.cursor === undefined) {
           // Merge per-queue resource limits into container build config
@@ -217,11 +218,49 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
 
           if (buildResult.usedContainer) {
             containerHandled = true;
+
+            // Emit container-started event
+            bus.emitRunEvent({
+              event: "run.container-started",
+              runId: record.id,
+              pipelineId: record.pipelineId,
+              status: "running",
+              timestamp: Date.now(),
+            });
+
+            // Persist container metadata on the run record
+            const metaLoaded = await store.load(record.id);
+            if (metaLoaded) {
+              if (buildResult.containerResult?.logFile) {
+                metaLoaded.containerLogFile = buildResult.containerResult.logFile;
+              }
+              if (buildResult.featureBranch) {
+                metaLoaded.featureBranch = buildResult.featureBranch;
+              }
+              await store.save(metaLoaded);
+            }
+
             if (buildResult.error) {
               // Container execution failed — mark the run as errored
               const errMsg = buildResult.error;
               const loaded = await store.load(record.id);
-              if (loaded) await store.failRun(loaded, errMsg);
+              if (loaded) {
+                // Preserve container metadata across the failRun call
+                if (buildResult.containerResult?.logFile) {
+                  loaded.containerLogFile = buildResult.containerResult.logFile;
+                }
+                if (buildResult.featureBranch) {
+                  loaded.featureBranch = buildResult.featureBranch;
+                }
+                await store.failRun(loaded, errMsg);
+              }
+              bus.emitRunEvent({
+                event: "run.container-failed",
+                runId: record.id,
+                pipelineId: record.pipelineId,
+                status: "errored",
+                timestamp: Date.now(),
+              });
               activeWorkersPerQueue.set(queueName, Math.max(0, (activeWorkersPerQueue.get(queueName) ?? 1) - 1));
               continue;
             }
@@ -232,6 +271,12 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                 // Mark run as completed
                 const loaded = await store.load(record.id);
                 if (loaded) {
+                  if (buildResult.containerResult?.logFile) {
+                    loaded.containerLogFile = buildResult.containerResult.logFile;
+                  }
+                  if (buildResult.featureBranch) {
+                    loaded.featureBranch = buildResult.featureBranch;
+                  }
                   await store.completeRun(loaded, {
                     containerExitCode: buildResult.containerResult?.exitCode,
                     promoteStatus: ps.status,
@@ -239,6 +284,13 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                     featureBranch: buildResult.featureBranch,
                   });
                 }
+                bus.emitRunEvent({
+                  event: "run.container-completed",
+                  runId: record.id,
+                  pipelineId: record.pipelineId,
+                  status: "completed",
+                  timestamp: Date.now(),
+                });
               } else if (ps.status === "merge-conflict") {
                 // Mark as merge-conflict status
                 const loaded = await store.load(record.id);
@@ -246,16 +298,52 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                   loaded.status = "merge-conflict";
                   loaded.error = ps.message;
                   loaded.updatedAt = Date.now();
+                  if (buildResult.containerResult?.logFile) {
+                    loaded.containerLogFile = buildResult.containerResult.logFile;
+                  }
+                  if (buildResult.featureBranch) {
+                    loaded.featureBranch = buildResult.featureBranch;
+                  }
                   await store.save(loaded);
                 }
+                bus.emitRunEvent({
+                  event: "run.container-failed",
+                  runId: record.id,
+                  pipelineId: record.pipelineId,
+                  status: "merge-conflict",
+                  timestamp: Date.now(),
+                });
               } else {
                 // test-failure or error from promote
                 const loaded = await store.load(record.id);
-                if (loaded) await store.failRun(loaded, ps.message);
+                if (loaded) {
+                  if (buildResult.containerResult?.logFile) {
+                    loaded.containerLogFile = buildResult.containerResult.logFile;
+                  }
+                  if (buildResult.featureBranch) {
+                    loaded.featureBranch = buildResult.featureBranch;
+                  }
+                  await store.failRun(loaded, ps.message);
+                }
+                bus.emitRunEvent({
+                  event: "run.container-failed",
+                  runId: record.id,
+                  pipelineId: record.pipelineId,
+                  status: "errored",
+                  timestamp: Date.now(),
+                });
               }
             }
+          } else {
+            // Docker wasn't available — emit fallback event and fall through to direct execution
+            bus.emitRunEvent({
+              event: "run.container-fallback",
+              runId: record.id,
+              pipelineId: record.pipelineId,
+              status: "running",
+              timestamp: Date.now(),
+            });
           }
-          // If buildResult.usedContainer is false, Docker wasn't available — fall through to direct execution
         }
 
         if (!containerHandled) {

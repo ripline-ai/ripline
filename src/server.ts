@@ -598,7 +598,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           lastUpdated = current.updatedAt;
           send(current);
         }
-        if (current.status === "completed" || current.status === "errored") {
+        if (current.status === "completed" || current.status === "errored" || current.status === "merge-conflict") {
           clearInterval(interval);
           reply.raw.end();
         }
@@ -669,7 +669,9 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         if (!record) {
           return reply.status(404).send({ error: "Not Found", message: `Run ${request.params.runId} not found` });
         }
-        const containerLogPath = path.join(runsDir, request.params.runId, "container.log");
+        // Prefer the containerLogFile field on the record, fall back to conventional path
+        const containerLogPath = record.containerLogFile
+          ?? path.join(runsDir, request.params.runId, "container.log");
         try {
           const content = await fs.readFile(containerLogPath, "utf8");
           return reply.type("text/plain").send(content);
@@ -735,7 +737,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         }
         try {
           const current = await loadRunWithRetry(request.params.runId);
-          if (current?.status === "completed" || current?.status === "errored") {
+          if (current?.status === "completed" || current?.status === "errored" || current?.status === "merge-conflict") {
             clearInterval(interval);
             reply.raw.end();
           }

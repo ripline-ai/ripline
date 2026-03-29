@@ -10,6 +10,10 @@ export type RunEvent = {
     | "run.errored"
     | "run.auto-retry"
     | "run.retry-exhausted"
+    | "run.container-started"
+    | "run.container-completed"
+    | "run.container-failed"
+    | "run.container-fallback"
     | "node.started"
     | "node.completed"
     | "node.errored";

@@ -427,4 +427,8 @@ export type PipelineRunRecord = {
   retryPolicy?: RetryPolicy;
   /** Optional webhook URL to receive push notifications on run completion/error. */
   webhook_url?: string;
+  /** Absolute path to the container log file (set when container-based execution is used). */
+  containerLogFile?: string;
+  /** Feature branch created for container-based builds (e.g. "build/{runId}"). */
+  featureBranch?: string;
 };
