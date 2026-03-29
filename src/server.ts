@@ -100,6 +100,9 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
 
   const webhookDispatcher = new WebhookDispatcher(store);
 
+  /** Track in-flight fire-and-forget background runs so close() can await them. */
+  const backgroundRunPromises = new Set<Promise<void>>();
+
   const fastify = Fastify({ logger: false });
 
   await fastify.register(cors, { origin: true });
@@ -183,12 +186,14 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
             resolve(record.id);
           });
         });
-        runner.run({
+        const runBgP: Promise<void> = runner.run({
           inputs,
           ...(body.env !== undefined && { env: body.env }),
         }).catch((err) => {
           console.error(`[server] pipeline run failed: ${err instanceof Error ? err.message : String(err)}`);
         });
+        backgroundRunPromises.add(runBgP);
+        void runBgP.finally(() => { backgroundRunPromises.delete(runBgP); });
         const runId = await runIdPromise;
         return reply.status(202).send({ runId });
       },
@@ -299,11 +304,15 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     });
   }
 
-  /** Hook close to stop scheduler, webhook dispatcher, and auto-executor */
+  /** Hook close to stop scheduler, webhook dispatcher, auto-executor, and drain background runs */
   fastify.addHook("onClose", async () => {
     autoExecutor.disable();
     if (scheduler) scheduler.stop();
     webhookDispatcher.stop();
+    // Drain any in-flight fire-and-forget background retry/resume runners
+    if (backgroundRunPromises.size > 0) {
+      await Promise.allSettled([...backgroundRunPromises]);
+    }
   });
 
   /** Load run with one retry on JSON parse failure (e.g. read during atomic rename). */
@@ -458,7 +467,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         await store.save(record);
 
         if (!scheduler) {
-          // No scheduler — run inline in background
+          // No scheduler — run inline in background; track promise so close() can drain it
           const resumeLog = createLogger({ sink: createRunScopedFileSink(runsDir) });
           const inlineRunner = new DeterministicRunner(entry.definition, {
             store,
@@ -471,15 +480,14 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
             ...(skillsRegistry !== undefined && { skillsRegistry }),
             skillsDir,
           });
-          if (strategy === "from-start") {
-            inlineRunner.run({ startRunId: runId, inputs: record.inputs }).catch((err) => {
-              console.error(`[server] retry run failed: ${err instanceof Error ? err.message : String(err)}`);
-            });
-          } else {
-            inlineRunner.run({ resumeRunId: runId }).catch((err) => {
-              console.error(`[server] retry run failed: ${err instanceof Error ? err.message : String(err)}`);
-            });
-          }
+          const runP = strategy === "from-start"
+            ? inlineRunner.run({ startRunId: runId, inputs: record.inputs })
+            : inlineRunner.run({ resumeRunId: runId });
+          const bgPromise: Promise<void> = runP.catch((err) => {
+            console.error(`[server] retry run failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+          backgroundRunPromises.add(bgPromise);
+          void bgPromise.finally(() => { backgroundRunPromises.delete(bgPromise); });
         }
 
         return reply.status(202).send({ runId: record.id, fromNode: order[targetIndex], strategy });

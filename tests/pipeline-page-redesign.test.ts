@@ -591,27 +591,33 @@ describe("Pipeline Page Redesign", () => {
 
   describe("GET /events — global SSE event stream", () => {
     it("returns SSE content-type", async () => {
-      const res = await app.inject({ method: "GET", url: "/events" });
+      // Use payloadAsStream so inject resolves as soon as headers are written (SSE never closes)
+      const res = await app.inject({ method: "GET", url: "/events", payloadAsStream: true } as any);
       expect(res.statusCode).toBe(200);
       expect(res.headers["content-type"]).toMatch(/text\/event-stream/);
+      res.stream().destroy();
     });
 
     it("supports pipelineId filter parameter", async () => {
       const res = await app.inject({
         method: "GET",
         url: "/events?pipelineId=ripline-area-owner",
-      });
+        payloadAsStream: true,
+      } as any);
       expect(res.statusCode).toBe(200);
       expect(res.headers["content-type"]).toMatch(/text\/event-stream/);
+      res.stream().destroy();
     });
 
     it("supports status filter parameter", async () => {
       const res = await app.inject({
         method: "GET",
         url: "/events?status=completed",
-      });
+        payloadAsStream: true,
+      } as any);
       expect(res.statusCode).toBe(200);
       expect(res.headers["content-type"]).toMatch(/text\/event-stream/);
+      res.stream().destroy();
     });
   });
 
@@ -817,8 +823,10 @@ describe("Pipeline Page Redesign", () => {
       const metricsRes = await authedApp.inject({ method: "GET", url: "/metrics", headers });
       expect(metricsRes.statusCode).toBe(200);
 
-      const eventsRes = await authedApp.inject({ method: "GET", url: "/events", headers });
+      // SSE endpoint: use payloadAsStream so inject resolves on writeHead
+      const eventsRes = await authedApp.inject({ method: "GET", url: "/events", headers, payloadAsStream: true } as any);
       expect(eventsRes.statusCode).toBe(200);
+      eventsRes.stream().destroy();
     });
   });
 });

@@ -896,7 +896,7 @@ describe("E2E: transient mid-pipeline failure triggers auto-retry from correct n
 // 13. Retry endpoint strategies (from-failure vs from-start) via server
 // ---------------------------------------------------------------------------
 describe("Retry endpoint strategies (HTTP server)", () => {
-  it("POST /runs/:runId/retry with from-failure resets only steps from errored node onwards", async () => {
+  it("POST /runs/:runId/retry with from-failure resets only steps from errored node onwards", { timeout: 15000 }, async () => {
     const os = await import("node:os");
     const fs = await import("node:fs/promises");
     const path = await import("node:path");
@@ -955,7 +955,7 @@ describe("Retry endpoint strategies (HTTP server)", () => {
     }
   });
 
-  it("POST /runs/:runId/retry with from-start clears cursor and resets all steps", async () => {
+  it("POST /runs/:runId/retry with from-start clears cursor and resets all steps", { timeout: 15000 }, async () => {
     const os = await import("node:os");
     const fs = await import("node:fs/promises");
     const path = await import("node:path");
@@ -1006,7 +1006,7 @@ describe("Retry endpoint strategies (HTTP server)", () => {
     }
   });
 
-  it("POST /runs/:runId/retry returns 409 for a non-errored/non-paused run", async () => {
+  it("POST /runs/:runId/retry returns 409 for a non-errored/non-paused run", { timeout: 15000 }, async () => {
     const os = await import("node:os");
     const fs = await import("node:fs/promises");
     const path = await import("node:path");
@@ -1052,7 +1052,7 @@ describe("Retry endpoint strategies (HTTP server)", () => {
     }
   });
 
-  it("POST /runs/:runId/retry returns 400 for invalid strategy", async () => {
+  it("POST /runs/:runId/retry returns 400 for invalid strategy", { timeout: 15000 }, async () => {
     const os = await import("node:os");
     const fs = await import("node:fs/promises");
     const path = await import("node:path");

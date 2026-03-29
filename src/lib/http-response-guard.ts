@@ -95,7 +95,8 @@ export function detectHttpError(text: string): HttpErrorInfo | null {
  */
 function parseRetryAfter(text: string): number | undefined {
   // Header-style: Retry-After: 30
-  const headerMatch = text.match(/retry[_-]after[:\s]+(\d+)/i);
+  // Also handles JSON-style: "retry_after": 15
+  const headerMatch = text.match(/retry[_-]after"?\s*[:\s]+(\d+)/i);
   if (headerMatch) {
     const val = parseInt(headerMatch[1]!, 10);
     if (val > 0 && val < 3600) return val;

@@ -21,7 +21,7 @@ function makePipeline(loopNodeOverrides: Record<string, unknown> = {}) {
         ...loopNodeOverrides,
       },
     ],
-    edges: [{ from: "loop1", to: "loop1" }],
+    edges: [{ from: { node: "loop1" }, to: { node: "loop1" } }],
   };
 }
 

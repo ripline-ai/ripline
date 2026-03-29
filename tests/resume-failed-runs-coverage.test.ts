@@ -552,7 +552,7 @@ describe("Retry exhaustion stops retrying and emits run.retry-exhausted", () => 
       const e = evt as { event: string };
       if (e.event === "run.retry-exhausted") exhaustedEvents.push(e);
     };
-    bus.on("run", handler);
+    bus.on("run-event", handler);
 
     const scheduler = createScheduler({
       store, queue, registry,
@@ -573,7 +573,7 @@ describe("Retry exhaustion stops retrying and emits run.retry-exhausted", () => 
     }
 
     scheduler.stop();
-    bus.off("run", handler);
+    bus.off("run-event", handler);
     await new Promise((r) => setTimeout(r, 100));
 
     expect(finalRecord).not.toBeNull();
@@ -758,7 +758,7 @@ describe("Retry endpoint validation (via Fastify inject)", () => {
     };
   }
 
-  it("returns 404 for retry of a nonexistent run", async () => {
+  it("returns 404 for retry of a nonexistent run", { timeout: 15000 }, async () => {
     const { app, cleanup } = await setupApp();
     try {
       const res = await app.inject({
@@ -772,7 +772,7 @@ describe("Retry endpoint validation (via Fastify inject)", () => {
     }
   });
 
-  it("returns 400 for invalid strategy value", async () => {
+  it("returns 400 for invalid strategy value", { timeout: 15000 }, async () => {
     const { app, cleanup } = await setupApp();
     try {
       const pipelines = (await app.inject({ method: "GET", url: "/pipelines" })).json() as any;

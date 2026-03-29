@@ -173,7 +173,9 @@ export async function executeAgent(
     agentId,
     prompt,
     resetSession,
-    ...(resetSession === false && context.sessionId !== undefined && { sessionId: context.sessionId }),
+    // Pass sessionId when available in context (resume scenarios always carry session from cursor,
+    // and resetSession:false nodes use it for shared-conversation continuity).
+    ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
     ...(effectiveThinking !== undefined && { thinking: effectiveThinking }),
     ...(effectiveTimeout !== undefined && { timeoutSeconds: effectiveTimeout }),
     ...(useClaudeCode && { runner: "claude-code" }),

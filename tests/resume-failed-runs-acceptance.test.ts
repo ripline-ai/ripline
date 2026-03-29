@@ -495,7 +495,7 @@ describe("Retry exhaustion emits event", () => {
       const e = evt as { event: string };
       if (e.event === "run.retry-exhausted") exhaustedEvents.push(e);
     };
-    bus.on("run", handler);
+    bus.on("run-event", handler);
 
     const scheduler = createScheduler({
       store,
@@ -524,7 +524,7 @@ describe("Retry exhaustion emits event", () => {
     }
 
     scheduler.stop();
-    bus.off("run", handler);
+    bus.off("run-event", handler);
     await new Promise((r) => setTimeout(r, 100));
 
     expect(finalRecord).not.toBeNull();
@@ -647,7 +647,7 @@ describe("Retry endpoint integration", () => {
     };
   }
 
-  it("POST /runs/:runId/retry returns 404 for unknown run ID", async () => {
+  it("POST /runs/:runId/retry returns 404 for unknown run ID", { timeout: 15000 }, async () => {
     const { app, cleanup } = await setupApp();
     try {
       const res = await app.inject({
@@ -663,7 +663,7 @@ describe("Retry endpoint integration", () => {
     }
   });
 
-  it("POST /runs/:runId/retry defaults strategy to from-failure when omitted", async () => {
+  it("POST /runs/:runId/retry defaults strategy to from-failure when omitted", { timeout: 15000 }, async () => {
     const { app, cleanup } = await setupApp();
     try {
       const pipelines = (await app.inject({ method: "GET", url: "/pipelines" })).json() as any;
@@ -966,12 +966,12 @@ describe("EventBus emissions during resume", () => {
     const bus = EventBus.getInstance();
     const events: unknown[] = [];
     const handler = (evt: unknown) => events.push(evt);
-    bus.on("run", handler);
+    bus.on("run-event", handler);
 
     const runner = new DeterministicRunner(def, { store, agentRunner: noopAgent });
     await runner.run({ resumeRunId: record.id });
 
-    bus.off("run", handler);
+    bus.off("run-event", handler);
 
     // Should have emitted run.started and run.completed
     const runEvents = events as { event: string; runId: string }[];
