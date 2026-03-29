@@ -5,6 +5,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { getUsageStore } from "../lib/usageStore.js";
 import type { UsageConfig } from "../lib/usageTypes.js";
+import { EventBus } from "../event-bus.js";
 
 /**
  * Compute the ISO-8601 start-of-week timestamp for a given reset day.
@@ -98,6 +99,36 @@ export function registerUsageRoutes(
         ...(typeof body.model === "string" && { model: body.model }),
         ...(typeof body.runId === "string" && { meta: { runId: body.runId } }),
       });
+
+      // Emit usage.update SSE event so Wintermute battery updates in real-time
+      try {
+        const config = await store.getConfig();
+        const since = getWeekStart(config.resetDay);
+        const agg = await store.getAggregates(since);
+        const cap = config.weeklyTokenCap;
+        const remaining = cap > 0 ? Math.max(0, cap - agg.totalTokens) : cap;
+        const percent = cap > 0
+          ? Math.round(Math.max(0, 100 - (agg.totalTokens / cap) * 100) * 100) / 100
+          : 100;
+
+        // Burn rate: tokens per hour elapsed in window
+        const elapsedMs = Date.now() - new Date(since).getTime();
+        const elapsedHours = elapsedMs / (1000 * 60 * 60);
+        const burnRate = elapsedHours > 0 ? agg.totalTokens / elapsedHours : 0;
+        const hoursToExhaustion = burnRate > 0 ? remaining / burnRate : null;
+
+        EventBus.getInstance().emitUsageUpdate({
+          event: "usage.update",
+          percent,
+          hoursToExhaustion: hoursToExhaustion !== null
+            ? Math.round(hoursToExhaustion * 10) / 10
+            : null,
+          periodStart: since,
+          timestamp: Date.now(),
+        });
+      } catch {
+        // Non-critical — don't fail the request if SSE emission fails
+      }
 
       return reply.status(201).send(event);
     },

@@ -13,7 +13,7 @@ import { resolveSkillsDir, resolveStageConfig } from "./config.js";
 import type { PipelineRunRecord } from "./types.js";
 import { PipelineRegistry } from "./registry.js";
 import { PipelineRunStore } from "./run-store.js";
-import { EventBus, type RunEvent } from "./event-bus.js";
+import { EventBus, type BusEvent } from "./event-bus.js";
 import { createRunQueue } from "./run-queue.js";
 import { createScheduler } from "./scheduler.js";
 import { BackgroundQueue } from "./background-queue.js";
@@ -764,9 +764,12 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
 
       const bus = EventBus.getInstance();
 
-      const listener = (evt: RunEvent) => {
-        if (pipelineId && evt.pipelineId !== pipelineId) return;
-        if (status && evt.status !== status) return;
+      const listener = (evt: BusEvent) => {
+        // Usage events bypass pipeline/status filters — always broadcast
+        if (evt.event !== "usage.update") {
+          if (pipelineId && evt.pipelineId !== pipelineId) return;
+          if (status && evt.status !== status) return;
+        }
         reply.raw.write(`data: ${JSON.stringify(evt)}\n\n`);
       };
 

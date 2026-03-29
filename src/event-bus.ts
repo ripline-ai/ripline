@@ -25,6 +25,24 @@ export type RunEvent = {
 };
 
 /**
+ * Event emitted when usage data changes (token consumption recorded).
+ * Consumed by Wintermute's UsageBattery component for real-time updates.
+ */
+export type UsageUpdateEvent = {
+  event: "usage.update";
+  /** Percentage of quota remaining (0–100). */
+  percent: number;
+  /** Estimated hours until quota exhaustion, or null if burn rate is zero. */
+  hoursToExhaustion: number | null;
+  /** ISO-8601 start of the current usage period. */
+  periodStart: string;
+  timestamp: number;
+};
+
+/** Any event that can flow through the EventBus. */
+export type BusEvent = RunEvent | UsageUpdateEvent;
+
+/**
  * In-process singleton event bus for broadcasting pipeline run lifecycle events.
  *
  * Consumers subscribe via `EventBus.getInstance().on("run-event", cb)`.
@@ -49,6 +67,14 @@ export class EventBus extends EventEmitter {
    * Emit a typed RunEvent on the "run-event" channel.
    */
   emitRunEvent(event: RunEvent): void {
+    this.emit("run-event", event);
+  }
+
+  /**
+   * Emit a usage.update event on the "run-event" channel so SSE
+   * subscribers receive it alongside run lifecycle events.
+   */
+  emitUsageUpdate(event: UsageUpdateEvent): void {
     this.emit("run-event", event);
   }
 
