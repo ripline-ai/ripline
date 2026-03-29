@@ -110,6 +110,17 @@ export class RunContainerPool {
     const containerId = await new Promise<string>((resolve, reject) => {
       execFile("docker", args, (err, stdout, stderr) => {
         if (err) {
+          // If the container name already exists (e.g. after a server reload), reuse it.
+          if (stderr?.includes("Conflict") && stderr.includes(name)) {
+            execFile("docker", ["inspect", "--format", "{{.Id}}", name], (inspectErr, inspectOut) => {
+              if (inspectErr || !inspectOut.trim()) {
+                reject(new Error(`docker run failed: ${stderr || err.message}`));
+              } else {
+                resolve(inspectOut.trim().slice(0, 12));
+              }
+            });
+            return;
+          }
           reject(new Error(`docker run failed: ${stderr || err.message}`));
           return;
         }
