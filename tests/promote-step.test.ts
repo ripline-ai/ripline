@@ -113,14 +113,14 @@ describe("promoteStep", () => {
       "reset --hard HEAD": { exitCode: 0 },
       "checkout build/run-123": { exitCode: 0 },
       "rebase main": { exitCode: 1, output: "CONFLICT (content): Merge conflict in src/index.ts" },
-      "rebase --abort": { exitCode: 0 },
+      "diff --name-only --diff-filter=U": { exitCode: 0, output: "src/conflicted.ts\n" },
     });
 
     const result = await promoteStep(baseParams);
 
     expect(result.status).toBe("needs-conflict-resolution");
-    expect(result.message).toContain("Merge conflict");
-    expect(result.message).toContain("preserved for manual resolution");
+    expect(result.message).toContain("Rebase conflict");
+    expect(result.message).toContain("in-progress");
     expect(result.gitOutput).toBeDefined();
   });
 
@@ -195,13 +195,14 @@ describe("promoteStep", () => {
       "reset --hard HEAD": { exitCode: 0 },
       "checkout build/run-123": { exitCode: 0 },
       "rebase main": { exitCode: 1, output: "CONFLICT merge conflict in file.ts" },
-      "rebase --abort": { exitCode: 0 },
+      "diff --name-only --diff-filter=U": { exitCode: 0, output: "src/conflicted.ts\n" },
     });
 
     const result = await promoteStep(baseParams);
 
     expect(result.status).toBe("needs-conflict-resolution");
-    expect(result.message).toContain("Branch preserved");
+    expect(result.message).toContain("Rebase conflict");
+    expect(Array.isArray(result.conflictedFiles)).toBe(true);
   });
 
   it("deletes feature branch locally after successful merge", async () => {

@@ -250,7 +250,7 @@ describe("E2E: Concurrent overlapping builds — merge conflict detection", () =
       gitTimeoutMs: 10_000,
     });
     expect(resultB.status).toBe("needs-conflict-resolution");
-    expect(resultB.message).toContain("Merge conflict");
+    expect(resultB.message).toContain("Rebase conflict");
 
     // Verify the conflicting branch is preserved for manual resolution
     const branches = git(work, "branch");

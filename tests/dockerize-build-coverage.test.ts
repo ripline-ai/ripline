@@ -116,8 +116,9 @@ describe("Story 3 — PromoteStep code structure guarantees", () => {
       "utf8",
     );
 
-    const testRunIdx = source.indexOf("Run project test suite");
-    const checkoutTargetIdx = source.indexOf("Checkout target branch");
+    // Check ordering by finding the actual code patterns
+    const testRunIdx = source.indexOf("testResult");
+    const checkoutTargetIdx = source.indexOf("targetCheckout");
     const mergeIdx = source.indexOf("merge --ff-only");
 
     // Tests must come before checkout target and merge
