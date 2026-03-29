@@ -8,6 +8,7 @@ import Fastify, {
 import cors from "@fastify/cors";
 import os from "node:os";
 import type { AgentDefinition, SkillsRegistry, PipelinePluginConfig } from "./types.js";
+import type { ContainerBuildConfig } from "./container-build-runner.js";
 import { resolveSkillsDir, resolveStageConfig } from "./config.js";
 import type { PipelineRunRecord } from "./types.js";
 import { PipelineRegistry } from "./registry.js";
@@ -60,6 +61,8 @@ export type ServerConfig = PipelinePluginConfig & {
   skillsDir?: string;
   /** Per-queue concurrency overrides. Key = queue name, value = worker count. */
   queueConcurrencies?: Record<string, number>;
+  /** Container build configuration. When set, scheduler attempts container-based execution for builds. */
+  containerBuild?: ContainerBuildConfig;
 };
 
 export async function createApp(config: ServerConfig): Promise<FastifyInstance> {
@@ -94,6 +97,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           ...(agentDefinitions !== undefined && { agentDefinitions }),
           ...(skillsRegistry !== undefined && { skillsRegistry }),
           skillsDir,
+          ...(config.containerBuild !== undefined && { containerBuild: config.containerBuild }),
         })
       : null;
   if (scheduler) scheduler.start();

@@ -7,6 +7,7 @@ import { createRunScopedFileSink } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
 import { EventBus } from "./event-bus.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
+import { runContainerBuild, type ContainerBuildConfig } from "./container-build-runner.js";
 
 export type SchedulerConfig = {
   store: RunStore;
@@ -25,6 +26,8 @@ export type SchedulerConfig = {
   skillsDir?: string;
   /** Poll interval when queue is empty (ms). */
   pollIntervalMs?: number;
+  /** Container build configuration. When set, scheduler attempts container-based execution. */
+  containerBuild?: ContainerBuildConfig;
 };
 
 export type SchedulerMetrics = {
@@ -156,6 +159,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
     skillsRegistry,
     skillsDir,
     pollIntervalMs = 500,
+    containerBuild,
   } = config;
 
   let stopped = false;
@@ -190,22 +194,80 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
           runsDir !== undefined
             ? createLogger({ sink: createRunScopedFileSink(runsDir) })
             : undefined;
-        const runner = new DeterministicRunner(entry.definition, {
-          store,
-          queue,
-          quiet: true,
-          ...(log !== undefined && { log }),
-          ...(agentRunner && { agentRunner }),
-          ...(claudeCodeRunner && { claudeCodeRunner }),
-          ...(agentDefinitions !== undefined && { agentDefinitions }),
-          ...(skillsRegistry !== undefined && { skillsRegistry }),
-          ...(skillsDir !== undefined && { skillsDir }),
-        });
-        await runner.run(
-          record.cursor !== undefined
-            ? { resumeRunId: record.id }
-            : { startRunId: record.id }
-        );
+
+        // --- Container-based execution attempt ---
+        // Only attempt for top-level runs (no parentRunId) with no existing cursor (fresh runs).
+        let containerHandled = false;
+        if (containerBuild && !record.parentRunId && record.cursor === undefined) {
+          const buildResult = await runContainerBuild(
+            record.id,
+            record.pipelineId,
+            { inputs: record.inputs, pipelineId: record.pipelineId },
+            { ...containerBuild, ...(log !== undefined && { logger: log }) },
+          );
+
+          if (buildResult.usedContainer) {
+            containerHandled = true;
+            if (buildResult.error) {
+              // Container execution failed — mark the run as errored
+              const errMsg = buildResult.error;
+              const loaded = await store.load(record.id);
+              if (loaded) await store.failRun(loaded, errMsg);
+              activeWorkersPerQueue.set(queueName, Math.max(0, (activeWorkersPerQueue.get(queueName) ?? 1) - 1));
+              continue;
+            }
+            // Container succeeded — check promote result
+            if (buildResult.promoteResult) {
+              const ps = buildResult.promoteResult;
+              if (ps.status === "merged") {
+                // Mark run as completed
+                const loaded = await store.load(record.id);
+                if (loaded) {
+                  await store.completeRun(loaded, {
+                    containerExitCode: buildResult.containerResult?.exitCode,
+                    promoteStatus: ps.status,
+                    mergeCommit: ps.mergeCommit,
+                    featureBranch: buildResult.featureBranch,
+                  });
+                }
+              } else if (ps.status === "merge-conflict") {
+                // Mark as merge-conflict status
+                const loaded = await store.load(record.id);
+                if (loaded) {
+                  loaded.status = "merge-conflict";
+                  loaded.error = ps.message;
+                  loaded.updatedAt = Date.now();
+                  await store.save(loaded);
+                }
+              } else {
+                // test-failure or error from promote
+                const loaded = await store.load(record.id);
+                if (loaded) await store.failRun(loaded, ps.message);
+              }
+            }
+          }
+          // If buildResult.usedContainer is false, Docker wasn't available — fall through to direct execution
+        }
+
+        if (!containerHandled) {
+          // --- Direct on-host execution (original path / fallback) ---
+          const runner = new DeterministicRunner(entry.definition, {
+            store,
+            queue,
+            quiet: true,
+            ...(log !== undefined && { log }),
+            ...(agentRunner && { agentRunner }),
+            ...(claudeCodeRunner && { claudeCodeRunner }),
+            ...(agentDefinitions !== undefined && { agentDefinitions }),
+            ...(skillsRegistry !== undefined && { skillsRegistry }),
+            ...(skillsDir !== undefined && { skillsDir }),
+          });
+          await runner.run(
+            record.cursor !== undefined
+              ? { resumeRunId: record.id }
+              : { startRunId: record.id }
+          );
+        }
         completedRunsPerQueue.set(queueName, (completedRunsPerQueue.get(queueName) ?? 0) + 1);
         if (!durationsPerQueue.has(queueName)) durationsPerQueue.set(queueName, []);
         durationsPerQueue.get(queueName)!.push(Date.now() - startMs);

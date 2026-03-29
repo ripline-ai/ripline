@@ -56,6 +56,12 @@ export {
   loadLlmAgentConfigFromFile,
 } from "./agent-runner-config.js";
 export { promoteStep, type PromoteStepParams, type PromoteStepResult } from "./promote-step.js";
+export {
+  runContainerBuild,
+  isDockerAvailable,
+  type ContainerBuildConfig,
+  type ContainerBuildResult,
+} from "./container-build-runner.js";
 
 export function normalizeConfig(raw: unknown): NormalizedConfig {
   const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
