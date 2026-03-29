@@ -349,6 +349,110 @@ nodes:
 
       Output ONLY the raw JSON response from the server.
 
+  # ── 6. Auto-suggest priority based on impact/effort ──────────────────────
+  - id: fetch_backlog_priorities
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 30
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
+
+      curl -s {{resolve_urls.wintermute_url}}/api/ideas
+
+  - id: parse_backlog_priorities
+    type: transform
+    expression: |
+      (function(text) {
+        var t = text.trim();
+        var start = t.indexOf('[');
+        var end = t.lastIndexOf(']');
+        if (start !== -1 && end > start) {
+          try { return { items: JSON.parse(t.slice(start, end + 1)) }; } catch(e) {}
+        }
+        var m = t.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        var parsed = JSON.parse(m ? m[1].trim() : t);
+        return { items: Array.isArray(parsed) ? parsed : [] };
+      })(artifacts.fetch_backlog_priorities.text)
+
+  - id: compute_suggested_priority
+    type: transform
+    expression: |
+      (function() {
+        var idea = artifacts.parse_generated;
+        var ideaId = inputs.idea_id;
+        var backlog = (artifacts.parse_backlog_priorities.items || []);
+
+        var impact = idea.impactScore || 3;
+        var effort = idea.effortScore || 3;
+        var newRatio = impact / effort;
+
+        // Filter to other open ideas that have scores and priority
+        var others = backlog.filter(function(item) {
+          return item.id !== ideaId &&
+                 item.impactScore != null &&
+                 item.effortScore != null &&
+                 item.effortScore > 0 &&
+                 item.priority != null &&
+                 (item.status === 'open' || item.status === 'specced' || item.status === 'draft');
+        });
+
+        // Empty backlog: assign 50 (midpoint)
+        if (others.length === 0) {
+          return { suggestedPriority: 50, reason: 'empty_backlog' };
+        }
+
+        // Compute ratio for each existing item and pair with priority
+        var scored = others.map(function(item) {
+          return {
+            ratio: item.impactScore / item.effortScore,
+            priority: item.priority
+          };
+        });
+
+        // Sort by ratio descending
+        scored.sort(function(a, b) { return b.ratio - a.ratio; });
+
+        // Find position where new idea fits
+        var position = scored.length;
+        for (var i = 0; i < scored.length; i++) {
+          if (newRatio >= scored[i].ratio) {
+            position = i;
+            break;
+          }
+        }
+
+        // Interpolate priority value based on neighbors
+        var suggestedPriority;
+        if (position === 0) {
+          suggestedPriority = Math.min(100, scored[0].priority + 5);
+        } else if (position >= scored.length) {
+          suggestedPriority = Math.max(1, scored[scored.length - 1].priority - 5);
+        } else {
+          var above = scored[position - 1].priority;
+          var below = scored[position].priority;
+          suggestedPriority = Math.round(((above + below) / 2) * 10) / 10;
+        }
+
+        return { suggestedPriority: suggestedPriority, reason: 'relative_ranking' };
+      })()
+
+  - id: patch_priority
+    type: agent
+    runner: claude-code
+    mode: execute
+    dangerouslySkipPermissions: true
+    cwd: /home/openclaw
+    timeoutSeconds: 30
+    prompt: |
+      Run the following curl command exactly as written. Output ONLY the raw JSON response — no explanation, no markdown fencing, no prose.
+
+      curl -s -X PATCH {{resolve_urls.wintermute_url}}/api/ideas/{{idea_id}} \
+        -H "Content-Type: application/json" \
+        -d '{"priority": {{compute_suggested_priority.suggestedPriority}}, "priorityPinned": false}'
+
   - id: result
     type: output
     source: patch_idea
@@ -374,4 +478,14 @@ edges:
   - { from: { node: parse_generated }, to: { node: fetch_focus_areas } }
   - { from: { node: fetch_focus_areas }, to: { node: suggest_focus_area } }
   - { from: { node: suggest_focus_area }, to: { node: patch_idea } }
-  - { from: { node: patch_idea },      to: { node: result } }
+  # Auto-suggest priority chain (failure-tolerant — on_error edges skip to result)
+  - { from: { node: patch_idea },                to: { node: fetch_backlog_priorities } }
+  - { from: { node: fetch_backlog_priorities },   to: { node: parse_backlog_priorities } }
+  - { from: { node: parse_backlog_priorities },   to: { node: compute_suggested_priority } }
+  - { from: { node: compute_suggested_priority }, to: { node: patch_priority } }
+  - { from: { node: patch_priority },             to: { node: result } }
+  # Error fallbacks: if any priority step fails, skip to result without failing the pipeline
+  - { from: { node: fetch_backlog_priorities },   to: { node: result }, on_error: true }
+  - { from: { node: parse_backlog_priorities },   to: { node: result }, on_error: true }
+  - { from: { node: compute_suggested_priority }, to: { node: result }, on_error: true }
+  - { from: { node: patch_priority },             to: { node: result }, on_error: true }
