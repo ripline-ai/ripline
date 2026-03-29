@@ -73,7 +73,7 @@ export class RunContainerPool {
 
     // Build docker run args for a persistent (long-running) container.
     // We use `sleep infinity` as the command so the container stays alive for the run.
-    const args: string[] = ["run", "--detach", "--network", "host"];
+    const args: string[] = ["run", "--detach", "--network", "host", "--entrypoint", ""];
 
     const name = `ripline-run-${runId.slice(0, 8)}`;
     args.push("--name", name);

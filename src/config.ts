@@ -15,11 +15,13 @@ export interface StageConfig {
   port: number;
   /** Wintermute base URL (no trailing slash). */
   wintermuteBaseUrl: string;
+  /** Self-referential Ripline base URL (no trailing slash). */
+  riplineUrl: string;
 }
 
-const STAGE_MAP: Record<Stage, { port: number; wintermuteBaseUrl: string }> = {
-  production: { port: 4001, wintermuteBaseUrl: "http://localhost:3000" },
-  staging:    { port: 4002, wintermuteBaseUrl: "http://localhost:3001" },
+const STAGE_MAP: Record<Stage, { port: number; wintermuteBaseUrl: string; riplineUrl: string }> = {
+  production: { port: 4001, wintermuteBaseUrl: "http://localhost:3000", riplineUrl: "http://localhost:4001" },
+  staging:    { port: 4002, wintermuteBaseUrl: "http://localhost:3001", riplineUrl: "http://localhost:4002" },
 };
 
 /**

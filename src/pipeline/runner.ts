@@ -22,6 +22,7 @@ import { executeNode } from "./executors/index.js";
 import type { AgentRunner } from "./executors/index.js";
 import { emitActivity, flushActivityBuffer } from "../activity-emitter.js";
 import type { ActivityEvent } from "../types/activity.js";
+import { resolveStageConfig } from "../config.js";
 import { evaluateExpression } from "../expression.js";
 import { HttpResponseError, computeBackoffMs } from "../lib/http-response-guard.js";
 import { classifyError } from "./error-classifier.js";
@@ -215,6 +216,15 @@ export class DeterministicRunner extends EventEmitter {
       await (this.store as { init(): Promise<void> }).init();
     }
 
+    // Inject stage-aware URLs so pipeline templates can reference {{env.WINTERMUTE_URL}}
+    // and {{env.RIPLINE_URL}} without hardcoding localhost ports.
+    // Caller-supplied env values always win (e.g. for tests or manual overrides).
+    const { wintermuteBaseUrl, riplineUrl } = resolveStageConfig();
+    const stageEnv: Record<string, string> = {
+      WINTERMUTE_URL: wintermuteBaseUrl,
+      RIPLINE_URL: riplineUrl,
+    };
+
     let record: PipelineRunRecord;
     let context: RunContext;
     let startIndex: number;
@@ -232,7 +242,7 @@ export class DeterministicRunner extends EventEmitter {
       const steps: PipelineRunStep[] = order.map((nodeId) => ({ nodeId, status: "pending" }));
       record.steps = steps;
       record.status = "running";
-      const baseEnv = { ...process.env, ...options.env } as Record<string, string>;
+      const baseEnv = { ...process.env, ...stageEnv, ...options.env } as Record<string, string>;
       context = {
         inputs: record.inputs,
         artifacts: {},
@@ -263,7 +273,7 @@ export class DeterministicRunner extends EventEmitter {
         outputs?: Record<string, unknown>;
         sessionId?: string;
       };
-      const baseEnv = { ...process.env, ...options.env } as Record<string, string>;
+      const baseEnv = { ...process.env, ...stageEnv, ...options.env } as Record<string, string>;
       context = {
         inputs: ctx.inputs ?? record.inputs,
         artifacts: { ...ctx.artifacts },
@@ -289,7 +299,7 @@ export class DeterministicRunner extends EventEmitter {
         pipelineId: this.definition.id,
         inputs: options.inputs ?? {},
       });
-      const baseEnv = { ...process.env, ...options.env } as Record<string, string>;
+      const baseEnv = { ...process.env, ...stageEnv, ...options.env } as Record<string, string>;
       context = {
         inputs: record.inputs,
         artifacts: {},
