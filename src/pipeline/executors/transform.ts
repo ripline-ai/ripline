@@ -17,6 +17,7 @@ export async function executeTransform(
     inputs: context.inputs,
     artifacts: context.artifacts,
     env: context.env,
+    loop: context.artifacts["loop"],
     JSON,
   };
   vm.createContext(sandbox);
