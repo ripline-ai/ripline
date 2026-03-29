@@ -9,6 +9,7 @@ import { EventBus } from "./event-bus.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
 import { runContainerBuild, type ContainerBuildConfig } from "./container-build-runner.js";
 import { mapContainerBuildToRunStatus } from "./container-status-map.js";
+import { getGlobalContainerPool } from "./run-container-pool.js";
 
 export type SchedulerConfig = {
   store: RunStore;
@@ -325,6 +326,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
 
         if (!containerHandled) {
           // --- Direct on-host execution (original path / fallback) ---
+          const containerPool = entry.definition.container ? getGlobalContainerPool(log) : undefined;
           const runner = new DeterministicRunner(entry.definition, {
             store,
             queue,
@@ -335,6 +337,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
             ...(agentDefinitions !== undefined && { agentDefinitions }),
             ...(skillsRegistry !== undefined && { skillsRegistry }),
             ...(skillsDir !== undefined && { skillsDir }),
+            ...(containerPool !== undefined && { containerPool }),
           });
           await runner.run(
             record.cursor !== undefined
@@ -366,6 +369,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                   parentRunsDir !== undefined
                     ? createLogger({ sink: createRunScopedFileSink(parentRunsDir) })
                     : undefined;
+                const parentContainerPool = parentEntry.definition.container ? getGlobalContainerPool(parentLog) : undefined;
                 const parentRunner = new DeterministicRunner(parentEntry.definition, {
                   store,
                   queue,
@@ -376,6 +380,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                   ...(agentDefinitions !== undefined && { agentDefinitions }),
                   ...(skillsRegistry !== undefined && { skillsRegistry }),
                   ...(skillsDir !== undefined && { skillsDir }),
+                  ...(parentContainerPool !== undefined && { containerPool: parentContainerPool }),
                 });
                 try {
                   await parentRunner.run({ resumeRunId: parent.id });
@@ -421,6 +426,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                   parentRunsDir !== undefined
                     ? createLogger({ sink: createRunScopedFileSink(parentRunsDir) })
                     : undefined;
+                const parentContainerPool2 = parentEntry.definition.container ? getGlobalContainerPool(parentLog) : undefined;
                 const parentRunner = new DeterministicRunner(parentEntry.definition, {
                   store,
                   queue,
@@ -431,6 +437,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                   ...(agentDefinitions !== undefined && { agentDefinitions }),
                   ...(skillsRegistry !== undefined && { skillsRegistry }),
                   ...(skillsDir !== undefined && { skillsDir }),
+                  ...(parentContainerPool2 !== undefined && { containerPool: parentContainerPool2 }),
                 });
                 try {
                   await parentRunner.run({ resumeRunId: parent.id });
