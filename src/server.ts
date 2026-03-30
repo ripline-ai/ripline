@@ -24,7 +24,8 @@ import type { AgentRunner } from "./pipeline/executors/agent.js";
 import { loadAgentDefinitionsFromFile, loadSkillsRegistryFromFile } from "./agent-runner-config.js";
 import { listProfiles, loadProfile } from "./profiles.js";
 import { WebhookDispatcher } from "./webhook-dispatcher.js";
-import { AutoExecutor } from "./auto-executor.js";
+// AutoExecutor import retained for reference — not wired up (dispatch now owned by Wintermute)
+// import { AutoExecutor } from "./auto-executor.js";
 import { createTelegramNotifier } from "./telegram.js";
 import { FocusAreaStore } from "./focus-area-store.js";
 import { registerFocusAreaRoutes } from "./routes/focus-areas.js";
@@ -344,9 +345,8 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     });
   }
 
-  /** Hook close to stop scheduler, webhook dispatcher, auto-executor, and drain background runs */
+  /** Hook close to stop scheduler, webhook dispatcher, and drain background runs */
   fastify.addHook("onClose", async () => {
-    autoExecutor.disable();
     if (scheduler) scheduler.stop();
     webhookDispatcher.stop();
     // Drain any in-flight fire-and-forget background retry/resume runners
@@ -928,25 +928,21 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     },
   });
 
-  // ─── AutoExecutor setup ───────────────────────────────────
-  const telegramNotifier = createTelegramNotifier(userConfig.telegram);
-  const autoExecutor = new AutoExecutor({
-    backgroundQueue: bgQueue,
-    runQueue: queue,
-    store,
-    telegram: telegramNotifier,
-  });
+  // ─── Telegram notifier (retained for future use / other integrations) ────────
+  const _telegramNotifier = createTelegramNotifier(userConfig.telegram);
 
-  // Enable on boot if config says so (unless explicitly disabled via env var, e.g. for staging)
-  if (userConfig.backgroundQueue?.enabled && process.env.BACKGROUND_QUEUE_DISABLED !== "1") {
-    autoExecutor.enable();
-  }
+  // NOTE: AutoExecutor has been removed from this process.
+  // Dispatch decisions are now owned by Wintermute's reconciliation loop,
+  // which lazily tops up the queue to the concurrency limit on each tick.
+  // BackgroundQueue storage and REST endpoints remain here as-is.
 
-  /** GET /config/background-queue - return current enabled state */
+  /** GET /config/background-queue - return current enabled state from config */
   fastify.get("/config/background-queue", {
     preHandler: requireAuth,
     handler: async (_request, reply) => {
-      return reply.send({ enabled: autoExecutor.isEnabled() });
+      const currentConfig = loadUserConfig();
+      const enabled = currentConfig.backgroundQueue?.enabled ?? false;
+      return reply.send({ enabled });
     },
   });
 
@@ -1051,12 +1047,8 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
 
-      // Toggle AutoExecutor at runtime
-      if (body.enabled) {
-        autoExecutor.enable();
-      } else {
-        autoExecutor.disable();
-      }
+      // Dispatch is now owned by Wintermute; no AutoExecutor to toggle at runtime.
+      // Wintermute reads this flag from GET /config/background-queue before enqueuing.
 
       return reply.send({ backgroundQueue: bgBlock });
     },
@@ -1094,8 +1086,6 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         };
       }
 
-      const lastDispatchAt = autoExecutor.getLastDispatchAt();
-
       return reply.send({
         scheduler: {
           running: true,
@@ -1103,10 +1093,6 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           totalQueueDepth: metrics.queueDepth,
           totalActiveWorkers: metrics.activeWorkers,
           queues,
-        },
-        autoExecutor: {
-          enabled: autoExecutor.isEnabled(),
-          ...(lastDispatchAt !== null && { lastDispatchAt }),
         },
         backgroundQueue: bgSummary,
       });
