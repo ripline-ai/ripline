@@ -266,25 +266,28 @@ async function runAgentInContainer(
   const effectiveWorkdir = resolved?.workdir ?? workdir;
   const env = resolved?.env;
 
-  // Build the claude CLI invocation
-  const args: string[] = ["claude", "-p", prompt, "--output-format", "text"];
+  // Build the claude CLI invocation.
+  // Wrap with the shell `timeout` command when a timeout is set — the `claude`
+  // CLI has no --timeout flag, so we rely on the OS-level timeout wrapper.
+  const claudeArgs: string[] = ["claude", "-p", prompt, "--output-format", "text"];
 
   if (dangerouslySkipPermissions) {
-    args.push("--dangerously-skip-permissions");
+    claudeArgs.push("--dangerously-skip-permissions");
   }
 
   if (model) {
-    args.push("--model", model);
+    claudeArgs.push("--model", model);
   }
 
   if (mode === "plan") {
     // Read-only: no write/edit tools
-    args.push("--disallowed-tools", "Write,Edit,MultiEdit");
+    claudeArgs.push("--disallowed-tools", "Write,Edit,MultiEdit");
   }
 
-  if (timeoutSeconds !== undefined) {
-    args.push("--timeout", String(timeoutSeconds));
-  }
+  const args: string[] =
+    timeoutSeconds !== undefined
+      ? ["timeout", String(timeoutSeconds), ...claudeArgs]
+      : claudeArgs;
 
   const result = await pool.exec(runId, args, env, effectiveWorkdir);
 
