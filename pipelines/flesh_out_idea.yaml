@@ -243,7 +243,7 @@ nodes:
           4 = substantial — new subsystem or significant refactor; touches many files; a full day+
           5 = major — multi-session epic; new infrastructure, deep integration, or significant unknowns
           Avoid defaulting to 3. Small bug fixes and config tweaks should be 1-2; only novel systems are 4-5.>,
-        "techDebt": "Known tech debt this implementation would introduce — shortcuts, deferred work, or architectural compromises. Use a bullet-point list. If none, use an empty string.",
+        "techDebt": "Optional. Tech debt this change will knowingly accrue — shortcuts taken, future work deferred, or architectural compromises. Use bullet points. Omit or set to empty string if none.",
         "tags": ["tag1", "tag2", "tag3"],
         "stories": [
           {
