@@ -244,8 +244,24 @@ nodes:
           5 = major — multi-session epic; new infrastructure, deep integration, or significant unknowns
           Avoid defaulting to 3. Small bug fixes and config tweaks should be 1-2; only novel systems are 4-5.>,
         "techDebt": "Known tech debt this implementation would introduce — shortcuts, deferred work, or architectural compromises. Use a bullet-point list. If none, use an empty string.",
-        "tags": ["tag1", "tag2", "tag3"]
+        "tags": ["tag1", "tag2", "tag3"],
+        "stories": [
+          {
+            "id": "story-1",
+            "title": "Short title for this story",
+            "description": "What needs to be built or changed",
+            "acceptanceCriteria": ["criterion 1", "criterion 2"],
+            "dependsOn": [],
+            "order": 1
+          }
+        ]
       }
+
+      The "stories" field is required. Break the implementation into stories calibrated to actual complexity — use as many as the work genuinely requires:
+      - Simple fix, config change, or single-component tweak: 1-2 stories
+      - Standard feature with a few moving parts: 2-5 stories
+      - New subsystem, deep integration, or major refactor: 6-8 stories
+      Avoid defaulting to 6. A small bug fix or config change should have 1-2 stories, not 6. Each story should be completable in a single Claude Code session and independently testable.
 
       Output ONLY the JSON object — no markdown fencing, no prose.
 
