@@ -210,15 +210,6 @@ const shellNode = baseNode.extend({
   container: nodeContainerConfigSchema.optional(),
 });
 
-const specialistNode = baseNode.extend({
-  type: z.literal("specialist"),
-  agent: z.string().min(1),
-  prompt: z.string().min(1),
-  context: z.string().optional(),
-  assigns: z.string().optional(),
-  timeoutSeconds: z.number().int().positive().optional(),
-});
-
 const nodeSchema = z.lazy(() =>
   z.discriminatedUnion("type", [
     literalNode,
@@ -233,7 +224,6 @@ const nodeSchema = z.lazy(() =>
     enqueueNode,
     collectChildrenNode,
     shellNode,
-    specialistNode,
   ])
 ) as z.ZodType<PipelineNode>;
 

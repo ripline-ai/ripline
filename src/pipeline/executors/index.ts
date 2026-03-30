@@ -10,7 +10,6 @@ import { executeAgent } from "./agent.js";
 import { executeLoop } from "./loop.js";
 import { executeSwitch } from "./switch.js";
 import { executeShell } from "./shell.js";
-import { executeSpecialist } from "./specialist.js";
 
 export type { NodeResult, ExecutorContext, NodeExecutor } from "./types.js";
 export type { AgentRunner, AgentResult } from "./agent.js";
@@ -55,7 +54,6 @@ function registerExecutors() {
   ));
   executors.set("switch", (node, ctx) => executeSwitch(node as import("../../types.js").SwitchNode, ctx));
   executors.set("shell", (node, ctx) => executeShell(node as import("../../types.js").ShellNode, ctx));
-  executors.set("specialist", (node, ctx) => executeSpecialist(node as import("../../types.js").SpecialistNode, ctx));
   executors.set("agent", (node, ctx, options) => {
     const agentNode = node as import("../../types.js").AgentNode;
     return executeAgent(

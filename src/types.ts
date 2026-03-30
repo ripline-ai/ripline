@@ -315,30 +315,6 @@ export type ShellNode = NodeBase & {
   container?: NodeContainerConfig;
 };
 
-export type SpecialistNode = NodeBase & {
-  type: "specialist";
-  /**
-   * Name of the specialist agent (e.g. "vector", "meridian", "nova", "iris").
-   * The agent's working directory is resolved as ~/agents/{agent}/.
-   * Supports {{artifact}} template interpolation.
-   */
-  agent: string;
-  /**
-   * Task or question to pass to the specialist via `claude -p`.
-   * Supports {{artifact}} template interpolation.
-   */
-  prompt: string;
-  /**
-   * Optional extra context prepended to the prompt before invocation.
-   * Supports {{artifact}} template interpolation.
-   */
-  context?: string;
-  /** Artifact key to assign result to. Defaults to node id. */
-  assigns?: string;
-  /** Max execution time in seconds. Default 300. */
-  timeoutSeconds?: number;
-};
-
 export type PipelineNode =
   | LiteralNode
   | InputNode
@@ -351,8 +327,7 @@ export type PipelineNode =
   | OutputNode
   | EnqueueNode
   | CollectChildrenNode
-  | ShellNode
-  | SpecialistNode;
+  | ShellNode;
 
 export type PipelineEdge = {
   id?: string;
