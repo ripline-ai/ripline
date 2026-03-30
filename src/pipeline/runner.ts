@@ -341,7 +341,22 @@ export class DeterministicRunner extends EventEmitter {
           logFile,
         };
         if (normalized.env !== undefined) acquireOpts.env = normalized.env;
-        if (normalized.volumes !== undefined) acquireOpts.volumes = normalized.volumes;
+
+        // Create a per-run workspace directory on the host and inject it as the
+        // /workspace volume mount.  The container image's /workspace is owned by the
+        // image-internal builder user, which does not match the host UID that the
+        // container runs as (--user hostUid:hostGid).  Without this override, any
+        // step that tries to write to /workspace (e.g. git clone → /workspace/repo)
+        // fails with "Permission denied" and silently leaves /workspace empty,
+        // causing later steps that specify cwd=/workspace/repo to crash with
+        // "chdir failed: no such file or directory" during docker exec.
+        const hostWorkspaceDir = path.join(runsDir, record.id, "workspace");
+        await fs.mkdir(hostWorkspaceDir, { recursive: true });
+        acquireOpts.volumes = {
+          ...(normalized.volumes ?? {}),
+          [hostWorkspaceDir]: "/workspace",
+        };
+
         if (normalized.workdir !== undefined) acquireOpts.workdir = normalized.workdir;
         if (normalized.resourceLimits !== undefined) acquireOpts.resourceLimits = normalized.resourceLimits;
         await this.runnerOptions.containerPool.acquire(record.id, acquireOpts);
