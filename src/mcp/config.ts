@@ -1,8 +1,9 @@
 import path from "node:path";
 import os from "node:os";
 import { resolvePipelineDir } from "../config.js";
-import { resolveStandaloneLlmAgentConfig } from "../agent-runner-config.js";
+import { resolveStandaloneLlmAgentConfig, resolveClaudeCodeConfig } from "../agent-runner-config.js";
 import { createLlmAgentRunner } from "../llm-agent-runner.js";
+import { createClaudeCodeRunner } from "../claude-code-runner.js";
 import type { AgentRunner } from "../pipeline/executors/agent.js";
 
 export type McpServerConfig = {
@@ -59,4 +60,14 @@ export function resolveStandaloneAgentRunner(): AgentRunner {
   return async (params) => ({
     text: `[stub] no LLM runner configured (agentId: ${params.agentId})`,
   });
+}
+
+/**
+ * Build the Claude Code runner for nodes with runner: claude-code.
+ * Returns the runner when config is available, undefined otherwise.
+ */
+export function resolveStandaloneClaudeCodeRunner(homedir: string = os.homedir()): AgentRunner | undefined {
+  const config = resolveClaudeCodeConfig({ homedir });
+  if (!config) return undefined;
+  return createClaudeCodeRunner(config);
 }
