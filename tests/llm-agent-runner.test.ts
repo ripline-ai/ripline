@@ -202,12 +202,70 @@ describe("createLlmAgentRunner", () => {
       const headers = capturedInit?.headers as Record<string, string>;
       expect(headers?.["x-api-key"]).toBe("sk-ant-test");
       expect(headers?.["anthropic-version"]).toBeDefined();
+      expect(headers?.["anthropic-beta"]).toBe("prompt-caching-2024-07-31");
       const body = JSON.parse((capturedInit?.body as string) ?? "{}");
       expect(body.model).toBe("claude-3-5-sonnet-20241022");
-      expect(body.messages).toEqual([{ role: "user", content: "Explain" }]);
+      expect(body.messages).toEqual([
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Explain", cache_control: { type: "ephemeral" } },
+          ],
+        },
+      ]);
+      expect(body.system).toBeUndefined();
       expect(body.max_tokens).toBeDefined();
       expect(result.text).toBe("Anthropic reply");
       expect(result.tokenUsage).toEqual({ input: 20, output: 8 });
+    });
+
+    it("splits prompt on --- separator into system + user with cache_control on both", async () => {
+      let capturedInit: RequestInit | undefined;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((_url: string, init?: RequestInit) => {
+          capturedInit = init;
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                content: [{ type: "text", text: "ok" }],
+                usage: { input_tokens: 5, output_tokens: 2 },
+              }),
+          } as Response);
+        })
+      );
+
+      const runner = createLlmAgentRunner({
+        provider: "anthropic",
+        model: "claude-3-5-sonnet-20241022",
+        apiKey: "sk-ant-test",
+      });
+      await runner({
+        agentId: "default",
+        prompt: "You are a helpful assistant.\n---\nWhat is 2+2?",
+      });
+
+      const body = JSON.parse((capturedInit?.body as string) ?? "{}");
+      expect(body.system).toEqual([
+        {
+          type: "text",
+          text: "You are a helpful assistant.",
+          cache_control: { type: "ephemeral" },
+        },
+      ]);
+      expect(body.messages).toEqual([
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "What is 2+2?",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+      ]);
     });
   });
 

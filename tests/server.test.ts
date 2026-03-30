@@ -416,6 +416,15 @@ describe("HTTP server", () => {
       expect(runRes.statusCode).toBe(202);
       const { runId } = runRes.json() as { runId: string };
 
+      // Wait for the run to reach a terminal state before manipulating run.json.
+      // The background runner writes to run.json concurrently; we must not race it.
+      for (let i = 0; i < 50; i++) {
+        const statusRes = await app.inject({ method: "GET", url: `/runs/${runId}` });
+        const r = statusRes.json() as { status: string };
+        if (r.status === "completed" || r.status === "errored") break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
       // Mark the run as completed in the run.json directly so it qualifies for pruning
       const runFile = path.join(config.runsDir!, runId, "run.json");
       const record = JSON.parse(await fs.readFile(runFile, "utf8")) as {

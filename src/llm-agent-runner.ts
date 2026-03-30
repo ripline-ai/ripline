@@ -133,16 +133,47 @@ export function createLlmAgentRunner(config: LlmAgentRunnerConfig): AgentRunner 
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
           "anthropic-version": "2023-06-01",
+          "anthropic-beta": "prompt-caching-2024-07-31",
         };
         if (apiKey) headers["x-api-key"] = apiKey;
+
+        const separatorIndex = params.prompt.split("\n").findIndex((line) => line === "---");
+        let systemParam:
+          | Array<{ type: "text"; text: string; cache_control: { type: "ephemeral" } }>
+          | undefined;
+        let userText: string;
+
+        if (separatorIndex !== -1) {
+          const lines = params.prompt.split("\n");
+          const systemText = lines.slice(0, separatorIndex).join("\n");
+          userText = lines.slice(separatorIndex + 1).join("\n");
+          systemParam = [
+            { type: "text", text: systemText, cache_control: { type: "ephemeral" } },
+          ];
+        } else {
+          userText = params.prompt;
+        }
+
+        const requestBody: Record<string, unknown> = {
+          model,
+          max_tokens: 4096,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: userText, cache_control: { type: "ephemeral" } },
+              ],
+            },
+          ],
+        };
+        if (systemParam !== undefined) {
+          requestBody["system"] = systemParam;
+        }
+
         const res = await fetch(url, {
           method: "POST",
           headers,
-          body: JSON.stringify({
-            model,
-            max_tokens: 4096,
-            messages: [{ role: "user", content: params.prompt }],
-          }),
+          body: JSON.stringify(requestBody),
           signal: controller.signal,
         });
         clearTimeout(timeoutId);

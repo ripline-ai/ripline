@@ -1,5 +1,8 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+const execFileAsync = promisify(execFile);
 import Fastify, {
   type FastifyInstance,
   type FastifyRequest,
@@ -847,6 +850,51 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       bgQueue.update(item.id, { status: "pending" });
     }
   }
+
+  // Kill orphaned Docker containers from previous Ripline processes.
+  // Containers are named ripline-run-<runId> (full UUID); if the run no longer
+  // exists in this store or is not in "running" state, the container is orphaned
+  // and should be stopped.  Containers whose runId is not found in this store
+  // are skipped — they belong to a different Ripline instance (e.g. a production
+  // container visible to a staging server that shares the Docker daemon).
+  //
+  // Fully async — does not block startup or event loop.
+  void (async () => {
+    try {
+      const { stdout } = await execFileAsync(
+        "docker",
+        ["ps", "--filter", "name=ripline-run-", "--format", "{{.Names}}"],
+        { timeout: 5000 }
+      );
+      const containerNames = stdout.split("\n").map((n) => n.trim()).filter(Boolean);
+      for (const name of containerNames) {
+        const match = /^ripline-run-(.+)$/.exec(name);
+        if (!match) continue;
+        const runId = match[1] as string;
+        const run = await store.load(runId);
+        if (!run) {
+          // Not found in this store — container belongs to a different Ripline
+          // instance or store (e.g. production container seen by staging).  Skip.
+          continue;
+        }
+        const status = run.status;
+        if (status !== "running") {
+          console.warn(`[server] stopping orphaned container ${name} (run ${runId} status: ${status})`);
+          await execFileAsync("docker", ["stop", name], { timeout: 30000 }).catch((err: unknown) => {
+            console.warn(`[server] failed to stop container ${name}: ${(err as Error).message}`);
+          });
+        }
+      }
+    } catch (err) {
+      // docker not available or docker ps failed — log and continue
+      const msg = (err as Error).message ?? String(err);
+      if ((err as NodeJS.ErrnoException).code === "ENOENT" || msg.includes("not found")) {
+        console.warn(`[server] docker not available, skipping container orphan cleanup`);
+      } else {
+        console.warn(`[server] container orphan cleanup skipped: ${msg}`);
+      }
+    }
+  })();
 
   /** GET /queue - list all items sorted by computed priority score descending */
   fastify.get("/queue", {

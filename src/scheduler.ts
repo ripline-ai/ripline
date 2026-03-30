@@ -309,6 +309,13 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                 status: mapping.status ?? "errored",
                 timestamp: Date.now(),
               });
+              // Check retry policy — container failures were previously skipping attemptAutoRetry
+              // entirely (the catch block below never runs for containerHandled paths), causing
+              // exhausted runs to be re-queued indefinitely on crash/recovery.
+              const failedContainerRecord = await store.load(record.id);
+              if (failedContainerRecord?.status === "errored") {
+                await attemptAutoRetry(failedContainerRecord, registry, store);
+              }
               activeWorkersPerQueue.set(queueName, Math.max(0, (activeWorkersPerQueue.get(queueName) ?? 1) - 1));
               continue;
             }

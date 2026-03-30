@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "ripline-prod",
       script: "dist/cli/run.js",
-      args: "serve --pipelines-dir /home/openclaw/.ripline/pipelines --runs-dir /home/openclaw/ripline/.ripline/runs --max-concurrency 1 --queue spec:2 --queue build:2",
+      args: "serve --pipelines-dir /home/openclaw/.ripline/pipelines --runs-dir /home/openclaw/ripline/.ripline/runs --max-concurrency 1 --queue spec:2 --queue build:1",
       cwd: "/home/openclaw/ripline",
       watch: false,
       env: {

@@ -76,7 +76,7 @@ export class RunContainerPool {
     // We use `sleep infinity` as the command so the container stays alive for the run.
     const args: string[] = ["run", "--detach", "--network", "host", "--entrypoint", ""];
 
-    const name = `ripline-run-${runId.slice(0, 8)}`;
+    const name = `ripline-run-${runId}`;
     args.push("--name", name);
 
     if (workdir) {
@@ -116,6 +116,11 @@ export class RunContainerPool {
     args.push("--env", `HOME=${hostHome}`);
     if (fs.existsSync(hostClaudeDir)) {
       args.push("--volume", `${hostClaudeDir}:${hostClaudeDir}:ro`);
+      // Claude Code needs a writable location for session-env (temp session state).
+      // The .claude dir is mounted :ro above, so we overlay session-env with a
+      // writable tmpfs so the CLI can create its session directories without
+      // mutating host credentials.
+      args.push("--tmpfs", `${hostClaudeDir}/session-env:exec,uid=${hostUid},gid=${hostGid}`);
     }
     if (fs.existsSync(hostClaudeJson)) {
       args.push("--volume", `${hostClaudeJson}:${hostClaudeJson}:ro`);
