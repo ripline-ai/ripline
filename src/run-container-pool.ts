@@ -16,6 +16,7 @@
 
 import { execFile, execFileSync, spawn } from "node:child_process";
 import path from "node:path";
+import os from "node:os";
 import fs from "node:fs";
 import { createLogger, type Logger } from "./log.js";
 import type { NodeContainerConfig } from "./types.js";
@@ -92,6 +93,14 @@ export class RunContainerPool {
       for (const [hostPath, containerPath] of Object.entries(volumes)) {
         args.push("--volume", `${hostPath}:${containerPath}`);
       }
+    }
+
+    // Mount host Claude CLI credentials into the container so `claude` commands
+    // can authenticate.  The directory is mounted read-only to prevent the
+    // container from modifying host credentials.
+    const hostClaudeDir = path.join(os.homedir(), ".claude");
+    if (fs.existsSync(hostClaudeDir)) {
+      args.push("--volume", `${hostClaudeDir}:/root/.claude:ro`);
     }
 
     if (resourceLimits?.cpus) {

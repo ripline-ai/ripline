@@ -30,6 +30,7 @@ vi.mock("node:fs", async () => {
     mkdirSync: vi.fn().mockReturnValue(undefined),
     openSync: vi.fn().mockReturnValue(99),
     closeSync: vi.fn().mockReturnValue(undefined),
+    existsSync: vi.fn().mockReturnValue(true),
   };
 });
 
@@ -230,6 +231,46 @@ describe("RunContainerPool", () => {
       expect(args).toContain("2.0");
       expect(args).toContain("--memory");
       expect(args).toContain("4g");
+    });
+
+    it("mounts host ~/.claude into container at /root/.claude read-only when directory exists", async () => {
+      // existsSync already mocked to return true for all paths
+      mockDockerCli();
+      const os = await import("node:os");
+
+      await pool.acquire("run-claude-creds", {
+        image: DEFAULT_BUILD_IMAGE,
+        logFile: "/tmp/test.log",
+      });
+
+      const runCall = (child_process.execFile as any).mock.calls.find(
+        (c: any[]) => c[0] === "docker" && c[1][0] === "run",
+      );
+      const args: string[] = runCall[1];
+      const expectedMount = `${os.homedir()}/.claude:/root/.claude:ro`;
+      expect(args).toContain("--volume");
+      expect(args).toContain(expectedMount);
+    });
+
+    it("skips Claude credentials mount when ~/.claude directory does not exist", async () => {
+      const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+      mockDockerCli();
+
+      try {
+        await pool.acquire("run-no-creds", {
+          image: DEFAULT_BUILD_IMAGE,
+          logFile: "/tmp/test.log",
+        });
+
+        const runCall = (child_process.execFile as any).mock.calls.find(
+          (c: any[]) => c[0] === "docker" && c[1][0] === "run",
+        );
+        const args: string[] = runCall[1];
+        const claudeMount = args.find((a: string) => a.includes(".claude:/root/.claude"));
+        expect(claudeMount).toBeUndefined();
+      } finally {
+        existsSpy.mockRestore();
+      }
     });
 
     it("throws when docker run fails", async () => {
