@@ -233,7 +233,7 @@ describe("RunContainerPool", () => {
       expect(args).toContain("4g");
     });
 
-    it("mounts host ~/.claude into container at /root/.claude read-only when directory exists", async () => {
+    it("mounts host ~/.claude into container at the host path read-only and sets HOME/user when directory exists", async () => {
       // existsSync already mocked to return true for all paths
       mockDockerCli();
       const os = await import("node:os");
@@ -247,9 +247,19 @@ describe("RunContainerPool", () => {
         (c: any[]) => c[0] === "docker" && c[1][0] === "run",
       );
       const args: string[] = runCall[1];
-      const expectedMount = `${os.homedir()}/.claude:/root/.claude:ro`;
+      const home = os.homedir();
+      // .claude directory is mounted at the same host path inside the container
+      const expectedMount = `${home}/.claude:${home}/.claude:ro`;
       expect(args).toContain("--volume");
       expect(args).toContain(expectedMount);
+      // HOME env is set so claude resolves credentials correctly
+      expect(args).toContain("--env");
+      expect(args).toContain(`HOME=${home}`);
+      // Container runs as the host user UID:GID
+      expect(args).toContain("--user");
+      const uid = process.getuid?.() ?? 0;
+      const gid = process.getgid?.() ?? 0;
+      expect(args).toContain(`${uid}:${gid}`);
     });
 
     it("skips Claude credentials mount when ~/.claude directory does not exist", async () => {
@@ -266,7 +276,7 @@ describe("RunContainerPool", () => {
           (c: any[]) => c[0] === "docker" && c[1][0] === "run",
         );
         const args: string[] = runCall[1];
-        const claudeMount = args.find((a: string) => a.includes(".claude:/root/.claude"));
+        const claudeMount = args.find((a: string) => a.includes("/.claude:") && a.includes(":ro"));
         expect(claudeMount).toBeUndefined();
       } finally {
         existsSpy.mockRestore();

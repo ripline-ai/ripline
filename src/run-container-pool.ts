@@ -98,9 +98,27 @@ export class RunContainerPool {
     // Mount host Claude CLI credentials into the container so `claude` commands
     // can authenticate.  The directory is mounted read-only to prevent the
     // container from modifying host credentials.
-    const hostClaudeDir = path.join(os.homedir(), ".claude");
+    //
+    // The container image runs as a non-root user whose UID may differ from the
+    // host user.  To allow reading the host credentials (which are owned by the
+    // host user and have mode 600), we:
+    //   1. Run the container as the host UID:GID via --user.
+    //   2. Set HOME to the host home directory so `claude` resolves ~/.claude
+    //      correctly regardless of what the image's /etc/passwd says.
+    //   3. Mount both ~/.claude/ and ~/.claude.json (the legacy config file that
+    //      some Claude CLI versions expect at $HOME/.claude.json).
+    const hostHome = os.homedir();
+    const hostClaudeDir = path.join(hostHome, ".claude");
+    const hostClaudeJson = path.join(hostHome, ".claude.json");
+    const hostUid = process.getuid?.() ?? 0;
+    const hostGid = process.getgid?.() ?? 0;
+    args.push("--user", `${hostUid}:${hostGid}`);
+    args.push("--env", `HOME=${hostHome}`);
     if (fs.existsSync(hostClaudeDir)) {
-      args.push("--volume", `${hostClaudeDir}:/root/.claude:ro`);
+      args.push("--volume", `${hostClaudeDir}:${hostClaudeDir}:ro`);
+    }
+    if (fs.existsSync(hostClaudeJson)) {
+      args.push("--volume", `${hostClaudeJson}:${hostClaudeJson}:ro`);
     }
 
     if (resourceLimits?.cpus) {
