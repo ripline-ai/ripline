@@ -396,6 +396,48 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     },
   });
 
+  /** DELETE /runs/prune - delete completed/errored run directories older than a threshold */
+  fastify.delete<{
+    Querystring: { olderThanDays?: string };
+  }>("/runs/prune", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const rawDays = request.query.olderThanDays;
+      const olderThanDays = rawDays !== undefined ? Math.max(0, parseFloat(rawDays) || 7) : 7;
+      const cutoffMs = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
+
+      const { promises: fsP } = await import("node:fs");
+      const entries = await fsP.readdir(runsDir, { withFileTypes: true }).catch(() => []);
+      const dirs = entries.filter((e) => e.isDirectory());
+
+      let pruned = 0;
+      let skipped = 0;
+
+      for (const ent of dirs) {
+        const runId = ent.name;
+        let record: PipelineRunRecord | null = null;
+        try {
+          record = await store.load(runId);
+        } catch {
+          skipped++;
+          continue;
+        }
+        if (!record) { skipped++; continue; }
+        if (record.status !== "completed" && record.status !== "errored") { skipped++; continue; }
+        if (record.updatedAt > cutoffMs) { skipped++; continue; }
+
+        try {
+          await fsP.rm(path.join(runsDir, runId), { recursive: true, force: true });
+          pruned++;
+        } catch {
+          skipped++;
+        }
+      }
+
+      return reply.send({ pruned, skipped });
+    },
+  });
+
   /** POST /runs/:runId/retry - requeue an errored/paused run with optional strategy */
   fastify.post<{ Params: { runId: string }; Body: { fromNode?: string; strategy?: string } }>(
     "/runs/:runId/retry",

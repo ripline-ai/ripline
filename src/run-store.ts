@@ -27,6 +27,11 @@ export type RunStoreListOptions = {
   status?: PipelineRunStatus;
   /** Return at most this many runs (applied after sorting). */
   limit?: number;
+  /**
+   * Sort order for results. Defaults to 'desc' (most recent first by updatedAt/startedAt).
+   * 'asc' returns oldest first (FIFO — used internally for pending/running).
+   */
+  sortOrder?: 'asc' | 'desc';
 };
 
 export interface RunStore {
@@ -149,10 +154,16 @@ export class PipelineRunStore implements RunStore {
     const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
     const dirs = entries.filter((e) => e.isDirectory());
 
-    // When a limit is requested and we're not filtering by pending/running (which need FIFO order),
-    // sort directories by mtime descending before reading — lets us stop early once we have enough.
-    const wantEarlyStop = options?.limit !== undefined &&
-      options?.status !== "pending" && options?.status !== "running";
+    // Determine effective sort order:
+    // - Explicit sortOrder always wins.
+    // - Otherwise, pending/running default to 'asc' (FIFO); everything else defaults to 'desc'.
+    const explicitOrder = options?.sortOrder;
+    const isAsc = explicitOrder === 'asc' ||
+      (explicitOrder === undefined && (options?.status === "pending" || options?.status === "running"));
+
+    // When a limit is requested and we want descending order, sort directories by mtime
+    // descending before reading — lets us stop early once we have enough records.
+    const wantEarlyStop = options?.limit !== undefined && !isAsc;
 
     if (wantEarlyStop) {
       const withMtime = await Promise.all(
@@ -182,7 +193,7 @@ export class PipelineRunStore implements RunStore {
       if (run) runs.push(run);
     }
     let filtered = options?.status !== undefined ? runs.filter((r) => r.status === options!.status) : runs;
-    if (options?.status === "pending" || options?.status === "running") {
+    if (isAsc) {
       filtered = [...filtered].sort((a, b) => a.startedAt - b.startedAt);
     } else {
       filtered = [...filtered].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -226,10 +237,18 @@ export class PipelineRunStore implements RunStore {
       const lockPath = path.join(this.runDir(ent.name), "claim.lock");
       await fs.unlink(lockPath).catch(() => {});
     }
-    // Reset all "running" runs to "pending" — nothing is actually running on a fresh start
+    // Reset all "running" runs to "pending" — nothing is actually running on a fresh start.
+    // Exception: if a run has exhausted its retry policy, reset to "errored" instead so it
+    // doesn't re-enter the queue and cause an infinite crash loop.
     const running = await this.list({ status: "running" });
     for (const record of running) {
-      record.status = "pending";
+      const retryCount = record.retryCount ?? 0;
+      const maxAttempts = record.retryPolicy?.maxAttempts;
+      if (maxAttempts !== undefined && retryCount >= maxAttempts) {
+        record.status = "errored";
+      } else {
+        record.status = "pending";
+      }
       await this.save(record);
     }
     return running.length;

@@ -67,10 +67,16 @@ export class MemoryRunStore implements RunStore {
     if (options?.status !== undefined) {
       runs = runs.filter((r) => r.status === options!.status);
     }
-    if (options?.status === "pending" || options?.status === "running") {
+    const explicitOrder = options?.sortOrder;
+    const isAsc = explicitOrder === 'asc' ||
+      (explicitOrder === undefined && (options?.status === "pending" || options?.status === "running"));
+    if (isAsc) {
       runs = [...runs].sort((a, b) => a.startedAt - b.startedAt);
     } else {
       runs = [...runs].sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+    if (options?.limit !== undefined) {
+      runs = runs.slice(0, options.limit);
     }
     return runs;
   }

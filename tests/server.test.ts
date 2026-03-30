@@ -404,4 +404,105 @@ describe("HTTP server", () => {
       }
     });
   });
+
+  describe("DELETE /runs/prune", () => {
+    it("returns 200 with pruned and skipped counts", async () => {
+      // Create a run and mark it completed
+      const runRes = await app.inject({
+        method: "POST",
+        url: "/pipelines/ripline-area-owner/run",
+        payload: {},
+      });
+      expect(runRes.statusCode).toBe(202);
+      const { runId } = runRes.json() as { runId: string };
+
+      // Mark the run as completed in the run.json directly so it qualifies for pruning
+      const runFile = path.join(config.runsDir!, runId, "run.json");
+      const record = JSON.parse(await fs.readFile(runFile, "utf8")) as {
+        status: string;
+        updatedAt: number;
+      };
+      record.status = "completed";
+      // Set updatedAt far in the past so it falls outside the 1-day window
+      record.updatedAt = Date.now() - 2 * 24 * 60 * 60 * 1000;
+      await fs.writeFile(runFile, JSON.stringify(record));
+
+      const pruneRes = await app.inject({
+        method: "DELETE",
+        url: "/runs/prune?olderThanDays=1",
+      });
+      expect(pruneRes.statusCode).toBe(200);
+      const body = pruneRes.json() as { pruned: number; skipped: number };
+      expect(typeof body.pruned).toBe("number");
+      expect(typeof body.skipped).toBe("number");
+      expect(body.pruned).toBeGreaterThanOrEqual(1);
+
+      // Run directory should be gone
+      await expect(fs.access(path.join(config.runsDir!, runId))).rejects.toThrow();
+    });
+
+    it("does not prune runs that are too recent", async () => {
+      const runRes = await app.inject({
+        method: "POST",
+        url: "/pipelines/ripline-area-owner/run",
+        payload: {},
+      });
+      expect(runRes.statusCode).toBe(202);
+      const { runId } = runRes.json() as { runId: string };
+
+      // Mark run completed but recent
+      const runFile = path.join(config.runsDir!, runId, "run.json");
+      const record = JSON.parse(await fs.readFile(runFile, "utf8")) as {
+        status: string;
+        updatedAt: number;
+      };
+      record.status = "completed";
+      // updatedAt is current (just now), well inside the 7-day window
+      record.updatedAt = Date.now();
+      await fs.writeFile(runFile, JSON.stringify(record));
+
+      const pruneRes = await app.inject({
+        method: "DELETE",
+        url: "/runs/prune?olderThanDays=7",
+      });
+      expect(pruneRes.statusCode).toBe(200);
+      const body = pruneRes.json() as { pruned: number; skipped: number };
+      // This run should be skipped (too recent)
+      expect(body.skipped).toBeGreaterThanOrEqual(1);
+
+      // Run directory should still exist
+      await expect(fs.access(path.join(config.runsDir!, runId))).resolves.toBeUndefined();
+    });
+
+    it("does not prune running or pending runs", async () => {
+      const runRes = await app.inject({
+        method: "POST",
+        url: "/pipelines/ripline-area-owner/run",
+        payload: {},
+      });
+      expect(runRes.statusCode).toBe(202);
+      const { runId } = runRes.json() as { runId: string };
+
+      // Leave the run as pending (default status), set updatedAt to old
+      const runFile = path.join(config.runsDir!, runId, "run.json");
+      const record = JSON.parse(await fs.readFile(runFile, "utf8")) as {
+        status: string;
+        updatedAt: number;
+      };
+      // status stays pending
+      record.updatedAt = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      await fs.writeFile(runFile, JSON.stringify(record));
+
+      const pruneRes = await app.inject({
+        method: "DELETE",
+        url: "/runs/prune?olderThanDays=1",
+      });
+      expect(pruneRes.statusCode).toBe(200);
+      const body = pruneRes.json() as { pruned: number; skipped: number };
+      expect(body.skipped).toBeGreaterThanOrEqual(1);
+
+      // Run directory should still exist (status = pending, protected from prune)
+      await expect(fs.access(path.join(config.runsDir!, runId))).resolves.toBeUndefined();
+    });
+  });
 });

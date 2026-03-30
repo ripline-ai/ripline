@@ -160,6 +160,74 @@ const runStoreInterfaceTests = (name: string, createStore: () => Promise<{ store
         await cleanup?.();
       }
     });
+
+    it("list({ limit }) caps the number of returned runs after sorting", async () => {
+      const { store, cleanup } = await createStore();
+      try {
+        await store.createRun({ pipelineId: "p1", inputs: {} });
+        await store.createRun({ pipelineId: "p2", inputs: {} });
+        await store.createRun({ pipelineId: "p3", inputs: {} });
+        const limited = await store.list({ limit: 2 });
+        expect(limited.length).toBe(2);
+      } finally {
+        await cleanup?.();
+      }
+    });
+
+    it("list({ status, limit }) caps after status filter", async () => {
+      const { store, cleanup } = await createStore();
+      try {
+        const r1 = await store.createRun({ pipelineId: "p1", inputs: {} });
+        const r2 = await store.createRun({ pipelineId: "p2", inputs: {} });
+        await store.createRun({ pipelineId: "p3", inputs: {} });
+        await store.completeRun(r1, {});
+        await store.completeRun(r2, {});
+        const limited = await store.list({ status: "completed" as PipelineRunStatus, limit: 1 });
+        expect(limited.length).toBe(1);
+        expect(limited[0]!.status).toBe("completed");
+      } finally {
+        await cleanup?.();
+      }
+    });
+
+    it("list({ sortOrder: 'asc' }) returns oldest first by startedAt", async () => {
+      const { store, cleanup } = await createStore();
+      try {
+        const r1 = await store.createRun({ pipelineId: "p1", inputs: {} });
+        await new Promise((r) => setTimeout(r, 5));
+        const r2 = await store.createRun({ pipelineId: "p2", inputs: {} });
+        await new Promise((r) => setTimeout(r, 5));
+        const r3 = await store.createRun({ pipelineId: "p3", inputs: {} });
+        const asc = await store.list({ sortOrder: 'asc' });
+        expect(asc.length).toBe(3);
+        expect(asc[0]!.id).toBe(r1.id);
+        expect(asc[2]!.id).toBe(r3.id);
+      } finally {
+        await cleanup?.();
+      }
+    });
+
+    it("list({ sortOrder: 'desc' }) returns most-recent first by updatedAt", async () => {
+      const { store, cleanup } = await createStore();
+      try {
+        const r1 = await store.createRun({ pipelineId: "p1", inputs: {} });
+        await new Promise((r) => setTimeout(r, 5));
+        const r2 = await store.createRun({ pipelineId: "p2", inputs: {} });
+        await new Promise((r) => setTimeout(r, 5));
+        await store.createRun({ pipelineId: "p3", inputs: {} });
+        // Touch r1 to make it the most recently updated
+        await new Promise((r) => setTimeout(r, 5));
+        await store.save(r1);
+        const desc = await store.list({ sortOrder: 'desc' });
+        expect(desc.length).toBe(3);
+        expect(desc[0]!.id).toBe(r1.id);
+        // r2 should appear before r3 (both untouched after r1, but r3 started last)
+        // desc sorts by updatedAt so last-updated (r1) is first
+        expect(desc.map((r) => r.id)).toContain(r2.id);
+      } finally {
+        await cleanup?.();
+      }
+    });
   });
 };
 
