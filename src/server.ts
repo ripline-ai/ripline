@@ -797,6 +797,15 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     maxRetries: userConfig.backgroundQueue?.maxRetries ?? 5,
   });
 
+  // Recover orphaned items: running with no runId means a previous process died
+  // mid-dispatch before it could record the runId. Reset them to pending.
+  for (const item of bgQueue.list()) {
+    if (item.status === "running" && !item.runId) {
+      console.warn(`[server] resetting orphaned queue item ${item.id} to pending`);
+      bgQueue.update(item.id, { status: "pending" });
+    }
+  }
+
   /** GET /queue - list all items sorted by computed priority score descending */
   fastify.get("/queue", {
     preHandler: requireAuth,
