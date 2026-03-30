@@ -127,13 +127,26 @@ export class BackgroundQueue {
   /**
    * Record a retry for the given item. If retries exceed maxRetries the
    * item is flipped to `failed` with `needsReview: true`.
+   *
+   * Special case: if the error message contains "exit code 137" (container OOM
+   * kill), the item is immediately marked `failed` with `needsReview: true`
+   * rather than being retried — retrying with the same memory limit will always
+   * fail.
    */
-  recordRetry(id: string): BackgroundQueueItem | undefined {
+  recordRetry(id: string, errorMessage?: string): BackgroundQueueItem | undefined {
     const items = this.read();
     const idx = items.findIndex((i) => i.id === id);
     if (idx === -1) return undefined;
 
     const item = items[idx]!;
+
+    // OOM kill — retrying with the same memory limit will always fail.
+    if (errorMessage && errorMessage.includes("exit code 137")) {
+      items[idx] = { ...item, status: "failed" as const, needsReview: true };
+      this.write(items);
+      return items[idx];
+    }
+
     const retries = item.retries + 1;
 
     if (retries >= item.maxRetries) {
