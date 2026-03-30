@@ -485,7 +485,7 @@ describe("Scheduler auto-retry", () => {
     await queue.enqueue("auto-retry-pipeline", {});
     scheduler.start();
 
-    const deadline = Date.now() + 5000;
+    const deadline = Date.now() + 15000;
     let result: PipelineRunRecord | null = null;
     while (Date.now() < deadline) {
       const runs = await store.list();

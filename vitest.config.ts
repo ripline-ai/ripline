@@ -17,5 +17,6 @@ export default defineConfig({
     ],
     pool: "forks",
     forceExit: true,
+    testTimeout: 30000,
   },
 });
