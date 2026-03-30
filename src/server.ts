@@ -1062,6 +1062,57 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     },
   });
 
+  // ─── Health endpoints ────────────────────────────────────
+
+  /** GET /health/scheduler - scheduler and background queue health */
+  fastify.get("/health/scheduler", {
+    preHandler: requireAuth,
+    handler: async (_request, reply) => {
+      if (!scheduler) {
+        return reply.status(503).send({
+          error: "Service Unavailable",
+          message: "Scheduler is not initialized (maxConcurrency is 0 and no queues are configured)",
+        });
+      }
+
+      const metrics = await scheduler.getDetailedMetrics();
+      const bgItems = bgQueue.list();
+      const bgSummary = {
+        total: bgItems.length,
+        pending: bgItems.filter((i) => i.status === "pending").length,
+        running: bgItems.filter((i) => i.status === "running").length,
+        errored: bgItems.filter((i) => i.status === "failed").length,
+        needsReview: bgItems.filter((i) => i.needsReview).length,
+      };
+
+      const queues: Record<string, { depth: number; activeWorkers: number; maxConcurrency: number }> = {};
+      for (const [name, qm] of Object.entries(metrics.queues)) {
+        queues[name] = {
+          depth: qm.depth,
+          activeWorkers: qm.activeWorkers,
+          maxConcurrency: qm.maxConcurrency,
+        };
+      }
+
+      const lastDispatchAt = autoExecutor.getLastDispatchAt();
+
+      return reply.send({
+        scheduler: {
+          running: true,
+          pollIntervalMs: 500,
+          totalQueueDepth: metrics.queueDepth,
+          totalActiveWorkers: metrics.activeWorkers,
+          queues,
+        },
+        autoExecutor: {
+          enabled: autoExecutor.isEnabled(),
+          ...(lastDispatchAt !== null && { lastDispatchAt }),
+        },
+        backgroundQueue: bgSummary,
+      });
+    },
+  });
+
   // ─── Focus Areas & Epics endpoints ──────────────────────
 
   const focusAreaStorePath = path.join(

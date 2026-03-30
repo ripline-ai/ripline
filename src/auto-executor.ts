@@ -54,6 +54,8 @@ export class AutoExecutor {
    */
   private activeRunMap = new Map<string, string>();
 
+  private lastDispatchAt: number | null = null;
+
   private readonly eventHandler: (event: RunEvent) => void;
 
   constructor(opts: AutoExecutorOptions) {
@@ -101,6 +103,11 @@ export class AutoExecutor {
   /** Whether auto-dispatch is currently enabled. */
   isEnabled(): boolean {
     return this.enabled;
+  }
+
+  /** Timestamp of the last successful dispatch, or null if none. */
+  getLastDispatchAt(): number | null {
+    return this.lastDispatchAt;
   }
 
   // ─── Internal ─────────────────────────────────────────────
@@ -275,6 +282,7 @@ export class AutoExecutor {
       if (resolvedRunId) {
         this.activeRunMap.set(resolvedRunId, item.id);
         this.bgQueue.update(item.id, { runId: resolvedRunId });
+        this.lastDispatchAt = Date.now();
       }
 
       // Telegram notification
