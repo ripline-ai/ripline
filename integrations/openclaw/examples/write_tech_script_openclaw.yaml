@@ -1,5 +1,6 @@
 # Write Tech Script (OpenClaw)
-# Runs inside OpenClaw: uses default agent runner and hardcoded scripts directory.
+# Runs inside OpenClaw: uses default agent runner.
+# Set OPENCLAW_SCRIPTS_DIR to the directory where scripts should be saved (e.g. /home/user/scripts).
 # Input: idea (video concept/title), duration_minutes (target length).
 id: write_tech_script_openclaw
 name: Write Tech Script (OpenClaw)
@@ -111,7 +112,7 @@ nodes:
     type: agent
     mode: execute
     timeoutSeconds: 300
-    cwd: /home/openclaw/obsidian/Scripts
+    cwd: "{{env.OPENCLAW_SCRIPTS_DIR}}"
     prompt: |
       Save the following fact-checked script to disk.
 

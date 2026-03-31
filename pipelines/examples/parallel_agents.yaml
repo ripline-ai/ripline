@@ -1,0 +1,65 @@
+# Parallel Agents Example
+# Demonstrates running multiple claude-code agents in parallel, then merging results.
+# Inputs:
+#   topic — the subject to research and summarize
+id: parallel_agents
+name: Parallel Agents
+entry: [intake]
+
+nodes:
+  - id: intake
+    type: input
+    description: "topic: the subject to research and summarize"
+
+  # Two agents run in parallel, each tackling a different angle
+  - id: research
+    type: agent
+    runner: claude-code
+    mode: plan
+    prompt: |
+      Research the following topic and provide a concise factual summary covering
+      key concepts, recent developments, and important context.
+
+      Topic: {{topic}}
+
+      Output 3-5 bullet points of the most important facts.
+
+  - id: analysis
+    type: agent
+    runner: claude-code
+    mode: plan
+    prompt: |
+      Analyze the following topic and provide insights about its implications,
+      trade-offs, and open questions.
+
+      Topic: {{topic}}
+
+      Output 3-5 bullet points of the most interesting insights.
+
+  # Merge both agent outputs into a final summary
+  - id: synthesize
+    type: agent
+    runner: claude-code
+    mode: plan
+    prompt: |
+      Combine the research and analysis below into a single, well-structured
+      summary suitable for a technical audience.
+
+      ## Research
+      {{research.text}}
+
+      ## Analysis
+      {{analysis.text}}
+
+      Write a cohesive 2-3 paragraph summary.
+
+  - id: result
+    type: output
+    source: synthesize
+
+edges:
+  - { from: { node: intake },    to: { node: research } }
+  - { from: { node: intake },    to: { node: analysis } }
+  - { from: { node: research },  to: { node: synthesize } }
+  - { from: { node: analysis },  to: { node: synthesize } }
+  - { from: { node: synthesize }, to: { node: result } }

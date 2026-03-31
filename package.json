@@ -1,7 +1,7 @@
 {
   "name": "ripline",
   "version": "0.1.0",
-  "description": "Ripline: graph-native pipeline engine with graph DSL, loops, recursion, and agent delegation",
+  "description": "Ripline: open-source graph-native pipeline engine for coordinating agents, scripts, HTTP calls, and humans",
   "repository": "https://github.com/craigjmidwinter/ripline",
   "homepage": "https://craigjmidwinter.github.io/ripline/",
   "main": "dist/index.js",
@@ -12,7 +12,6 @@
   "files": [
     "bin",
     "dist",
-    "openclaw.plugin.json",
     "README.md",
     "docs",
     "pipelines"
@@ -35,9 +34,7 @@
     "ripline",
     "pipeline",
     "workflow",
-    "agent",
-    "openclaw",
-    "plugin"
+    "agent"
   ],
   "author": "Craig Midwinter",
   "license": "MIT",
@@ -64,10 +61,5 @@
     "typescript": "^5.7.3",
     "vitepress": "^1.6.4",
     "vitest": "^4.0.18"
-  },
-  "openclaw": {
-    "extensions": [
-      "./dist/index.js"
-    ]
   }
 }

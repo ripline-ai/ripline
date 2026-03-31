@@ -77,7 +77,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
   const program = new Command("ripline");
   const defaultRunsDir = options.defaults?.runsDir ?? path.join(process.cwd(), ".ripline", "runs");
   const defaultPipelinesDir = options.defaults?.pipelinesDir ?? path.join(process.cwd(), "pipelines");
-  const defaultPipelinePath = path.join(defaultPipelinesDir, "examples", "hello-world.yaml");
+  const defaultPipelinePath = path.join(defaultPipelinesDir, "examples", "hello_world.yaml");
 
   program
     .description("Pipeline runner: run pipelines by ID or path, list pipelines and profiles")

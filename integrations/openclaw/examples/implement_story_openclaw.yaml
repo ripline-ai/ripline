@@ -1,5 +1,6 @@
 # Implement Story (OpenClaw)
-# Runs inside OpenClaw: uses default agent runner and hardcoded workspace path.
+# Runs inside OpenClaw: uses default agent runner.
+# Set OPENCLAW_WORKSPACE to the project workspace path (e.g. /home/user/myproject).
 # Invoked by spec_then_build_queue_openclaw when spawning implementation tasks.
 id: implement_story_openclaw
 name: Implement Story (OpenClaw)
@@ -11,7 +12,7 @@ nodes:
   - id: implement
     type: agent
     mode: execute
-    cwd: /home/openclaw/wintermute
+    cwd: "{{env.OPENCLAW_WORKSPACE}}"
     timeoutSeconds: 600
     prompt: |
       Implement the following development story in the Wintermute codebase. Write the necessary code changes, then commit your work with a descriptive commit message referencing the story ID.
