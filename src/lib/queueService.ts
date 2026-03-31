@@ -1,4 +1,4 @@
-import { resolveStageConfig } from "../config.js";
+import { resolveConfig } from "../config.js";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -54,7 +54,7 @@ export type QueueService = {
  * Create a typed wrapper around the Ripline queue HTTP API.
  *
  * @param baseUrl  Override the Ripline base URL. When omitted, derives it
- *                 from the STAGE env var via `resolveStageConfig()`.
+ *                 from the STAGE env var via `resolveConfig()`.
  * @param fetchFn  Override the global `fetch` (useful for testing / DI).
  */
 export function createQueueService(options?: {
@@ -63,7 +63,7 @@ export function createQueueService(options?: {
 }): QueueService {
   const base =
     options?.baseUrl ??
-    `http://localhost:${resolveStageConfig().port}`;
+    `http://localhost:${resolveConfig().port}`;
   const fetchFn = options?.fetchFn ?? globalThis.fetch;
 
   async function listQueue(): Promise<QueueItem[]> {

@@ -9,7 +9,7 @@ import { loadPipelineDefinition, resolvePipelineFile } from "../lib/pipeline/loa
 import { DeterministicRunner, type RunnerOptions } from "../pipeline/runner.js";
 import { loadInputs, parseEnvPairs } from "./helpers.js";
 import { startServer } from "../server.js";
-import { resolveStageConfig } from "../config.js";
+import { resolveConfig } from "../config.js";
 import { PipelineRunStore } from "../run-store.js";
 import { createRunQueue } from "../run-queue.js";
 import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "../log.js";
@@ -613,7 +613,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
   program
     .command("serve")
     .description("Start the HTTP API server (GET /pipelines, POST /pipelines/:id/run, GET /runs, GET /runs/:runId, GET /runs/:runId/stream, GET /runs/:runId/logs, GET /metrics)")
-    .option("--port <number>", `Port (default: ${resolveStageConfig().port})`, String(resolveStageConfig().port))
+    .option("--port <number>", `Port (default: ${resolveConfig().port})`, String(resolveConfig().port))
     .option("--pipelines-dir <path>", "Pipelines directory", defaultPipelinesDir)
     .option("--runs-dir <path>", "Run state directory (or set RIPLINE_RUNS_DIR)", defaultRunsDir)
     .option("--max-concurrency <n>", "Max concurrent pipeline runs for the default queue (0 = inline; default 1)", "1")
@@ -641,12 +641,11 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       const agentRunner = llmConfig ? createLlmAgentRunner(llmConfig) : undefined;
       const claudeCodeConfig = resolveClaudeCodeConfig({ cwd: process.cwd(), homedir: os.homedir() });
       const claudeCodeRunner = claudeCodeConfig ? createClaudeCodeRunner(claudeCodeConfig) : undefined;
-      // Inject stage-aware URLs into process.env so Claude Code agents (and the
-      // Python scripts they run) can access them via os.environ without hardcoding
-      // localhost ports.  Caller-set env vars always take precedence.
-      const serveStageConfig = resolveStageConfig();
-      if (!process.env.WINTERMUTE_URL) process.env.WINTERMUTE_URL = serveStageConfig.wintermuteBaseUrl;
-      if (!process.env.RIPLINE_URL)    process.env.RIPLINE_URL    = serveStageConfig.riplineUrl;
+      // Inject the self-referential Ripline URL into process.env so Claude Code
+      // agents (and the Python scripts they run) can access it via os.environ
+      // without hardcoding localhost ports.  Caller-set env vars always take precedence.
+      const serveConfig = resolveConfig();
+      if (!process.env.RIPLINE_URL) process.env.RIPLINE_URL = serveConfig.riplineUrl;
 
       // Load user config early so queue logging and container build config are both available
       const serveUserConfig = loadUserConfig(os.homedir());

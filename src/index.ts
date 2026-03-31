@@ -10,7 +10,7 @@ import {
   normalizeLlmAgentConfigFromPlugin,
   normalizeClaudeCodeConfigFromPlugin,
 } from "./agent-runner-config.js";
-import { resolveStageConfig } from "./config.js";
+import { resolveConfig } from "./config.js";
 import { DefaultRunnerRegistry } from "./interfaces/runner-registry.js";
 
 interface PluginLogger {
@@ -108,8 +108,8 @@ export function normalizeConfig(raw: unknown): NormalizedConfig {
   const runsDir = typeof source.runsDir === "string" && source.runsDir.trim()
     ? resolvePath(source.runsDir)
     : path.join(process.cwd(), DEFAULT_RUNS_DIR);
-  const stageConfig = resolveStageConfig();
-  const httpPort = typeof source.httpPort === "number" ? source.httpPort : stageConfig.port;
+  const riplineConfig = resolveConfig();
+  const httpPort = typeof source.httpPort === "number" ? source.httpPort : riplineConfig.port;
   const httpPath = typeof source.httpPath === "string" ? source.httpPath : "/pipelines";
   const authToken = typeof source.authToken === "string" ? source.authToken : undefined;
   const maxConcurrency = typeof source.maxConcurrency === "number" ? source.maxConcurrency : 1;

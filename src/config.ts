@@ -8,30 +8,48 @@ import { queuesConfigSchema } from "./schema.js";
 
 export type Stage = "production" | "staging";
 
-export interface StageConfig {
+export interface RiplineConfig {
   /** The stage name (production or staging). */
   stage: Stage;
   /** HTTP port for Ripline to listen on. */
   port: number;
-  /** Wintermute base URL (no trailing slash). */
-  wintermuteBaseUrl: string;
   /** Self-referential Ripline base URL (no trailing slash). */
   riplineUrl: string;
 }
 
-const STAGE_MAP: Record<Stage, { port: number; wintermuteBaseUrl: string; riplineUrl: string }> = {
-  production: { port: 4001, wintermuteBaseUrl: "http://localhost:3000", riplineUrl: "http://localhost:4001" },
-  staging:    { port: 4002, wintermuteBaseUrl: "http://localhost:3001", riplineUrl: "http://localhost:4002" },
+const STAGE_PORT: Record<Stage, number> = {
+  production: 4001,
+  staging:    4002,
 };
 
 /**
- * Resolve port and wintermuteBaseUrl from the STAGE environment variable.
- * Accepted values: "production", "staging". Unset or unrecognised defaults to production.
+ * Resolve Ripline port and self-URL from the STAGE environment variable,
+ * RIPLINE_PORT / RIPLINE_URL env vars, and ~/.ripline/config.json.
+ *
+ * Priority (highest first):
+ *   1. RIPLINE_PORT / RIPLINE_URL env vars
+ *   2. ~/.ripline/config.json { port, riplineUrl }
+ *   3. STAGE env var default (production → 4001, staging → 4002)
+ *
+ * No third-party service URLs are included here. Use integration-specific
+ * helpers (e.g. WintermuteEventSink) to resolve external service URLs.
  */
-export function resolveStageConfig(env?: Record<string, string | undefined>): StageConfig {
-  const raw = (env ?? process.env).STAGE;
+export function resolveConfig(
+  env?: Record<string, string | undefined>,
+  homedir?: string
+): RiplineConfig {
+  const e = env ?? process.env;
+  const raw = e.STAGE;
   const stage: Stage = raw === "staging" ? "staging" : "production";
-  return { stage, ...STAGE_MAP[stage] };
+  const stageDefaultPort = STAGE_PORT[stage];
+
+  // Env-var overrides (highest priority)
+  const envPort = e.RIPLINE_PORT ? parseInt(e.RIPLINE_PORT, 10) : undefined;
+  const port = envPort && !isNaN(envPort) ? envPort : stageDefaultPort;
+
+  const riplineUrl = e.RIPLINE_URL ?? `http://localhost:${port}`;
+
+  return { stage, port, riplineUrl };
 }
 
 /**

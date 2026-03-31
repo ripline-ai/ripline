@@ -7,7 +7,7 @@ import {
   loadUserConfig,
   resolvePipelineDir,
   resolveProfileDir,
-  resolveStageConfig,
+  resolveConfig,
 } from "../src/config.js";
 
 describe("normalizeConfig", () => {
@@ -239,30 +239,30 @@ describe("resolveProfileDir", () => {
   });
 });
 
-describe("resolveStageConfig", () => {
+describe("resolveConfig", () => {
   it("returns production config when STAGE is unset", () => {
-    const cfg = resolveStageConfig({});
+    const cfg = resolveConfig({});
     expect(cfg.stage).toBe("production");
     expect(cfg.port).toBe(4001);
-    expect(cfg.wintermuteBaseUrl).toBe("http://localhost:3000");
+    expect(cfg.riplineUrl).toBe("http://localhost:4001");
   });
 
   it("returns production config when STAGE is 'production'", () => {
-    const cfg = resolveStageConfig({ STAGE: "production" });
+    const cfg = resolveConfig({ STAGE: "production" });
     expect(cfg.stage).toBe("production");
     expect(cfg.port).toBe(4001);
-    expect(cfg.wintermuteBaseUrl).toBe("http://localhost:3000");
+    expect(cfg.riplineUrl).toBe("http://localhost:4001");
   });
 
   it("returns staging config when STAGE is 'staging'", () => {
-    const cfg = resolveStageConfig({ STAGE: "staging" });
+    const cfg = resolveConfig({ STAGE: "staging" });
     expect(cfg.stage).toBe("staging");
     expect(cfg.port).toBe(4002);
-    expect(cfg.wintermuteBaseUrl).toBe("http://localhost:3001");
+    expect(cfg.riplineUrl).toBe("http://localhost:4002");
   });
 
   it("defaults to production for unrecognised STAGE values", () => {
-    const cfg = resolveStageConfig({ STAGE: "dev" });
+    const cfg = resolveConfig({ STAGE: "dev" });
     expect(cfg.stage).toBe("production");
     expect(cfg.port).toBe(4001);
   });

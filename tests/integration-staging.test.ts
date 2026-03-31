@@ -9,7 +9,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import os from "node:os";
 import { createApp } from "../src/server.js";
-import { resolveStageConfig } from "../src/config.js";
+import { resolveConfig } from "../src/config.js";
 
 describe("integration: Ripline STAGE=staging", () => {
   let app: Awaited<ReturnType<typeof createApp>>;
@@ -25,20 +25,20 @@ describe("integration: Ripline STAGE=staging", () => {
     await fs.rm(runsDir, { recursive: true, force: true }).catch(() => {});
   });
 
-  it("resolveStageConfig returns port 4002 for staging", () => {
-    const cfg = resolveStageConfig({ STAGE: "staging" });
+  it("resolveConfig returns port 4002 for staging", () => {
+    const cfg = resolveConfig({ STAGE: "staging" });
     expect(cfg.stage).toBe("staging");
     expect(cfg.port).toBe(4002);
-    expect(cfg.wintermuteBaseUrl).toBe("http://localhost:3001");
+    expect(cfg).not.toHaveProperty("wintermuteBaseUrl");
   });
 
   it("createApp responds to health check when configured for staging port", async () => {
-    const stageConfig = resolveStageConfig({ STAGE: "staging" });
+    const cfg = resolveConfig({ STAGE: "staging" });
 
     app = await createApp({
       pipelinesDir: path.join(process.cwd(), "pipelines", "examples"),
       httpPath: "/",
-      httpPort: stageConfig.port,
+      httpPort: cfg.port,
       runsDir,
     });
 
@@ -47,8 +47,8 @@ describe("integration: Ripline STAGE=staging", () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it("resolveStageConfig defaults to production (port 4001) when STAGE is unset", () => {
-    const cfg = resolveStageConfig({});
+  it("resolveConfig defaults to production (port 4001) when STAGE is unset", () => {
+    const cfg = resolveConfig({});
     expect(cfg.stage).toBe("production");
     expect(cfg.port).toBe(4001);
   });

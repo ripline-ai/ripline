@@ -1,5 +1,6 @@
 import type { RunnerRegistry } from "../../interfaces/runner-registry.js";
 import { createOpenClawAgentRunner, type OpenClawPluginApi } from "./openclaw-runner.js";
+export { WintermuteEventSink } from "./wintermute-event-sink.js";
 
 export { createOpenClawAgentRunner, type OpenClawPluginApi } from "./openclaw-runner.js";
 

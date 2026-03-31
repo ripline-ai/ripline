@@ -23,7 +23,7 @@ import type { AgentRunner } from "./executors/index.js";
 import { ActivityEmitter } from "../activity-emitter.js";
 import type { ActivityEvent } from "../types/activity.js";
 import type { EventSink } from "../interfaces/event-sink.js";
-import { resolveStageConfig } from "../config.js";
+import { resolveConfig } from "../config.js";
 import { evaluateExpression } from "../expression.js";
 import { HttpResponseError, computeBackoffMs } from "../lib/http-response-guard.js";
 import { classifyError } from "./error-classifier.js";
@@ -221,12 +221,11 @@ export class DeterministicRunner extends EventEmitter {
       await (this.store as { init(): Promise<void> }).init();
     }
 
-    // Inject stage-aware URLs so pipeline templates can reference {{env.WINTERMUTE_URL}}
-    // and {{env.RIPLINE_URL}} without hardcoding localhost ports.
+    // Inject stage-aware URL so pipeline templates can reference {{env.RIPLINE_URL}}
+    // without hardcoding localhost ports.
     // Caller-supplied env values always win (e.g. for tests or manual overrides).
-    const { wintermuteBaseUrl, riplineUrl } = resolveStageConfig();
+    const { riplineUrl } = resolveConfig();
     const stageEnv: Record<string, string> = {
-      WINTERMUTE_URL: wintermuteBaseUrl,
       RIPLINE_URL: riplineUrl,
     };
 
