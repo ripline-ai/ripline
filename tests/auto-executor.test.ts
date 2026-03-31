@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { AutoExecutor } from "../src/auto-executor.js";
 import { BackgroundQueue } from "../src/background-queue.js";
+import { YamlFileQueueStore } from "../src/interfaces/queue-store.js";
 import { EventBus } from "../src/event-bus.js";
 import type { RunStore } from "../src/run-store.js";
 import type { RunQueue } from "../src/run-queue.js";
@@ -44,7 +45,7 @@ describe("AutoExecutor", () => {
   beforeEach(() => {
     EventBus.resetForTesting();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ae-test-"));
-    bgQueue = new BackgroundQueue({ filePath: path.join(tmpDir, "queue.yaml") });
+    bgQueue = new BackgroundQueue({ store: new YamlFileQueueStore(path.join(tmpDir, "queue.yaml")) });
   });
 
   afterEach(() => {
