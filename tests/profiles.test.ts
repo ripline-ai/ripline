@@ -150,8 +150,7 @@ inputs: {}
 agents:
   valid:
     runner: openclaw
-  invalid:
-    runner: unknown-runner
+  invalid: "not-an-object"
 `,
       "utf-8"
     );

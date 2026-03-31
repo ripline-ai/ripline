@@ -394,8 +394,12 @@ describe("Story-6: Schema extensibility — runner field accepts arbitrary strin
     const { pipelineDefinitionSchema } = await import("../src/schema.js");
     const result = pipelineDefinitionSchema.safeParse({
       id: "test",
-      nodes: [{ id: "n1", type: "agent", prompt: "hello", runner: "claude-code" }],
-      edges: [],
+      entry: ["n1"],
+      nodes: [
+        { id: "n1", type: "agent", prompt: "hello", runner: "claude-code" },
+        { id: "out", type: "output" },
+      ],
+      edges: [{ from: { node: "n1" }, to: { node: "out" } }],
     });
     expect(result.success).toBe(true);
   });
@@ -404,8 +408,12 @@ describe("Story-6: Schema extensibility — runner field accepts arbitrary strin
     const { pipelineDefinitionSchema } = await import("../src/schema.js");
     const result = pipelineDefinitionSchema.safeParse({
       id: "test",
-      nodes: [{ id: "n1", type: "agent", prompt: "hello", runner: "my-custom-runner" }],
-      edges: [],
+      entry: ["n1"],
+      nodes: [
+        { id: "n1", type: "agent", prompt: "hello", runner: "my-custom-runner" },
+        { id: "out", type: "output" },
+      ],
+      edges: [{ from: { node: "n1" }, to: { node: "out" } }],
     });
     expect(result.success).toBe(true);
   });
