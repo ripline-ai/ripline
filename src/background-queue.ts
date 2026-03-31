@@ -90,6 +90,18 @@ export class BackgroundQueue {
     return true;
   }
 
+  /** Clear the runId field from an item (used when resetting ghost items to pending). */
+  clearRunId(id: string): boolean {
+    const items = this.read();
+    const idx = items.findIndex((i) => i.id === id);
+    if (idx === -1) return false;
+    const item = { ...items[idx]! };
+    delete item.runId;
+    items[idx] = item;
+    this.write(items);
+    return true;
+  }
+
   // ─── Priority & Pop ──────────────────────────────────────
 
   /**

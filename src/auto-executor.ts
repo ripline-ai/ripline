@@ -165,7 +165,8 @@ export class AutoExecutor {
 
       if (!run) {
         log.log("warn", `[auto-executor] ghost item ${item.id} references missing run ${item.runId} — resetting to pending`);
-        this.bgQueue.update(item.id, { status: "pending", runId: undefined });
+        this.bgQueue.update(item.id, { status: "pending" });
+        this.bgQueue.clearRunId(item.id);
         this.activeRunMap.delete(item.runId);
         resetCount++;
         continue;
@@ -173,7 +174,8 @@ export class AutoExecutor {
 
       if (TERMINAL_STATUSES.has(run.status)) {
         log.log("warn", `[auto-executor] ghost item ${item.id} references terminal run ${item.runId} (${run.status}) — resetting to pending`);
-        this.bgQueue.update(item.id, { status: "pending", runId: undefined });
+        this.bgQueue.update(item.id, { status: "pending" });
+        this.bgQueue.clearRunId(item.id);
         this.activeRunMap.delete(item.runId);
         resetCount++;
         continue;
