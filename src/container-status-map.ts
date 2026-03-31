@@ -2,8 +2,8 @@
  * container-status-map — maps container build results to pipeline run statuses.
  *
  * Provides a single source of truth for how ContainerBuildResult fields
- * translate into PipelineRunStatus values, ensuring Wintermute's pipeline
- * status display correctly reflects container-based execution states.
+ * translate into PipelineRunStatus values, ensuring pipeline
+ * status correctly reflects container-based execution states.
  *
  * Mapping rules:
  *   container exit 0 + promote "merged"         → "completed"

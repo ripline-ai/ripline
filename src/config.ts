@@ -32,7 +32,7 @@ const STAGE_PORT: Record<Stage, number> = {
  *   3. STAGE env var default (production → 4001, staging → 4002)
  *
  * No third-party service URLs are included here. Use integration-specific
- * helpers (e.g. WintermuteEventSink) to resolve external service URLs.
+ * helpers (e.g. integration event sinks) to resolve external service URLs.
  */
 export function resolveConfig(
   env?: Record<string, string | undefined>,

@@ -81,7 +81,7 @@ export type PipelinePluginConfig = {
   authToken?: string;
   /** Directory for run state (default .ripline/runs). Used by HTTP server. */
   runsDir?: string;
-  /** File path for the background queue YAML store (default ~/obsidian/Ops/queue.yaml). */
+  /** File path for the background queue YAML store. */
   queueFilePath?: string;
   /** Per-queue configuration (concurrency + resource limits). e.g. { build: { concurrency: 3, resourceLimits: { cpus: "1", memory: "2g" } } } */
   queues?: Record<string, QueueConfig>;

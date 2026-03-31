@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createOpenClawAgentRunner,
   type OpenClawPluginApi,
-} from "../src/openclaw-agent-runner.js";
+} from "../src/integrations/openclaw/openclaw-runner.js";
 
 describe("createOpenClawAgentRunner", () => {
   it("builds openclaw agent --json with agentId and prompt, parses JSON to AgentResult", async () => {

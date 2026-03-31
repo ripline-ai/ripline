@@ -13,7 +13,7 @@ export type AgentResult = {
   tokenUsage?: { input?: number; output?: number };
 };
 
-/** Injectable runner for agent nodes (e.g. OpenClaw sessions_spawn). */
+/** Injectable runner for agent nodes (e.g. an external agent runner). */
 export type AgentRunner = (params: {
   agentId: string;
   prompt: string;
@@ -100,8 +100,8 @@ export async function executeAgent(
 
   if (!runner) {
     const msg = useClaudeCode
-      ? "Agent node requires claude-code runner (use standalone Ripline with Claude Code config; not available inside OpenClaw)"
-      : "Agent node requires agentRunner in runner options (e.g. OpenClaw sessions_spawn)";
+      ? "Agent node requires claude-code runner (configure Claude Code runner or provide an external agentRunner)"
+      : "Agent node requires agentRunner in runner options";
     throw new Error(msg);
   }
 

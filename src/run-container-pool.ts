@@ -46,7 +46,7 @@ export interface ExecResult {
 
 /* ── DEFAULT BUILD IMAGE ─────────────────────────────────────────────── */
 
-export const DEFAULT_BUILD_IMAGE = "ghcr.io/craigjmidwinter/wintermute-build-env:latest";
+export const DEFAULT_BUILD_IMAGE = "ubuntu:22.04";
 
 /* ── RunContainerPool ───────────────────────────────────────────────── */
 

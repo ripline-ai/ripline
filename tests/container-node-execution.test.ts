@@ -821,7 +821,7 @@ describe("Build pipeline container lifecycle (stub mode)", () => {
     pool.release(runId);
   });
 
-  it("DEFAULT_BUILD_IMAGE is the wintermute-build-env image", () => {
-    expect(DEFAULT_BUILD_IMAGE).toBe("ghcr.io/craigjmidwinter/wintermute-build-env:latest");
+  it("DEFAULT_BUILD_IMAGE is a generic base image", () => {
+    expect(DEFAULT_BUILD_IMAGE).toBe("ubuntu:22.04");
   });
 });

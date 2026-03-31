@@ -60,7 +60,7 @@ export type RunnerOptions = {
   quiet?: boolean;
   /** Required for agent nodes unless node uses runner: claude-code (then claudeCodeRunner required). */
   agentRunner?: AgentRunner;
-  /** For agent nodes with runner: claude-code. Not set when running inside OpenClaw. */
+  /** For agent nodes with runner: claude-code. Not set when an external agent runner is used. */
   claudeCodeRunner?: AgentRunner;
   /** Global named agent definitions. Merged with pipeline-level agents (pipeline wins). */
   agentDefinitions?: Record<string, AgentDefinition>;
