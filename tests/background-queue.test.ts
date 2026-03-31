@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { BackgroundQueue } from "../src/background-queue.js";
+import { YamlFileQueueStore } from "../src/interfaces/queue-store.js";
 
 describe("BackgroundQueue", () => {
   let tmpDir: string;
@@ -18,7 +19,7 @@ describe("BackgroundQueue", () => {
   });
 
   function makeQueue(opts?: { maxRetries?: number }) {
-    return new BackgroundQueue({ filePath: queueFile, maxRetries: opts?.maxRetries });
+    return new BackgroundQueue({ store: new YamlFileQueueStore(queueFile), maxRetries: opts?.maxRetries });
   }
 
   // ─── Story 2: YAML persistence & CRUD ──────────────────
@@ -110,13 +111,13 @@ describe("BackgroundQueue", () => {
     });
 
     it("returns empty list when file does not exist", () => {
-      const q = new BackgroundQueue({ filePath: path.join(tmpDir, "no-file.yaml") });
+      const q = new BackgroundQueue({ store: new YamlFileQueueStore(path.join(tmpDir, "no-file.yaml")) });
       expect(q.list()).toEqual([]);
     });
 
     it("creates parent directories if they do not exist", () => {
       const nested = path.join(tmpDir, "a", "b", "queue.yaml");
-      const q = new BackgroundQueue({ filePath: nested });
+      const q = new BackgroundQueue({ store: new YamlFileQueueStore(nested) });
       q.add({ pipeline: "nested" });
       expect(fs.existsSync(nested)).toBe(true);
     });

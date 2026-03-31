@@ -20,6 +20,7 @@ import { EventBus, type BusEvent } from "./event-bus.js";
 import { createRunQueue } from "./run-queue.js";
 import { createScheduler } from "./scheduler.js";
 import { BackgroundQueue } from "./background-queue.js";
+import { YamlFileQueueStore } from "./interfaces/queue-store.js";
 import { loadUserConfig } from "./config.js";
 import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
@@ -837,8 +838,10 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
   // ─── Background Queue endpoints ───────────────────────────
 
   const userConfig = loadUserConfig();
+  const defaultQueuePath = path.join(os.homedir(), ".ripline", "queue.yaml");
+  const queueStore = new YamlFileQueueStore(config.queueFilePath ?? defaultQueuePath);
   const bgQueue = new BackgroundQueue({
-    ...(config.queueFilePath != null ? { filePath: config.queueFilePath } : {}),
+    store: queueStore,
     maxRetries: userConfig.backgroundQueue?.maxRetries ?? 5,
   });
 
