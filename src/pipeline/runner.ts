@@ -20,8 +20,9 @@ import { EventBus } from "../event-bus.js";
 import type { RunEvent } from "../event-bus.js";
 import { executeNode } from "./executors/index.js";
 import type { AgentRunner } from "./executors/index.js";
-import { emitActivity, flushActivityBuffer } from "../activity-emitter.js";
+import { ActivityEmitter } from "../activity-emitter.js";
 import type { ActivityEvent } from "../types/activity.js";
+import type { EventSink } from "../interfaces/event-sink.js";
 import { resolveStageConfig } from "../config.js";
 import { evaluateExpression } from "../expression.js";
 import { HttpResponseError, computeBackoffMs } from "../lib/http-response-guard.js";
@@ -81,6 +82,8 @@ export type RunnerOptions = {
    * Default Docker image for container nodes that don't specify one (from containerBuild.buildImage).
    */
   defaultContainerImage?: string;
+  /** EventSink for activity events. Defaults to NoopEventSink when not provided. */
+  eventSink?: EventSink;
 };
 
 export type NodeStartedEvent = { nodeId: string; nodeType: string; at: number };
@@ -103,6 +106,7 @@ export class DeterministicRunner extends EventEmitter {
   private readonly store: RunStore;
   private readonly nodeById: Map<string, PipelineNode>;
   private readonly runnerOptions: RunnerOptions;
+  private readonly activityEmitter: ActivityEmitter;
 
   constructor(
     private readonly definition: PipelineDefinition,
@@ -113,9 +117,10 @@ export class DeterministicRunner extends EventEmitter {
     const runsDir = path.resolve(options.runsDir ?? DEFAULT_RUNS_DIR);
     this.store = options.store ?? new PipelineRunStore(runsDir);
     this.nodeById = new Map(definition.nodes.map((n) => [n.id, n]));
+    this.activityEmitter = new ActivityEmitter(options.eventSink);
   }
 
-  /** Build and fire-and-forget an activity event to Wintermute. */
+  /** Build and fire-and-forget an activity event via the configured EventSink. */
   private emitActivityEvent(
     runId: string,
     nodeId: string,
@@ -137,7 +142,7 @@ export class DeterministicRunner extends EventEmitter {
       ...(extra?.durationMs !== undefined && { details: `duration_ms=${extra.durationMs}` }),
       ...(extra?.error !== undefined && { details: extra.error }),
     };
-    emitActivity(event);
+    this.activityEmitter.emit(event);
   }
 
   /**
@@ -318,7 +323,7 @@ export class DeterministicRunner extends EventEmitter {
     }
 
     // Flush any buffered activity events from previous runs (fire-and-forget).
-    flushActivityBuffer().catch(() => {});
+    this.activityEmitter.flushBuffer().catch(() => {});
 
     // --- Run-level container lifecycle ---
     // When the pipeline definition has a `container` field AND a containerPool is provided,
