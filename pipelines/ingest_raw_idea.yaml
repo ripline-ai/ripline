@@ -1,0 +1,210 @@
+# Ingest Raw Idea Pipeline
+# Takes a free-text brain dump, analyzes it to determine if it contains one idea
+# or multiple independent ideas (conservative bias), creates each as a Wintermute
+# card, then runs flesh_out_idea on each to generate full specs with stories.
+#
+# Inputs:
+#   raw_input  — free text (the brain dump, required)
+#   project_id — optional Wintermute project ID to assign to created ideas
+#   stage      — "production" | "staging" (default: "production")
+#                production → localhost:3000 (Wintermute), localhost:4001 (Ripline)
+#                staging    → localhost:3001 (Wintermute), localhost:4002 (Ripline)
+
+id: ingest_raw_idea
+name: Ingest Raw Idea
+queue: spec
+entry: [intake]
+
+nodes:
+  - id: intake
+    type: input
+
+  # ── 1. Resolve URLs based on stage ──────────────────────────────────────────
+  - id: resolve_urls
+    type: transform
+    expression: "(function() { var s = (inputs.stage || 'production').toLowerCase(); var wp = s === 'staging' ? 3001 : 3000; var rp = s === 'staging' ? 4002 : 4001; return { wintermute_url: 'http://localhost:' + wp, ripline_url: 'http://localhost:' + rp, stage: s }; })()"
+
+  # ── 2. Analyze the raw input ──────────────────────────────────────────────
+  # Determines whether the text is one idea or multiple independent ideas.
+  # Uses CONSERVATIVE bias — only split if clearly independent concerns.
+  - id: analyze_input
+    type: agent
+    runner: claude-code
+    mode: execute
+    timeoutSeconds: 120
+    prompt: |
+      You are a senior product thinker. Analyze the following raw brain dump and determine whether it contains one idea or multiple independent ideas.
+
+      ## Raw Input
+      {{raw_input}}
+
+      ## Analysis Guidelines
+
+      Apply a CONSERVATIVE bias — only split into multiple ideas when:
+      - The text clearly describes DIFFERENT systems, subsystems, or workflows
+      - Each part has standalone value and could be implemented independently
+      - Combining them into one idea would create confusion about scope or acceptance criteria
+
+      Do NOT split when:
+      - The parts are tightly coupled steps of a single workflow
+      - The sub-parts have no standalone value
+      - The idea is simply large but cohesive
+
+      Produce a JSON array of idea objects. Each object must have:
+      - "title": short, specific title (max 10 words)
+      - "description": 1-3 sentence description of what the idea is
+
+      If it is one idea, produce an array with one element.
+      If it is multiple independent ideas, produce an array with one element per idea.
+
+      Output ONLY the JSON array — no markdown fencing, no prose.
+
+  # ── 3. Parse the JSON array of ideas ─────────────────────────────────────
+  - id: parse_ideas
+    type: transform
+    expression: |
+      (function(text) {
+        var t = text.trim();
+        var start = t.indexOf('[');
+        var end = t.lastIndexOf(']');
+        if (start !== -1 && end !== -1 && end > start) {
+          try { return { ideas: JSON.parse(t.slice(start, end + 1)) }; } catch(e) {}
+        }
+        var m = t.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        var parsed = JSON.parse(m ? m[1].trim() : t);
+        return { ideas: Array.isArray(parsed) ? parsed : [parsed] };
+      })(artifacts.analyze_input.text)
+
+  # ── 4. Create each idea in Wintermute (sequential) ───────────────────────
+  # For each proposed idea, POSTs to /api/ideas with properly JSON-escaped fields.
+  # The agent constructs and escapes the JSON body to avoid quoting issues.
+  - id: create_ideas
+    type: loop
+    mode: sequential
+    collection: "artifacts.parse_ideas.ideas"
+    itemVar: proposed_idea
+    body:
+      nodes:
+        - id: create_idea
+          type: agent
+          runner: claude-code
+          mode: execute
+          dangerouslySkipPermissions: true
+          cwd: /home/openclaw
+          timeoutSeconds: 30
+          prompt: |
+            Create a new idea in Wintermute using the following data.
+
+            Title: {{proposed_idea.title}}
+            Description: {{proposed_idea.description}}
+            Project ID: {{project_id}}
+            Wintermute URL: {{resolve_urls.wintermute_url}}
+
+            Build a properly JSON-escaped body with these fields:
+              title: <Title above>
+              description: <Description above>
+              {{#if project_id}}projectId: "{{project_id}}"{{/if}}
+
+            Then run (replacing <JSON_BODY> with the properly escaped JSON):
+
+            curl -s -X POST {{resolve_urls.wintermute_url}}/api/ideas \
+              -H "Content-Type: application/json" \
+              -d '<JSON_BODY>'
+
+            Output ONLY the raw JSON response from the server — no explanation, no markdown fencing, no prose.
+
+        - id: parse_created
+          type: transform
+          expression: |
+            (function(text) {
+              var t = text.trim();
+              var start = t.indexOf('{');
+              var end = t.lastIndexOf('}');
+              if (start !== -1 && end !== -1 && end > start) {
+                try { return JSON.parse(t.slice(start, end + 1)); } catch(e) {}
+              }
+              var m = t.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+              return JSON.parse(m ? m[1].trim() : t);
+            })(artifacts.create_idea.text)
+
+        - id: idea_result
+          type: output
+          source: parse_created
+
+      edges:
+        - { from: { node: create_idea }, to: { node: parse_created } }
+        - { from: { node: parse_created }, to: { node: idea_result } }
+
+  # ── 5. Collect created idea IDs ──────────────────────────────────────────
+  - id: collect_idea_ids
+    type: transform
+    expression: |
+      (function() {
+        var results = artifacts.create_ideas;
+        if (!Array.isArray(results)) results = [results];
+        var ids = results
+          .map(function(r) { return r && r.id; })
+          .filter(function(id) { return typeof id === 'string' && id.length > 0; });
+        return { idea_ids: ids, count: ids.length };
+      })()
+
+  # ── 6. Flesh out each idea (parallel, max 3 concurrent) ──────────────────
+  # Triggers the flesh_out_idea pipeline via Ripline REST API for each created idea.
+  # The agent polls until each run completes.
+  - id: flesh_out_loop
+    type: loop
+    mode: parallel
+    maxConcurrency: 3
+    collection: "artifacts.collect_idea_ids.idea_ids"
+    itemVar: idea_id
+    body:
+      nodes:
+        - id: trigger_flesh_out
+          type: agent
+          runner: claude-code
+          mode: execute
+          dangerouslySkipPermissions: true
+          cwd: /home/openclaw
+          timeoutSeconds: 600
+          prompt: |
+            Trigger the flesh_out_idea Ripline pipeline for idea "{{idea_id}}" and wait for it to complete.
+
+            Step 1 — start the pipeline run:
+
+            curl -s -X POST {{resolve_urls.ripline_url}}/pipelines/flesh_out_idea/run \
+              -H "Content-Type: application/json" \
+              -d '{"inputs": {"idea_id": "{{idea_id}}", "stage": "{{resolve_urls.stage}}"}}'
+
+            Parse the runId from the JSON response (it will be in a field called "runId", "id", or "run_id").
+
+            Step 2 — poll every 10 seconds until status is "completed" or "failed" (max 50 attempts):
+
+            curl -s {{resolve_urls.ripline_url}}/runs/<runId>
+
+            Check the "status" field in each response. Stop when status is "completed" or "failed".
+
+            Output ONLY a JSON object with these fields:
+            {"idea_id": "{{idea_id}}", "runId": "<runId>", "status": "<final_status>"}
+
+        - id: flesh_result
+          type: output
+          source: trigger_flesh_out
+
+      edges:
+        - { from: { node: trigger_flesh_out }, to: { node: flesh_result } }
+
+  # ── 7. Output ────────────────────────────────────────────────────────────
+  - id: result
+    type: output
+    source: collect_idea_ids
+
+edges:
+  - { from: { node: intake },           to: { node: resolve_urls } }
+  - { from: { node: resolve_urls },     to: { node: analyze_input } }
+  - { from: { node: analyze_input },    to: { node: parse_ideas } }
+  - { from: { node: parse_ideas },      to: { node: create_ideas } }
+  - { from: { node: create_ideas },     to: { node: collect_idea_ids } }
+  - { from: { node: collect_idea_ids }, to: { node: flesh_out_loop } }
+  - { from: { node: flesh_out_loop },   to: { node: result } }
+  # Error fallback: if flesh_out_loop fails, still output what was created
+  - { from: { node: flesh_out_loop },   to: { node: result }, on_error: true }
