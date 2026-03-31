@@ -46,6 +46,7 @@ export default defineConfig({
           { text: "Pipelines & Profiles", link: "/pipelines-and-profiles" },
           { text: "Agent Integration", link: "/agent-integration" },
           { text: "Automation & Cron", link: "/automation-cron" },
+          { text: "OpenClaw Integration", link: "/integrations/openclaw" },
           { text: "Migrating from OpenClaw", link: "/migrating-from-openclaw" },
         ],
       },
@@ -72,6 +73,7 @@ export default defineConfig({
           { text: "Pipelines & Profiles", link: "/pipelines-and-profiles" },
           { text: "Agent Integration", link: "/agent-integration" },
           { text: "Automation & Cron", link: "/automation-cron" },
+          { text: "OpenClaw Integration", link: "/integrations/openclaw" },
           {
             text: "Migrating from OpenClaw",
             link: "/migrating-from-openclaw",

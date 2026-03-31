@@ -22,7 +22,7 @@ features:
     details: Change a pipeline file and the next run uses the new version. No redeploy or restart.
   - icon: 🤖
     title: Any agent you use
-    details: OpenClaw, Ollama, OpenAI, Anthropic, Claude Code. Choose the runner per step and mix them in one pipeline.
+    details: Ollama, OpenAI, Anthropic, Claude Code, or your own runner. Pluggable RunnerRegistry — choose the runner per step and mix them in one pipeline.
   - icon: 🔍
     title: See what ran
     details: Every run is logged—which node ran, what went in and out, how long it took. Resume from the exact step that failed.

@@ -1,6 +1,6 @@
 # Ripline HTTP API
 
-The plugin exposes an HTTP surface so Mission Control, Discord, cron jobs, or any client can trigger and inspect pipeline runs.
+Ripline exposes an HTTP surface so dashboards, Discord bots, cron jobs, or any HTTP client can trigger and inspect pipeline runs.
 
 ## Base URL and port
 

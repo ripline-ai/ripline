@@ -23,10 +23,11 @@ In short: turn messy cross-team workflows into a graph you can see, change, and 
 
 - Graph DSL with loops, inline fragments, and reusable sub-pipelines
 - Type-checked registry that watches `pipelines/` and validates on save
-- In-memory run store with resumable IDs and JSON payload snapshots
-- CLI runner for local testing; optional plugin hook for OpenClaw (see [OpenClaw Integration](#openclaw-integration))
-- HTTP surface (default `/pipelines`) for boards, metrics, and visualizations
+- In-memory and file-backed run store with resumable IDs and JSON payload snapshots
+- CLI runner, HTTP API server, and MCP server — use whichever surface fits the work
 - **Per-node agent runners:** LLM providers (Ollama, OpenAI, Anthropic) or `runner: claude-code` with **plan** (read-only) or **execute** mode; see [Agent integration](docs/agent-integration.md)
+- **Pluggable core interfaces:** `EventSink`, `QueueStore`, and `RunnerRegistry` — swap out any piece without forking the engine
+- Optional [OpenClaw integration](src/integrations/openclaw/) for running inside an OpenClaw host (see [OpenClaw Integration](#openclaw-integration))
 
 ---
 
@@ -122,7 +123,7 @@ Run-scoped logs are written to `<runsDir>/<runId>/log.txt` whenever a run is exe
 3. **Run the Hello World pipeline**
 
    ```bash
-   node dist/cli/run.js -p pipelines/examples/hello-world.yaml -i samples/hello-world-inputs.json
+   node bin/ripline.js run -p pipelines/examples/hello-world.yaml -i samples/hello-world-inputs.json
    ```
 
    Or run the built-in demo (same pipeline with stub agent, writes to `dist/demo-artifact.json`):
@@ -134,10 +135,10 @@ Run-scoped logs are written to `<runsDir>/<runId>/log.txt` whenever a run is exe
 4. **Optional: HTTP server**
 
    ```bash
-   node dist/cli/run.js serve   # starts on port 4001 by default
+   node bin/ripline.js serve   # starts on port 4001 by default
    ```
 
-   See [docs/http-api.md](docs/http-api.md) for all endpoints. To use Ripline as an OpenClaw plugin instead, see [OpenClaw Integration](#openclaw-integration).
+   See [docs/http-api.md](docs/http-api.md) for all endpoints.
 
 ---
 
@@ -215,6 +216,31 @@ Ripline can coordinate a multi-stage product flow: area-owner signals → breakd
 
 ---
 
+## Extending Ripline
+
+Ripline's core is built on three pluggable interfaces, all exported from `src/interfaces/`:
+
+| Interface | Purpose | Built-in implementations |
+|-----------|---------|--------------------------|
+| `RunnerRegistry` | Map runner-type strings to `AgentRunner` implementations | `DefaultRunnerRegistry` |
+| `EventSink` | Receive pipeline events (`pipeline.run.started`, `node.completed`, etc.) | `NoopEventSink`, `ConsoleEventSink`, `WebhookEventSink` |
+| `QueueStore` | Persist and load background queue items | `MemoryQueueStore`, `YamlFileQueueStore` |
+
+Implement any of these interfaces to plug in your own storage backend, event bus, or agent runtime — without modifying the engine.
+
+```typescript
+import { DefaultRunnerRegistry, WebhookEventSink } from 'ripline';
+
+// Register a custom runner
+const registry = new DefaultRunnerRegistry();
+registry.register('my-runner', myAgentRunner);
+
+// Forward events to a webhook
+const sink = new WebhookEventSink('https://example.com/hooks/ripline');
+```
+
+---
+
 ## OpenClaw Integration
 
 Ripline can be loaded as a plugin inside an [OpenClaw](https://github.com/craigjmidwinter/openclaw) host. This is optional — Ripline works fully standalone without OpenClaw installed.
@@ -242,7 +268,7 @@ When loaded as a plugin:
 }
 ```
 
-See [Agent integration — OpenClaw runner](docs/agent-integration.md#openclaw-runner) and [Migrating from OpenClaw](docs/migrating-from-openclaw.md) for more details.
+The integration lives in [`src/integrations/openclaw/`](src/integrations/openclaw/). See [OpenClaw Integration](docs/integrations/openclaw.md), [Agent integration — OpenClaw runner](docs/agent-integration.md#openclaw-runner), and [Migrating from OpenClaw](docs/migrating-from-openclaw.md) for more details.
 
 ---
 
@@ -257,6 +283,7 @@ See [Agent integration — OpenClaw runner](docs/agent-integration.md#openclaw-r
 | [Pipelines and profiles](docs/pipelines-and-profiles.md) | Pipeline directory, profile system, and user config |
 | [Agent integration](docs/agent-integration.md) | LLM, Claude Code, and OpenClaw runner configuration |
 | [Automation and cron](docs/automation-cron.md) | Cron jobs, CI, and messaging integrations |
+| [OpenClaw integration](docs/integrations/openclaw.md) | Loading Ripline as an OpenClaw plugin, WintermuteEventSink, pluggable interfaces |
 | [Migrating from OpenClaw](docs/migrating-from-openclaw.md) | Parameterising hardcoded paths and profiles |
 
 ---

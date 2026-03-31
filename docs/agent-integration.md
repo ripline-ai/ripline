@@ -294,10 +294,11 @@ Any non-zero exit code or invalid JSON is surfaced as an error; the run record i
 ## References
 
 - `src/pipeline/executors/agent.ts` – agent node executor and `AgentRunner` type
-- `src/openclaw-agent-runner.ts` – `createOpenClawAgentRunner(api)` and `OpenClawPluginApi`
+- `src/integrations/openclaw/openclaw-runner.ts` – `createOpenClawAgentRunner(api)` and `OpenClawPluginApi`
 - `src/llm-agent-runner.ts` – `createLlmAgentRunner(config)` for Ollama/OpenAI/Anthropic
 - `src/claude-code-runner.ts` – `createClaudeCodeRunner(config)` for Claude Code (plan/execute)
 - `src/agent-runner-config.ts` – config resolution (env, file, plugin)
+- `src/interfaces/` – pluggable interfaces: `EventSink`, `QueueStore`, `RunnerRegistry`
 
 ## Node options
 
