@@ -273,6 +273,167 @@ describe("AutoExecutor", () => {
     });
   });
 
+  // ─── reconcileGhostItems ───────────────────────────────
+
+  describe("reconcileGhostItems", () => {
+    it("resets running items with no runId to pending", async () => {
+      const store = makeStubStore();
+      const ae = new AutoExecutor({
+        backgroundQueue: bgQueue,
+        runQueue: makeStubRunQueue(),
+        store,
+      });
+
+      const id = bgQueue.add({ pipeline: "ghost-no-runid" });
+      // Simulate a stuck item in running with no runId
+      bgQueue.update(id, { status: "running" });
+
+      const count = await ae.reconcileGhostItems();
+      expect(count).toBe(1);
+      expect(bgQueue.get(id)!.status).toBe("pending");
+    });
+
+    it("resets running items whose run is missing from the store to pending", async () => {
+      const store = makeStubStore(); // returns null for all loads
+      const ae = new AutoExecutor({
+        backgroundQueue: bgQueue,
+        runQueue: makeStubRunQueue(),
+        store,
+      });
+
+      const id = bgQueue.add({ pipeline: "ghost-missing-run" });
+      bgQueue.update(id, { status: "running", runId: "run-deleted" });
+
+      const count = await ae.reconcileGhostItems();
+      expect(count).toBe(1);
+      const item = bgQueue.get(id)!;
+      expect(item.status).toBe("pending");
+      expect(item.runId).toBeUndefined();
+    });
+
+    it("resets running items whose run is in a terminal state to pending", async () => {
+      const records = new Map<string, Partial<PipelineRunRecord>>([
+        ["run-completed", { id: "run-completed", status: "completed", source: "background" } as PipelineRunRecord],
+        ["run-errored", { id: "run-errored", status: "errored", source: "background" } as PipelineRunRecord],
+      ]);
+      const store = makeStubStore(records);
+      const ae = new AutoExecutor({
+        backgroundQueue: bgQueue,
+        runQueue: makeStubRunQueue(),
+        store,
+      });
+
+      const id1 = bgQueue.add({ pipeline: "ghost-completed" });
+      bgQueue.update(id1, { status: "running", runId: "run-completed" });
+      const id2 = bgQueue.add({ pipeline: "ghost-errored" });
+      bgQueue.update(id2, { status: "running", runId: "run-errored" });
+
+      const count = await ae.reconcileGhostItems();
+      expect(count).toBe(2);
+      expect(bgQueue.get(id1)!.status).toBe("pending");
+      expect(bgQueue.get(id1)!.runId).toBeUndefined();
+      expect(bgQueue.get(id2)!.status).toBe("pending");
+      expect(bgQueue.get(id2)!.runId).toBeUndefined();
+    });
+
+    it("does not reset running items whose run is still active", async () => {
+      const records = new Map<string, Partial<PipelineRunRecord>>([
+        ["run-live", { id: "run-live", status: "running", source: "background" } as PipelineRunRecord],
+      ]);
+      const store = makeStubStore(records);
+      const ae = new AutoExecutor({
+        backgroundQueue: bgQueue,
+        runQueue: makeStubRunQueue(),
+        store,
+      });
+
+      const id = bgQueue.add({ pipeline: "active-item" });
+      bgQueue.update(id, { status: "running", runId: "run-live" });
+
+      const count = await ae.reconcileGhostItems();
+      expect(count).toBe(0);
+      expect(bgQueue.get(id)!.status).toBe("running");
+    });
+
+    it("returns 0 when there are no running items", async () => {
+      const store = makeStubStore();
+      const ae = new AutoExecutor({
+        backgroundQueue: bgQueue,
+        runQueue: makeStubRunQueue(),
+        store,
+      });
+
+      bgQueue.add({ pipeline: "pending-item" });
+
+      const count = await ae.reconcileGhostItems();
+      expect(count).toBe(0);
+    });
+
+    it("restores activeRunMap for running items with active runs", async () => {
+      const records = new Map<string, Partial<PipelineRunRecord>>([
+        ["run-active", { id: "run-active", status: "running", source: "background" } as PipelineRunRecord],
+      ]);
+      const store = makeStubStore(records);
+      const ae = new AutoExecutor({
+        backgroundQueue: bgQueue,
+        runQueue: makeStubRunQueue(),
+        store,
+      });
+
+      const id = bgQueue.add({ pipeline: "restore-map" });
+      bgQueue.update(id, { status: "running", runId: "run-active" });
+
+      await ae.reconcileGhostItems();
+      // After reconcile, the active run should be in the map so tryDispatchNext won't double-dispatch
+      // We verify by enabling and checking that enqueue is NOT called (map prevents dispatch)
+      const runQueue = makeStubRunQueue();
+      const ae2 = new AutoExecutor({
+        backgroundQueue: bgQueue,
+        runQueue,
+        store,
+        reconcileIntervalMs: 99_999, // don't fire watchdog during test
+      });
+      // Directly verify the behavior: with a live run in the queue, enable should not dispatch new
+      ae2.enable();
+      await new Promise((r) => setTimeout(r, 80));
+      expect(runQueue.enqueue).not.toHaveBeenCalled();
+      ae2.disable();
+    });
+
+    it("enable() uses reconcileGhostItems and unblocks dispatch after ghost reset", async () => {
+      const store = makeStubStore(); // all loads return null
+      const runQueue = makeStubRunQueue("run-new");
+      (store.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      // Simulate a ghost item blocking the queue
+      const ghostId = bgQueue.add({ pipeline: "ghost" });
+      bgQueue.update(ghostId, { status: "running", runId: "run-missing" });
+
+      // Add a real pending item that should be dispatched after ghost is cleared
+      bgQueue.add({ pipeline: "real-task", severityWeight: 5 });
+
+      const ae = new AutoExecutor({
+        backgroundQueue: bgQueue,
+        runQueue,
+        store,
+        reconcileIntervalMs: 99_999,
+      });
+      ae.enable();
+      // Give enough time for async reconcile + dispatch
+      await new Promise((r) => setTimeout(r, 150));
+
+      // Ghost should have been reset
+      expect(bgQueue.get(ghostId)!.status).toBe("pending");
+      // Real task should have been dispatched
+      expect(runQueue.enqueue).toHaveBeenCalledWith(
+        expect.stringMatching(/ghost|real-task/),
+        expect.any(Object),
+        expect.objectContaining({ source: "background" }),
+      );
+      ae.disable();
+    });
+  });
+
   // ─── Story 4/5 integration: Telegram notifications ─────
 
   describe("Telegram notification integration", () => {

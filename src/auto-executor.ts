@@ -37,6 +37,8 @@ export type AutoExecutorOptions = {
   store: RunStore;
   telegram?: TelegramNotifier;
   queueService?: QueueService;
+  /** How often (ms) to run the ghost-item reconciliation watchdog. Default 60_000. */
+  reconcileIntervalMs?: number;
 };
 
 export class AutoExecutor {
@@ -45,8 +47,10 @@ export class AutoExecutor {
   private readonly store: RunStore;
   private readonly telegram: TelegramNotifier | undefined;
   private readonly queueService: QueueService | undefined;
+  private readonly reconcileIntervalMs: number;
   private enabled = false;
   private dispatching = false;
+  private reconcileTimer: ReturnType<typeof setInterval> | null = null;
 
   /**
    * Maps pipeline runId → background queue item id.
@@ -64,6 +68,7 @@ export class AutoExecutor {
     this.store = opts.store;
     this.telegram = opts.telegram;
     this.queueService = opts.queueService;
+    this.reconcileIntervalMs = opts.reconcileIntervalMs ?? 60_000;
 
     this.eventHandler = (event: RunEvent) => {
       if (event.event === "run.completed" || event.event === "run.errored") {
@@ -80,16 +85,21 @@ export class AutoExecutor {
     this.enabled = true;
     EventBus.getInstance().on("run-event", this.eventHandler);
     log.log("info", "[auto-executor] enabled");
-    // Recover orphaned "running" items that have no runId (e.g. from a previous crash/restart)
-    const orphaned = this.bgQueue.list().filter((i) => i.status === "running" && !i.runId);
-    for (const item of orphaned) {
-      log.log("warn", `[auto-executor] resetting orphaned queue item ${item.id} to pending`);
-      this.bgQueue.update(item.id, { status: "pending" });
-    }
-    // Kick off immediately if nothing is running
-    this.tryDispatchNext().catch((err) => {
-      log.log("error", `[auto-executor] error on initial dispatch: ${err instanceof Error ? err.message : String(err)}`);
+    // Recover ghost items synchronously for items with no runId, then do a full
+    // async reconciliation (which also checks run store for terminal runIds).
+    this.reconcileGhostItems().then(() => {
+      return this.tryDispatchNext();
+    }).catch((err) => {
+      log.log("error", `[auto-executor] error on initial reconcile/dispatch: ${err instanceof Error ? err.message : String(err)}`);
     });
+    // Start periodic watchdog to catch ghost items that arise during operation
+    this.reconcileTimer = setInterval(() => {
+      this.reconcileGhostItems().then(() => {
+        return this.tryDispatchNext();
+      }).catch((err) => {
+        log.log("error", `[auto-executor] reconcile watchdog error: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }, this.reconcileIntervalMs);
   }
 
   /** Disable auto-dispatch. Current run finishes but no new one starts. */
@@ -97,6 +107,10 @@ export class AutoExecutor {
     if (!this.enabled) return;
     this.enabled = false;
     EventBus.getInstance().removeListener("run-event", this.eventHandler);
+    if (this.reconcileTimer !== null) {
+      clearInterval(this.reconcileTimer);
+      this.reconcileTimer = null;
+    }
     log.log("info", "[auto-executor] disabled");
   }
 
@@ -111,6 +125,86 @@ export class AutoExecutor {
   }
 
   // ─── Internal ─────────────────────────────────────────────
+
+  /**
+   * Reconcile ghost queue items: items stuck in "running" state whose associated
+   * run is missing or in a terminal state (completed/errored). Resets them to
+   * "pending" so they can be re-claimed.
+   *
+   * Two ghost cases are handled:
+   *   1. Item has no runId — the run was never created (enqueue failed after pop).
+   *   2. Item has a runId but the run no longer exists, or is in a terminal status.
+   *
+   * Also cleans up stale entries in activeRunMap for runs that are no longer running.
+   *
+   * Returns the number of items reset.
+   */
+  async reconcileGhostItems(): Promise<number> {
+    const runningItems = this.bgQueue.list().filter((i) => i.status === "running");
+    if (runningItems.length === 0) return 0;
+
+    const TERMINAL_STATUSES = new Set(["completed", "errored", "needs-conflict-resolution"]);
+    let resetCount = 0;
+
+    for (const item of runningItems) {
+      // Case 1: no runId — run was never created
+      if (!item.runId) {
+        log.log("warn", `[auto-executor] ghost item ${item.id} has no runId — resetting to pending`);
+        this.bgQueue.update(item.id, { status: "pending" });
+        resetCount++;
+        continue;
+      }
+
+      // Case 2: runId present — verify the run still exists and is active
+      let run: import("./types.js").PipelineRunRecord | null = null;
+      try {
+        run = await this.store.load(item.runId);
+      } catch {
+        // If we can't load, treat as missing
+      }
+
+      if (!run) {
+        log.log("warn", `[auto-executor] ghost item ${item.id} references missing run ${item.runId} — resetting to pending`);
+        this.bgQueue.update(item.id, { status: "pending", runId: undefined });
+        this.activeRunMap.delete(item.runId);
+        resetCount++;
+        continue;
+      }
+
+      if (TERMINAL_STATUSES.has(run.status)) {
+        log.log("warn", `[auto-executor] ghost item ${item.id} references terminal run ${item.runId} (${run.status}) — resetting to pending`);
+        this.bgQueue.update(item.id, { status: "pending", runId: undefined });
+        this.activeRunMap.delete(item.runId);
+        resetCount++;
+        continue;
+      }
+
+      // Run is still active — ensure activeRunMap is consistent
+      if (!this.activeRunMap.has(item.runId)) {
+        log.log("info", `[auto-executor] restoring activeRunMap entry for run ${item.runId} → item ${item.id}`);
+        this.activeRunMap.set(item.runId, item.id);
+      }
+    }
+
+    // Also prune activeRunMap entries for runs that are no longer in the run store
+    // (e.g. run was deleted externally while we held a reference)
+    for (const [runId, itemId] of Array.from(this.activeRunMap.entries())) {
+      try {
+        const run = await this.store.load(runId);
+        if (!run || TERMINAL_STATUSES.has(run.status)) {
+          log.log("warn", `[auto-executor] pruning stale activeRunMap entry: run ${runId} (item ${itemId})`);
+          this.activeRunMap.delete(runId);
+        }
+      } catch {
+        this.activeRunMap.delete(runId);
+      }
+    }
+
+    if (resetCount > 0) {
+      log.log("info", `[auto-executor] reconciliation complete: ${resetCount} ghost item(s) reset to pending`);
+    }
+    return resetCount;
+  }
 
   /**
    * Handle a run completion or error event. If the run was dispatched by us,
