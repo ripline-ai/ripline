@@ -105,7 +105,7 @@ const agentNode = baseNode.extend({
   deliver: z.boolean().optional(),
   thinking: z.enum(["off", "minimal", "low", "medium", "high"]).optional(),
   timeoutSeconds: z.number().int().positive().optional(),
-  runner: z.literal("claude-code").optional(),
+  runner: z.string().optional(),
   mode: z.enum(["plan", "execute"]).optional(),
   cwd: z.string().optional(),
   dangerouslySkipPermissions: z.boolean().optional(),
@@ -242,7 +242,7 @@ const claudeCodeAgentDefinitionSchema = z.object({
 });
 
 const externalAgentDefinitionSchema = z.object({
-  runner: z.literal("openclaw").optional(),
+  runner: z.string().optional(),
 });
 
 export const agentDefinitionSchema = z.union([
