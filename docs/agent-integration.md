@@ -264,7 +264,7 @@ To avoid **context bleed** between agent nodes:
 
 ## OpenClaw runner
 
-> **This section describes the optional OpenClaw integration.** Ripline works fully standalone without OpenClaw. See [OpenClaw Integration](../README.md#openclaw-integration) for plugin setup.
+> **This section describes the optional OpenClaw integration.** Ripline works fully standalone without OpenClaw. See [OpenClaw Integration](./integrations/openclaw) for plugin setup.
 
 When the pipeline plugin is loaded by an OpenClaw host, the host passes a **runtime** API. The plugin creates an agent runner that calls the OpenClaw agent subprocess via `runtime.system.runCommandWithTimeout`. All pipeline agent nodes then use the platform's configured models, tools, and sandbox automatically.
 
