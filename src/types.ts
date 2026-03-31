@@ -81,7 +81,7 @@ export type PipelinePluginConfig = {
   authToken?: string;
   /** Directory for run state (default .ripline/runs). Used by HTTP server. */
   runsDir?: string;
-  /** File path for the background queue YAML store (default ~/obsidian/Ops/queue.yaml). */
+  /** File path for the background queue YAML store. */
   queueFilePath?: string;
   /** Per-queue configuration (concurrency + resource limits). e.g. { build: { concurrency: 3, resourceLimits: { cpus: "1", memory: "2g" } } } */
   queues?: Record<string, QueueConfig>;
@@ -125,9 +125,10 @@ export type ClaudeCodeAgentDefinition = {
   skillsFile?: string;
 };
 
-/** An agent with no special Ripline config (e.g. an OpenClaw agent whose definition lives externally). */
+/** An agent with no special Ripline config (e.g. an external agent whose definition lives outside Ripline). */
 export type ExternalAgentDefinition = {
-  runner?: "openclaw";
+  /** Arbitrary runner type string for custom / third-party runners. */
+  runner?: string;
 };
 
 export type AgentDefinition = ClaudeCodeAgentDefinition | ExternalAgentDefinition;
@@ -198,8 +199,8 @@ export type AgentNode = NodeBase & {
   deliver?: boolean;
   thinking?: "off" | "minimal" | "low" | "medium" | "high";
   timeoutSeconds?: number;
-  /** Opt-in to Claude Code runner for this node. When set, claudeCodeRunner must be provided in runner options. */
-  runner?: "claude-code";
+  /** Runner type for this node (e.g. "claude-code"). When set, the matching runner must be provided in runner options. */
+  runner?: string;
   /** For runner: claude-code — "plan" = read-only; "execute" = full access. Default when runner is claude-code: "execute". */
   mode?: "plan" | "execute";
   /** Working directory for Claude Code (supports template interpolation). */

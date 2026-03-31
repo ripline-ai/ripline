@@ -30,7 +30,7 @@ export type RunEvent = {
 
 /**
  * Event emitted when usage data changes (token consumption recorded).
- * Consumed by Wintermute's UsageBattery component for real-time updates.
+ * Can be consumed by external components for real-time usage updates.
  */
 export type UsageUpdateEvent = {
   event: "usage.update";

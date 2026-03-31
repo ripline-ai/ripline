@@ -44,7 +44,7 @@ function extractAnthropicText(data: {
 
 /**
  * Create an AgentRunner that calls Ollama, OpenAI, or Anthropic APIs.
- * Use when running standalone without OpenClaw. Single model for all agent nodes.
+ * Use when running standalone without an external agent runner. Single model for all agent nodes.
  */
 export function createLlmAgentRunner(config: LlmAgentRunnerConfig): AgentRunner {
   const { provider, model, apiKey, baseURL } = config;

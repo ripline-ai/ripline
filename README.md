@@ -1,6 +1,6 @@
 # Ripline
 
-> Graph-native pipeline engine for OpenClaw agents. Describe the flow, run it, and reroute in real time.
+> Graph-native pipeline engine for AI agents and automation workflows. Describe the flow, run it, and reroute in real time.
 
 ## Why Ripline exists
 
@@ -15,7 +15,7 @@ In short: turn messy cross-team workflows into a graph you can see, change, and 
 ### Principles
 
 1. **Visible flow.** Every run has a traceable line — nodes, payloads, durations, and retries.
-2. **Agent-first.** Anything an OpenClaw agent can call (prompt, tool, HTTP, human) becomes a node type.
+2. **Agent-first.** Any invocable unit (LLM prompt, tool call, HTTP request, human approval) becomes a node type.
 3. **Hot reload.** Pipelines are plain YAML/JSON. Edit, reroute, and relaunch without restarting the engine.
 4. **Open surface.** CLI + HTTP API + optional dashboards. Use whichever view fits the work.
 
@@ -24,9 +24,9 @@ In short: turn messy cross-team workflows into a graph you can see, change, and 
 - Graph DSL with loops, inline fragments, and reusable sub-pipelines
 - Type-checked registry that watches `pipelines/` and validates on save
 - In-memory run store with resumable IDs and JSON payload snapshots
-- CLI runner for local testing plus plugin hook for OpenClaw
+- CLI runner for local testing; optional plugin hook for OpenClaw (see [OpenClaw Integration](#openclaw-integration))
 - HTTP surface (default `/pipelines`) for boards, metrics, and visualizations
-- **Per-node agent runners:** optional `runner: claude-code` with **plan** (read-only) or **execute** mode and configurable `cwd`; see [Using Claude Code as a runner](docs/agent-integration.md#using-claude-code-as-a-runner)
+- **Per-node agent runners:** LLM providers (Ollama, OpenAI, Anthropic) or `runner: claude-code` with **plan** (read-only) or **execute** mode; see [Agent integration](docs/agent-integration.md)
 
 ---
 
@@ -133,53 +133,21 @@ Run-scoped logs are written to `<runsDir>/<runId>/log.txt` whenever a run is exe
 
 4. **Optional: HTTP server**
 
-   - Standalone: `node dist/cli/run.js serve` (default port 4001). See [docs/http-api.md](docs/http-api.md).
-   - As a plugin: add the plugin to your OpenClaw host and set `pipelinesDir` (and optionally `runsDir`, `httpPath`, `httpPort`, `authToken`). Example host config:
-
-   ```jsonc
-   {
-     "id": "ripline",
-     "from": "./path/to/ripline/openclaw.plugin.json",
-     "config": {
-       "pipelinesDir": "./pipelines",
-       "runsDir": ".ripline/runs",
-       "maxConcurrency": 4,
-       "httpPath": "/pipelines",
-       "httpPort": 4001,
-       "authToken": "optional-bearer-token"
-     }
-   }
+   ```bash
+   node dist/cli/run.js serve   # starts on port 4001 by default
    ```
+
+   See [docs/http-api.md](docs/http-api.md) for all endpoints. To use Ripline as an OpenClaw plugin instead, see [OpenClaw Integration](#openclaw-integration).
 
 ---
 
-## Configuring OpenClaw or Claude Code
+## Running agent nodes
 
-Use the following prompt so an assistant (OpenClaw or Claude Code) can install and run Ripline with the Hello World example.
+You can run pipelines with real agent nodes using Ollama, OpenAI, or Anthropic — no external dependencies required. Set `RIPLINE_AGENT_PROVIDER` and `RIPLINE_AGENT_MODEL` (and `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for those providers), or use a config file (`.ripline/agent.json` or `ripline.config.json` with an `agent` section). CLI flags work too: `ripline run --agent-provider ollama --agent-model llama3.2`.
 
-**Copyable prompt:**
+For Claude Code runner (plan/execute mode with filesystem tools), see [Using Claude Code as a runner](docs/agent-integration.md#using-claude-code-as-a-runner).
 
-```
-Install and configure the Ripline pipeline plugin for OpenClaw.
-
-1. Install: npm install ripline (or add the plugin from the repo path if not published).
-
-2. Config: Ensure the plugin is loaded with at least:
-   - pipelinesDir: path to a directory containing pipeline YAML/JSON (e.g. "./pipelines")
-   Optional: runsDir (default ".ripline/runs"), httpPath ("/pipelines"), httpPort (4001), authToken, maxConcurrency (4).
-
-3. First run: Use the Hello World example.
-   - Pipeline: pipelines/examples/hello-world.yaml
-   - Inputs: samples/hello-world-inputs.json or inline {"person":"World","goal":"get started"}
-   - Command: ripline run -p pipelines/examples/hello-world.yaml -i samples/hello-world-inputs.json
-   If -p is omitted and the working directory has pipelines/examples/hello-world.yaml, that pipeline is used by default.
-
-4. Demo (no real agent): ripline run --demo — runs Hello World with a stub agent and writes to dist/demo-artifact.json.
-```
-
-### Running agent nodes without OpenClaw
-
-You can run pipelines with real agent nodes locally using Ollama, OpenAI, or Anthropic—no OpenClaw required. Set `RIPLINE_AGENT_PROVIDER` and `RIPLINE_AGENT_MODEL` (and `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for those providers), or use a config file (`.ripline/agent.json` or `ripline.config.json` with an `agent` section). CLI flags work too: `ripline run --agent-provider ollama --agent-model llama3.2`. See [Agent integration](docs/agent-integration.md) for details.
+See [Agent integration](docs/agent-integration.md) for full configuration details.
 
 ---
 
@@ -247,6 +215,37 @@ Ripline can coordinate a multi-stage product flow: area-owner signals → breakd
 
 ---
 
+## OpenClaw Integration
+
+Ripline can be loaded as a plugin inside an [OpenClaw](https://github.com/craigjmidwinter/openclaw) host. This is optional — Ripline works fully standalone without OpenClaw installed.
+
+When loaded as a plugin:
+
+- The host provides a configured agent runner; all `agent` nodes run through the OpenClaw runtime automatically.
+- The `claude-code` runner is **not available** when inside OpenClaw (use the host's runner instead).
+- The HTTP server mounts at the path and port specified in plugin config.
+
+**Plugin config example:**
+
+```jsonc
+{
+  "id": "ripline",
+  "from": "./path/to/ripline/openclaw.plugin.json",
+  "config": {
+    "pipelinesDir": "./pipelines",
+    "runsDir": ".ripline/runs",
+    "maxConcurrency": 4,
+    "httpPath": "/pipelines",
+    "httpPort": 4001,
+    "authToken": "optional-bearer-token"
+  }
+}
+```
+
+See [Agent integration — OpenClaw runner](docs/agent-integration.md#openclaw-runner) and [Migrating from OpenClaw](docs/migrating-from-openclaw.md) for more details.
+
+---
+
 ## Documentation
 
 | Guide | Contents |
@@ -256,7 +255,7 @@ Ripline can coordinate a multi-stage product flow: area-owner signals → breakd
 | [Configuration reference](docs/configuration.md) | All config files, env vars, plugin config, and precedence rules |
 | [HTTP API](docs/http-api.md) | REST endpoints for triggering and inspecting runs |
 | [Pipelines and profiles](docs/pipelines-and-profiles.md) | Pipeline directory, profile system, and user config |
-| [Agent integration](docs/agent-integration.md) | OpenClaw, LLM, and Claude Code runner configuration |
+| [Agent integration](docs/agent-integration.md) | LLM, Claude Code, and OpenClaw runner configuration |
 | [Automation and cron](docs/automation-cron.md) | Cron jobs, CI, and messaging integrations |
 | [Migrating from OpenClaw](docs/migrating-from-openclaw.md) | Parameterising hardcoded paths and profiles |
 
@@ -283,19 +282,19 @@ Ripline can coordinate a multi-stage product flow: area-owner signals → breakd
 
 ## Multi-agent async orchestration
 
-Ripline is designed for workflows where multiple specialized agents must coordinate without blocking each other. The core pattern: each agent node runs as a fully isolated subprocess via `openclaw agent --json`, so slow or long-running agents never starve fast ones.
+Ripline is designed for workflows where multiple specialized agents must coordinate without blocking each other. The core pattern: each agent node runs as a fully isolated invocation, so slow or long-running agents never starve fast ones.
 
 ### How it works
 
 ```
-Pipeline YAML  →  Ripline scheduler  →  openclaw agent --json  →  JSON artifact
+Pipeline YAML  →  Ripline scheduler  →  Agent runner (LLM / Claude Code / OpenClaw)  →  JSON artifact
                    (4 concurrent          (isolated session,
                     workers)               fresh context)
 ```
 
 1. **Declare the flow** as a graph of `agent` nodes in YAML. Edges express data dependencies, not timing.
 2. **Ripline queues runs** and dispatches up to `maxConcurrency` nodes simultaneously.
-3. **Each agent call** spawns `openclaw agent --json --agent <id> --session-id <uuid> --message <prompt>`. The UUID keeps sessions isolated so accumulated history from one run can't contaminate another.
+3. **Each agent call** runs in an isolated session (new UUID per node by default). This prevents history from one run contaminating another.
 4. **Artifacts propagate** through the graph: the JSON output of each node becomes available to downstream nodes as template variables (`{{nodeid.text}}` or `{{variableName}}`).
 
 ### Example: parallel breakdown + spec pipeline
@@ -426,7 +425,7 @@ pending → running → completed
 
 ### Queue data storage
 
-The queue is persisted as a YAML array at `~/obsidian/Ops/queue.yaml` by default. Each item contains:
+The queue is persisted as a YAML array at `.ripline/queue.yaml` by default (overridable via `RIPLINE_QUEUE_PATH`). Each item contains:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -466,17 +465,9 @@ curl -X PUT http://localhost:4001/config/background-queue \
   -d '{"enabled": false}'
 ```
 
-### Wintermute UI components
+### Dashboard UI
 
-The background queue is managed through three React components in the Wintermute dashboard:
-
-- **`BackgroundQueueToggle`** — A toggle switch to enable/disable auto-dispatch at runtime. Calls `PUT /api/config/background-queue` with optimistic UI updates. Shows ON (green) / OFF (grey) state.
-
-- **`ApprovalPanel`** — Two-section panel for queue triage:
-  - *Needs Approval* — Items with status `needsReview`, `needs_approval`, or `pending_approval`. Each item has **Approve & Queue** and **Reject** buttons.
-  - *Approved & Pending* — Approved items sorted by priority descending with a remove button. Polls every 10 seconds.
-
-- **`QueueViewer`** — Full queue table showing all items with columns: Pipeline name, Priority (tabular), Status (color-coded badge), Age (human-readable), and Retry count. Polls every 10 seconds. Status badges are color-coded: pending (amber), running (blue), completed (emerald), failed/needsReview (rose), approved (cyan).
+The background queue REST API (`GET /queue`, `POST /queue`, `PATCH /queue/:id`, `DELETE /queue/:id`, `PUT /config/background-queue`) is designed to be frontend-agnostic. You can build a dashboard using the HTTP API directly, or use Ripline as a plugin within a dashboard host like OpenClaw (see [OpenClaw Integration](#openclaw-integration)).
 
 ### PM2 restart behavior
 

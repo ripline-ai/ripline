@@ -12,7 +12,7 @@ import cors from "@fastify/cors";
 import os from "node:os";
 import type { AgentDefinition, SkillsRegistry, PipelinePluginConfig, ContainerResourceLimits } from "./types.js";
 import type { ContainerBuildConfig } from "./container-build-runner.js";
-import { resolveSkillsDir, resolveStageConfig } from "./config.js";
+import { resolveSkillsDir, resolveConfig } from "./config.js";
 import type { PipelineRunRecord } from "./types.js";
 import { PipelineRegistry } from "./registry.js";
 import { PipelineRunStore } from "./run-store.js";
@@ -20,6 +20,7 @@ import { EventBus, type BusEvent } from "./event-bus.js";
 import { createRunQueue } from "./run-queue.js";
 import { createScheduler } from "./scheduler.js";
 import { BackgroundQueue } from "./background-queue.js";
+import { YamlFileQueueStore } from "./interfaces/queue-store.js";
 import { loadUserConfig } from "./config.js";
 import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
@@ -27,7 +28,7 @@ import type { AgentRunner } from "./pipeline/executors/agent.js";
 import { loadAgentDefinitionsFromFile, loadSkillsRegistryFromFile } from "./agent-runner-config.js";
 import { listProfiles, loadProfile } from "./profiles.js";
 import { WebhookDispatcher } from "./webhook-dispatcher.js";
-// AutoExecutor import retained for reference — not wired up (dispatch now owned by Wintermute)
+// AutoExecutor import retained for reference — not wired up at runtime
 // import { AutoExecutor } from "./auto-executor.js";
 import { createTelegramNotifier } from "./telegram.js";
 import { FocusAreaStore } from "./focus-area-store.js";
@@ -44,7 +45,7 @@ const DEFAULT_PROFILES_DIR = path.join(
 );
 const SSE_POLL_MS = 500;
 
-/** Stub agent for HTTP-triggered runs when no OpenClaw is available. */
+/** Stub agent for HTTP-triggered runs when no external agent runner is available. */
 const stubAgentRunner: AgentRunner = async ({ agentId, prompt }) => ({
   text: `[http-stub] ${agentId}: ${prompt.slice(0, 80)}…`,
   tokenUsage: { input: 0, output: 0 },
@@ -53,9 +54,9 @@ const stubAgentRunner: AgentRunner = async ({ agentId, prompt }) => ({
 export type ServerConfig = PipelinePluginConfig & {
   runsDir?: string;
   profilesDir?: string;
-  /** When set (e.g. by OpenClaw plugin), agent nodes use this runner; otherwise stub. */
+  /** When set (e.g. by an integration plugin), agent nodes use this runner; otherwise stub. */
   agentRunner?: AgentRunner;
-  /** For agent nodes with runner: claude-code. Not set when running inside OpenClaw. */
+  /** For agent nodes with runner: claude-code. Not set when an external agent runner is used instead. */
   claudeCodeRunner?: AgentRunner;
   /** Named agent definitions. Loaded from ripline.config.json in pipelinesDir when not provided. */
   agentDefinitions?: Record<string, AgentDefinition>;
@@ -837,8 +838,10 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
   // ─── Background Queue endpoints ───────────────────────────
 
   const userConfig = loadUserConfig();
+  const defaultQueuePath = path.join(os.homedir(), ".ripline", "queue.yaml");
+  const queueStore = new YamlFileQueueStore(config.queueFilePath ?? defaultQueuePath);
   const bgQueue = new BackgroundQueue({
-    ...(config.queueFilePath != null ? { filePath: config.queueFilePath } : {}),
+    store: queueStore,
     maxRetries: userConfig.backgroundQueue?.maxRetries ?? 5,
   });
 
@@ -1031,7 +1034,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
   const _telegramNotifier = createTelegramNotifier(userConfig.telegram);
 
   // NOTE: AutoExecutor has been removed from this process.
-  // Dispatch decisions are now owned by Wintermute's reconciliation loop,
+  // Dispatch decisions are now owned by an external orchestrator's reconciliation loop,
   // which lazily tops up the queue to the concurrency limit on each tick.
   // BackgroundQueue storage and REST endpoints remain here as-is.
 
@@ -1146,8 +1149,8 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       await fs.mkdir(dir, { recursive: true });
       await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
 
-      // Dispatch is now owned by Wintermute; no AutoExecutor to toggle at runtime.
-      // Wintermute reads this flag from GET /config/background-queue before enqueuing.
+      // Dispatch is now owned externally; no AutoExecutor to toggle at runtime.
+      // External orchestrators read this flag from GET /config/background-queue before enqueuing.
 
       return reply.send({ backgroundQueue: bgBlock });
     },
@@ -1220,8 +1223,8 @@ export type StartServerOptions = ServerConfig & {
 
 /** Start the HTTP server. Used by the plugin when running standalone. */
 export async function startServer(options: StartServerOptions): Promise<{ close: () => Promise<void> }> {
-  const stageConfig = resolveStageConfig();
-  const port = options.httpPort ?? options.port ?? stageConfig.port;
+  const riplineConfig = resolveConfig();
+  const port = options.httpPort ?? options.port ?? riplineConfig.port;
   const app = await createApp(options);
   await app.listen({ port, host: "0.0.0.0" });
   return {

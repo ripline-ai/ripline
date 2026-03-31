@@ -2,15 +2,16 @@ import path from "node:path";
 import type { Command } from "commander";
 import { createRiplineCliProgram } from "./cli/program.js";
 import { startServer, type StartServerOptions } from "./server.js";
-import type { PipelinePluginConfig } from "./types.js";
-import { createOpenClawAgentRunner, type OpenClawPluginApi } from "./openclaw-agent-runner.js";
+import type { OpenClawPluginApi } from "./integrations/openclaw/index.js";
+import { registerOpenClawRunner } from "./integrations/openclaw/index.js";
 import { createLlmAgentRunner } from "./llm-agent-runner.js";
 import { createClaudeCodeRunner } from "./claude-code-runner.js";
 import {
   normalizeLlmAgentConfigFromPlugin,
   normalizeClaudeCodeConfigFromPlugin,
 } from "./agent-runner-config.js";
-import { resolveStageConfig } from "./config.js";
+import { resolveConfig } from "./config.js";
+import { DefaultRunnerRegistry } from "./interfaces/runner-registry.js";
 
 interface PluginLogger {
   info: (...args: unknown[]) => void;
@@ -26,6 +27,23 @@ interface PluginApi {
   registerService: (svc: { id: string; start: () => Promise<void> | void; stop: () => Promise<void> | void }) => void;
   /** When the plugin runs inside OpenClaw, runtime provides runCommandWithTimeout for agent runs. */
   runtime?: OpenClawPluginApi["runtime"];
+}
+
+/** Build the runner registry for the given plugin API. */
+function buildRunnerRegistry(api: PluginApi): DefaultRunnerRegistry {
+  const registry = new DefaultRunnerRegistry();
+
+  // Core runners
+  const claudeCodeConfig = normalizeClaudeCodeConfigFromPlugin(api.pluginConfig);
+  if (claudeCodeConfig) registry.register("claude-code", createClaudeCodeRunner(claudeCodeConfig));
+
+  const llmConfig = normalizeLlmAgentConfigFromPlugin(api.pluginConfig);
+  if (llmConfig) registry.register("llm-agent", createLlmAgentRunner(llmConfig));
+
+  // OpenClaw integration: auto-registers when runtime is detected
+  registerOpenClawRunner(registry, api);
+
+  return registry;
 }
 
 const DEFAULT_RUNS_DIR = ".ripline/runs";
@@ -44,7 +62,7 @@ function resolvePath(value: string): string {
   return path.isAbsolute(value) ? path.resolve(value) : path.join(process.cwd(), value);
 }
 
-export { createOpenClawAgentRunner, type OpenClawPluginApi } from "./openclaw-agent-runner.js";
+export { createOpenClawAgentRunner, type OpenClawPluginApi } from "./integrations/openclaw/index.js";
 export { createLlmAgentRunner, type LlmAgentRunnerConfig } from "./llm-agent-runner.js";
 export { createClaudeCodeRunner, type ClaudeCodeRunnerConfig } from "./claude-code-runner.js";
 export {
@@ -90,8 +108,8 @@ export function normalizeConfig(raw: unknown): NormalizedConfig {
   const runsDir = typeof source.runsDir === "string" && source.runsDir.trim()
     ? resolvePath(source.runsDir)
     : path.join(process.cwd(), DEFAULT_RUNS_DIR);
-  const stageConfig = resolveStageConfig();
-  const httpPort = typeof source.httpPort === "number" ? source.httpPort : stageConfig.port;
+  const riplineConfig = resolveConfig();
+  const httpPort = typeof source.httpPort === "number" ? source.httpPort : riplineConfig.port;
   const httpPath = typeof source.httpPath === "string" ? source.httpPath : "/pipelines";
   const authToken = typeof source.authToken === "string" ? source.authToken : undefined;
   const maxConcurrency = typeof source.maxConcurrency === "number" ? source.maxConcurrency : 1;
@@ -100,29 +118,15 @@ export function normalizeConfig(raw: unknown): NormalizedConfig {
   return config;
 }
 
-function hasOpenClawRuntime(api: PluginApi): api is PluginApi & OpenClawPluginApi {
-  return Boolean(
-    api.runtime?.system?.runCommandWithTimeout &&
-    typeof api.runtime.system.runCommandWithTimeout === "function"
-  );
-}
-
 export default {
   id: "ripline",
   name: "Ripline",
   description: "Ripline pipeline engine + CLI",
   register(api: PluginApi) {
     const cfg = normalizeConfig(api.pluginConfig);
-    let agentRunner: ReturnType<typeof createOpenClawAgentRunner> | ReturnType<typeof createLlmAgentRunner> | undefined;
-    let claudeCodeRunner: ReturnType<typeof createClaudeCodeRunner> | undefined;
-    if (hasOpenClawRuntime(api)) {
-      agentRunner = createOpenClawAgentRunner(api);
-    } else {
-      const llmConfig = normalizeLlmAgentConfigFromPlugin(api.pluginConfig);
-      if (llmConfig) agentRunner = createLlmAgentRunner(llmConfig);
-      const claudeCodeConfig = normalizeClaudeCodeConfigFromPlugin(api.pluginConfig);
-      if (claudeCodeConfig) claudeCodeRunner = createClaudeCodeRunner(claudeCodeConfig);
-    }
+    const registry = buildRunnerRegistry(api);
+    const agentRunner = registry.resolve("openclaw") ?? registry.resolve("llm-agent");
+    const claudeCodeRunner = registry.resolve("claude-code");
     let serverHandle: { close: () => Promise<void> } | null = null;
 
     api.registerCli(

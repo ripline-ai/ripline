@@ -12,7 +12,7 @@ Ripline is the pipeline engine for delegating work to agents. Use it when:
 
 | Intent | Use Ripline? |
 |---|---|
-| "Delegate the Wintermute build to Vector" | Yes — background implementation work |
+| "Delegate the dashboard build to Vector" | Yes — background implementation work |
 | "Ask Vector what he thinks of this design" | No — use `sessions_send` (blocking Q&A) |
 | "Have Nova spec out the onboarding flow" | Yes — multi-step design task |
 | "What time is it?" | No — direct answer, no delegation needed |
@@ -66,7 +66,7 @@ Check what's installed first:
 GET http://localhost:4001/pipelines
 ```
 
-Pipelines also live as YAML in `/home/openclaw/.openclaw/workspace/pipelines/`.
+Pipelines also live as YAML in `~/.ripline/pipelines/` (or the directory configured in `pipelinesDir`).
 
 ### delegate_to_vector
 Delegates a task to Vector and returns his output as an artifact.
@@ -75,12 +75,12 @@ Delegates a task to Vector and returns his output as an artifact.
 POST http://localhost:4001/pipelines/delegate_to_vector/run
 Content-Type: application/json
 
-{ "inputs": { "task": "Build the Wintermute Kanban MVP. Initialize Next.js with App Router and Tailwind, bind to 0.0.0.0:3000, implement /kanban with on-disk task persistence, REST API at /api/tasks, and keep it running in the background." } }
+{ "inputs": { "task": "Build a Kanban MVP. Initialize Next.js with App Router and Tailwind, bind to 0.0.0.0:3000, implement /kanban with on-disk task persistence, REST API at /api/tasks, and keep it running in the background." } }
 ```
 
 ## Creating a new pipeline
 
-Drop a YAML file in `/home/openclaw/.openclaw/workspace/pipelines/`. Ripline hot-reloads.
+Drop a YAML file in your pipelines directory (`~/.ripline/pipelines/` or the configured `pipelinesDir`). Ripline hot-reloads.
 
 Minimal single-agent pipeline:
 ```yaml

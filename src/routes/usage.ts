@@ -100,7 +100,7 @@ export function registerUsageRoutes(
         ...(typeof body.runId === "string" && { meta: { runId: body.runId } }),
       });
 
-      // Emit usage.update SSE event so Wintermute battery updates in real-time
+      // Emit usage.update SSE event for real-time consumer updates
       try {
         const config = await store.getConfig();
         const since = getWeekStart(config.resetDay);

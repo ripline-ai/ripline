@@ -1,12 +1,12 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import * as YAML from "yaml";
 import type { BackgroundQueueItem } from "./types.js";
+import { YamlFileQueueStore } from "./interfaces/queue-store.js";
+import type { QueueStore } from "./interfaces/queue-store.js";
 
 const DEFAULT_QUEUE_PATH = path.join(
   process.env.HOME ?? "~",
-  "obsidian/Ops/queue.yaml",
+  ".ripline/queue.yaml",
 );
 
 export type AddItemOptions = {
@@ -22,15 +22,11 @@ export type AddItemOptions = {
  * mtime-based caching, and circuit-breaker retry logic.
  */
 export class BackgroundQueue {
-  private readonly filePath: string;
+  private readonly store: QueueStore;
   private readonly defaultMaxRetries: number;
 
-  /** Cached items and the mtime they were read at. */
-  private cache: { mtimeMs: number; items: BackgroundQueueItem[] } | null =
-    null;
-
-  constructor(opts?: { filePath?: string; maxRetries?: number }) {
-    this.filePath = opts?.filePath ?? DEFAULT_QUEUE_PATH;
+  constructor(opts?: { store?: QueueStore; maxRetries?: number }) {
+    this.store = opts?.store ?? new YamlFileQueueStore(DEFAULT_QUEUE_PATH);
     this.defaultMaxRetries = opts?.maxRetries ?? 5;
   }
 
@@ -171,34 +167,13 @@ export class BackgroundQueue {
     return items[idx];
   }
 
-  // ─── Persistence (mtime-cached) ──────────────────────────
+  // ─── Persistence ─────────────────────────────────────────
 
-  /** Read items from YAML, using mtime cache to skip re-reads. */
   private read(): BackgroundQueueItem[] {
-    if (!fs.existsSync(this.filePath)) return [];
-
-    const stat = fs.statSync(this.filePath);
-    if (this.cache && this.cache.mtimeMs === stat.mtimeMs) {
-      return this.cache.items;
-    }
-
-    const raw = fs.readFileSync(this.filePath, "utf-8");
-    const parsed = YAML.parse(raw);
-    const items: BackgroundQueueItem[] = Array.isArray(parsed) ? parsed : [];
-    this.cache = { mtimeMs: stat.mtimeMs, items };
-    return items;
+    return this.store.load();
   }
 
-  /** Write items to YAML and update cache. */
   private write(items: BackgroundQueueItem[]): void {
-    const dir = path.dirname(this.filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(this.filePath, YAML.stringify(items), "utf-8");
-
-    // Update cache with new mtime
-    const stat = fs.statSync(this.filePath);
-    this.cache = { mtimeMs: stat.mtimeMs, items: [...items] };
+    this.store.save(items);
   }
 }

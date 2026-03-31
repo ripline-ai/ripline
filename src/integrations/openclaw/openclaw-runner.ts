@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentResult, AgentRunner } from "./pipeline/executors/agent.js";
+import type { AgentResult, AgentRunner } from "../../pipeline/executors/agent.js";
 
 /** OpenClaw plugin API surface used to run agent commands. */
 export type OpenClawPluginApi = {

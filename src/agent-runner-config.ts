@@ -121,7 +121,7 @@ export function loadLlmAgentConfigFromFile(cwd: string): LlmAgentRunnerConfig | 
 
 /**
  * Resolve standalone LLM agent config: overrides (e.g. CLI) > env > config file.
- * Used by CLI when no OpenClaw runner is provided.
+ * Used by CLI when no external agent runner is provided.
  */
 export function resolveStandaloneLlmAgentConfig(options?: {
   cwd?: string;

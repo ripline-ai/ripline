@@ -1,4 +1,4 @@
-# Build New App (Idea → MVP)
+# Build New App (Idea → MVP) — OpenClaw Integration
 # Autonomous pipeline: generates an app idea, creates a Wintermute project,
 # initialises the workspace, specs the MVP, decomposes it into stories, and
 # implements each story in parallel via implement_story_new_project.
@@ -8,6 +8,10 @@
 #   stage    — "production" or "staging" (default: "production")
 #              production → localhost:3000 (Wintermute), localhost:4001 (Ripline)
 #              staging    → localhost:3001 (Wintermute), localhost:4002 (Ripline)
+#
+# Env vars:
+#   OPENCLAW_PROJECTS_DIR — base directory for project workspaces
+#                           (default: use $HOME/projects if unset)
 id: build_new_app
 name: Build New App (Idea → MVP)
 entry: [intake]
@@ -57,7 +61,7 @@ nodes:
 
   - id: parse_project
     type: transform
-    expression: "(function(text) { var m = text.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); var proj = JSON.parse(m ? m[1] : text.trim()); var workspacePath = '/home/openclaw/wintermute/data/projects/' + proj.id + '/workspace'; return { projectId: proj.id, projectName: proj.name, workspacePath: workspacePath }; })(artifacts.create_project.text)"
+    expression: "(function(text) { var m = text.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); var proj = JSON.parse(m ? m[1] : text.trim()); var base = (typeof process !== 'undefined' && process.env.OPENCLAW_PROJECTS_DIR) || (require('os').homedir() + '/projects'); var workspacePath = base + '/' + proj.id + '/workspace'; return { projectId: proj.id, projectName: proj.name, workspacePath: workspacePath }; })(artifacts.create_project.text)"
 
   # ── 3. Write tech spec ────────────────────────────────────────────────────
   - id: spec
