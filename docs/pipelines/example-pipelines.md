@@ -82,7 +82,7 @@ name: my-project
 description: "Main repo and scripts dir"
 inputs:
   projectRoot: /path/to/your/repo
-  scriptsPath: /path/to/obsidian/Scripts
+  scriptsPath: /path/to/your/scripts
 ```
 
 Then:

@@ -1,15 +1,21 @@
-# Agent integration (OpenClaw)
+# Agent integration
 
 ## How agent nodes run
 
 Every pipeline **agent** node delegates to a configurable **agent runner**. The runner is responsible for sending the prompt to a model (with optional thinking level and timeout) and returning text plus optional token usage.
 
-- **Inside OpenClaw:** When the pipeline plugin is loaded by an OpenClaw host, the host passes a **runtime** API. The plugin then creates an agent runner that calls `openclaw agent --json` via `runtime.system.runCommandWithTimeout`. So all pipelines use the platform’s configured models, tools, and sandbox.
-- **Standalone / local dev:** When the plugin runs without OpenClaw (e.g. `ripline serve` or CLI only), no runtime is provided. By default the HTTP server and inline runs use a **stub** runner that returns a short placeholder response. You can instead configure an **LLM agent runner** (Ollama, OpenAI, or Anthropic) so agent nodes run for real without OpenClaw.
+Ripline supports four runner types, selected in priority order:
 
-## Running without OpenClaw (Ollama / OpenAI / Anthropic)
+1. **OpenClaw** — when running inside an OpenClaw host, the host provides the agent runner automatically. See [OpenClaw runner](#openclaw-runner) below.
+2. **Per-node `runner: claude-code`** — when an agent node sets `runner: "claude-code"` and a Claude Code runner is configured. See [Using Claude Code as a runner](#using-claude-code-as-a-runner).
+3. **LLM runner** — when LLM config is present (Ollama, OpenAI, or Anthropic). See [Running with an LLM provider](#running-with-an-llm-provider).
+4. **Stub** — placeholder response when no runner is configured. Useful for testing pipeline structure.
 
-When not running inside OpenClaw, you can run agent nodes using a single configured LLM:
+---
+
+## Running with an LLM provider
+
+Configure a single LLM provider for all agent nodes using environment variables, a config file, or CLI flags.
 
 - **Provider:** `ollama`, `openai`, or `anthropic`
 - **Model:** e.g. `llama3.2`, `gpt-4o-mini`, `claude-3-5-sonnet-20241022`
@@ -38,7 +44,9 @@ When not running inside OpenClaw, you can run agent nodes using a single configu
 - One provider and model for all agent nodes; `agentId` is ignored.
 - Session continuity (`resetSession: false`) and `thinking` are not supported; each call is a single stateless request.
 
-## Choosing stub vs OpenClaw vs LLM vs Claude Code runner
+---
+
+## Choosing stub vs LLM vs Claude Code runner
 
 **Runner selection (global order):**
 
@@ -47,16 +55,16 @@ When not running inside OpenClaw, you can run agent nodes using a single configu
 3. **LLM runner** – If no OpenClaw runtime and no per-node Claude Code, and LLM config is present, agent nodes use the LLM runner (Ollama/OpenAI/Anthropic).
 4. **Stub** – Otherwise the stub returns a placeholder response.
 
-**Per-node rule:** Nodes with `runner: "claude-code"` use the Claude Code runner when `claudeCodeRunner` is set; if it is not set (e.g. when running inside OpenClaw), the run fails with a clear “claude-code runner required” message. Nodes without `runner: "claude-code"` use the default runner (OpenClaw > LLM > stub).
+**Per-node rule:** Nodes with `runner: "claude-code"` use the Claude Code runner when `claudeCodeRunner` is set; if it is not set (e.g. when running inside OpenClaw), the run fails with a clear "claude-code runner required" message. Nodes without `runner: "claude-code"` use the default runner (OpenClaw > LLM > stub).
 
 - **CLI (`ripline run`):** If the CLI was registered by the plugin inside OpenClaw, it receives the OpenClaw agent runner and uses it. Otherwise, it uses an LLM runner if config is present (env, config file, or `--agent-provider` / `--agent-model`), and optionally a Claude Code runner from env/config; or the stub. Use `--demo` for a deterministic stub.
-- **HTTP server:** The server uses the runners passed in at startup. When started by the plugin inside OpenClaw, the plugin passes only the OpenClaw runner (no Claude Code runner). When started standalone (e.g. `ripline serve`), it uses an LLM runner and/or Claude Code runner if config is present, otherwise the stub. To force the stub even when an OpenClaw or LLM runner would be available, set **`RIPLINE_AGENT_RUNNER=stub`** in the environment before starting the server.
+- **HTTP server:** The server uses the runners passed in at startup. When started by the plugin inside OpenClaw, the plugin passes only the OpenClaw runner (no Claude Code runner). When started standalone (e.g. `ripline serve`), it uses an LLM runner and/or Claude Code runner if config is present, otherwise the stub. To force the stub even when an LLM runner would be available, set **`RIPLINE_AGENT_RUNNER=stub`** in the environment before starting the server.
 
 ---
 
 ## Using Claude Code as a runner
 
-When running **standalone** (not inside OpenClaw), you can configure the **Claude Code** runner so that agent nodes with `runner: "claude-code"` invoke the Claude Code SDK (plan-only or full execute) with a configurable working directory. This is a standalone alternative to the LLM runner for full pipeline flows without OpenClaw.
+When running **standalone** (not inside OpenClaw), you can configure the **Claude Code** runner so that agent nodes with `runner: "claude-code"` invoke the Claude Code SDK (plan-only or full execute) with a configurable working directory.
 
 **When to use `runner: claude-code` vs the LLM runner**
 
@@ -65,8 +73,8 @@ When running **standalone** (not inside OpenClaw), you can configure the **Claud
 
 **Plan vs execute mode and security**
 
-- **`mode: "plan"`** – Read-only. The runner uses the SDK with `permissionMode: "plan"` and a **PreToolUse** hook that **always denies** `Write`, `Edit`, and `MultiEdit` (defense-in-depth). Use this for “analyze and suggest” steps.
-- **`mode: "execute"`** (default) – The model may use write/edit tools. Use for “implement this” or “apply changes” steps.
+- **`mode: "plan"`** – Read-only. The runner uses the SDK with `permissionMode: "plan"` and a **PreToolUse** hook that **always denies** `Write`, `Edit`, and `MultiEdit` (defense-in-depth). Use this for "analyze and suggest" steps.
+- **`mode: "execute"`** (default) – The model may use write/edit tools. Use for "implement this" or "apply changes" steps.
 
 **`cwd` injection**
 
@@ -79,7 +87,7 @@ When running **standalone** (not inside OpenClaw), you can configure the **Claud
 - **Config file:** In `.ripline/agent.json` or `ripline.config.json`, use a top-level **`claudeCode`** key: `{ "claudeCode": { "mode": "execute", "cwd": "/path/to/project", "model": "claude-sonnet-4-6", "maxTurns": 10, "timeoutSeconds": 120 } }`. The optional **`model`** sets the default for all Claude Code nodes; per-node **`model`** overrides it.
 - **Plugin config:** When the plugin runs without OpenClaw, you can set `pluginConfig.claudeCode` with the same shape.
 
-**Important:** When the pipeline runs **inside OpenClaw**, `claudeCodeRunner` is **not** set. Agent nodes with `runner: "claude-code"` will fail with “claude-code runner required”. Use the default runner (OpenClaw) for those environments.
+**Important:** When the pipeline runs **inside OpenClaw**, `claudeCodeRunner` is **not** set. Agent nodes with `runner: "claude-code"` will fail with "claude-code runner required". Use the default runner (OpenClaw) for those environments.
 
 **Example: spec then build queue with Claude Code**
 
@@ -110,7 +118,7 @@ Ensure `run.inputs.repoPath` is set (e.g. from an input node or upstream artifac
 
 By default, execute mode uses `permissionMode: "dontAsk"` with an explicit **allowedTools** whitelist and **disallowedTools** denylist. For fully autonomous headless execution in an isolated environment (e.g. a container or VM, or CI/CD), you can opt in to **bypass permissions** mode. In this mode the SDK does not prompt for tool approval and **allowedTools** is not enforced by the SDK (a known SDK behavior); **disallowedTools** is still applied as a last-resort constraint.
 
-**When it’s appropriate:** Only in isolated environments where the host is already scoped (container, VM, dedicated CI runner). Do **not** use bypass on a shared or personal machine.
+**When it's appropriate:** Only in isolated environments where the host is already scoped (container, VM, dedicated CI runner). Do **not** use bypass on a shared or personal machine.
 
 **How to enable (user-level only; not configurable from pipeline YAML or profiles):**
 
@@ -128,13 +136,13 @@ The Claude Code runner writes diagnostic logs to stderr (and, when running a sto
 3. **Rich error detail on failure** — On non-success (e.g. `error_max_turns`), the runner logs `subtype`, `errors`, and a result snippet, then throws with that detail.
 4. **Config at startup** — Set **`RIPLINE_LOG_CONFIG=1`** to log the effective config once per invocation: `maxTurns`, `timeoutMs`, `mode`, `cwd`. Omit or leave unset to keep startup quiet.
 
-To view logs for a run: use **`ripline logs <runId>`** (or **`ripline logs <runId> --follow`** to stream), or **`GET /runs/:runId/logs`** / **`GET /runs/:runId/logs/stream`** via the HTTP API. See [Logging](https://github.com/craigjmidwinter/ripline/blob/main/README.md#logging) and [HTTP API – run logs](http-api#get-run-logs).
+To view logs for a run: use **`ripline logs <runId>`** (or **`ripline logs <runId> --follow`** to stream), or **`GET /runs/:runId/logs`** / **`GET /runs/:runId/logs/stream`** via the HTTP API. See [HTTP API – run logs](http-api#get-run-logs).
 
 **Activation rules:** Bypass is used only when **all** of the following are true: the global flag is enabled (config or env), the **node** sets `dangerouslySkipPermissions: true`, the node **mode** is `"execute"`, and **cwd** is explicitly set (in config or node params) and resolves to an existing directory. Otherwise the runner falls back to default execute mode and logs why bypass was not activated.
 
 **What does not change:** Plan mode is never affected. `cwd` validation, `maxTurns` ceiling, timeout, and the PreToolUse hook behavior are unchanged. A **warning** is always printed to stderr when bypass is active; it cannot be suppressed.
 
-**Reference:** Claude Code’s own documentation for `--dangerously-skip-permissions` (or equivalent) describes the same capability at the CLI level.
+---
 
 ## Skills
 
@@ -247,14 +255,20 @@ If the agent's effective `cwd` contains a `SKILLS.md` file, its content is also 
 
 ## Context isolation (sessions)
 
-To avoid **context bleed** between agent nodes, the plugin uses OpenClaw’s native session model:
+To avoid **context bleed** between agent nodes:
 
-- **Default (isolation):** Each agent node runs with a **new unique session ID** (UUID) passed as `--session <id>`. The agent only sees the current prompt and inputs; no prior turns from other nodes.
+- **Default (isolation):** Each agent node runs with a **new unique session ID** (UUID). The agent only sees the current prompt and inputs; no prior turns from other nodes.
 - **Continuity (opt-in):** Set **`resetSession: false`** on an agent node to use the **run-level session**. The runner generates one shared `sessionId` per pipeline run and passes it to every node that has `resetSession: false`, so those nodes share the same conversation.
 
-No file deletion, in-chat “reset” prompts, or compact commands are used; isolation and continuity are driven only by the `--session` argument.
+---
 
-## Agent JSON envelope
+## OpenClaw runner
+
+> **This section describes the optional OpenClaw integration.** Ripline works fully standalone without OpenClaw. See [OpenClaw Integration](../README.md#openclaw-integration) for plugin setup.
+
+When the pipeline plugin is loaded by an OpenClaw host, the host passes a **runtime** API. The plugin creates an agent runner that calls the OpenClaw agent subprocess via `runtime.system.runCommandWithTimeout`. All pipeline agent nodes then use the platform's configured models, tools, and sandbox automatically.
+
+### Agent JSON envelope
 
 The OpenClaw runner invokes:
 
@@ -269,6 +283,14 @@ with the prompt on stdin. The `sessionId` is either a new UUID per node (context
 
 Any non-zero exit code or invalid JSON is surfaced as an error; the run record is updated (status `errored`, `waitFor` cleared) with a clear message.
 
+### Limitations when running inside OpenClaw
+
+- The `claude-code` runner is **not available**. Agent nodes with `runner: "claude-code"` will fail with "claude-code runner required".
+- `agentId` on each node selects the OpenClaw agent persona/config to invoke.
+- `thinking` and `timeout` are passed through to the OpenClaw agent CLI.
+
+---
+
 ## References
 
 - `src/pipeline/executors/agent.ts` – agent node executor and `AgentRunner` type
@@ -276,12 +298,11 @@ Any non-zero exit code or invalid JSON is surfaced as an error; the run record i
 - `src/llm-agent-runner.ts` – `createLlmAgentRunner(config)` for Ollama/OpenAI/Anthropic
 - `src/claude-code-runner.ts` – `createClaudeCodeRunner(config)` for Claude Code (plan/execute)
 - `src/agent-runner-config.ts` – config resolution (env, file, plugin)
-- `docs/stories/story-15-openclaw-agent-runner.md` – implementation story
 
 ## Node options
 
 - **`resetSession`** (optional, default `true`): When `true` or omitted, the node runs with a new session (context isolation). When `false`, the node uses the run-level `sessionId` for conversation continuity.
-- **`sessionId`** (optional, on node): Reserved for future use (e.g. explicit “use this session” override). Run-level session is set by the runner; nodes with `resetSession: false` receive it via execution context.
+- **`sessionId`** (optional, on node): Reserved for future use (e.g. explicit "use this session" override). Run-level session is set by the runner; nodes with `resetSession: false` receive it via execution context.
 - **`runner`** (optional): Set to `"claude-code"` to use the Claude Code runner for this node when configured; otherwise the default runner (OpenClaw > LLM > stub) is used.
 - **`mode`** (optional, when `runner: "claude-code"`): `"plan"` (read-only) or `"execute"` (default). Ignored for other runners.
 - **`model`** (optional, when `runner: "claude-code"`): Model to use for this node (e.g. `claude-sonnet-4-6`, `claude-opus-4-6`). Overrides the default from config or CLI. Omit to use the default.
