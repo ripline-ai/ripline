@@ -6,10 +6,10 @@ Every pipeline **agent** node delegates to a configurable **agent runner**. The 
 
 Ripline supports five runner types, selected in priority order:
 
-1. **OpenClaw** — when running inside an OpenClaw host, the host provides the agent runner automatically. See [OpenClaw runner](#openclaw-runner) below.
-2. **Per-node `runner: claude-code`** — when an agent node sets `runner: "claude-code"` and a Claude Code runner is configured. See [Using Claude Code as a runner](#using-claude-code-as-a-runner).
-3. **Per-node `runner: codex`** — when an agent node sets `runner: "codex"` and a Codex runner is configured. See [Using Codex as a runner](#using-codex-as-a-runner).
-4. **LLM runner** — when LLM config is present (Ollama, OpenAI, or Anthropic). See [Running with an LLM provider](#running-with-an-llm-provider).
+1. **Per-node `runner: claude-code`** — when an agent node sets `runner: "claude-code"` and a Claude Code runner is configured. See [Using Claude Code as a runner](#using-claude-code-as-a-runner).
+2. **Per-node `runner: codex`** — when an agent node sets `runner: "codex"` and a Codex runner is configured. See [Using Codex as a runner](#using-codex-as-a-runner).
+3. **LLM runner** — when LLM config is present (Ollama, OpenAI, or Anthropic). See [Running with an LLM provider](#running-with-an-llm-provider).
+4. **OpenClaw** — when running inside an OpenClaw host, the host can provide the default agent runner automatically. See [OpenClaw runner](#openclaw-runner) below.
 5. **Stub** — placeholder response when no runner is configured. Useful for testing pipeline structure.
 
 ---
@@ -36,9 +36,7 @@ Configure a single LLM provider for all agent nodes using environment variables,
 
 3. **CLI flags**
    - `ripline run --agent-provider ollama --agent-model llama3.2` (and optional `--agent-base-url`)
-   - `ripline serve --agent-provider openai --agent-model gpt-4o-mini` (use `OPENAI_API_KEY` or plugin config for the key)
-
-**Plugin config:** When the pipeline plugin is loaded without an OpenClaw runtime, you can set `agentRunner` in the plugin config: `{ "provider": "ollama", "model": "llama3.2" }` (and optional `apiKey`, `baseURL`). API keys can be omitted and read from env.
+   - `ripline serve --agent-provider openai --agent-model gpt-4o-mini` (use `OPENAI_API_KEY` for the key)
 
 **Limitations of the LLM runner (this version):**
 
@@ -51,16 +49,16 @@ Configure a single LLM provider for all agent nodes using environment variables,
 
 **Runner selection (global order):**
 
-1. **OpenClaw** – When the plugin runs inside an OpenClaw host, the host provides the agent runner. All agent nodes use it; built-in standalone runners like **Claude Code** and **Codex** are not available there.
-2. **Per-node `runner: claude-code`** – If an agent node has `runner: "claude-code"` and a Claude Code runner is configured, that node uses the Claude Code runner (plan or execute mode).
-3. **Per-node `runner: codex`** – If an agent node has `runner: "codex"` and a Codex runner is configured, that node uses the Codex runner (plan or execute mode).
-4. **LLM runner** – If no OpenClaw runtime and no per-node built-in code runner, and LLM config is present, agent nodes use the LLM runner (Ollama/OpenAI/Anthropic).
+1. **Per-node `runner: claude-code`** – If an agent node has `runner: "claude-code"` and a Claude Code runner is configured, that node uses the Claude Code runner (plan or execute mode).
+2. **Per-node `runner: codex`** – If an agent node has `runner: "codex"` and a Codex runner is configured, that node uses the Codex runner (plan or execute mode).
+3. **LLM runner** – If no per-node built-in code runner is selected and LLM config is present, agent nodes use the LLM runner (Ollama/OpenAI/Anthropic).
+4. **OpenClaw** – When Ripline runs inside an OpenClaw host, the host can provide the default agent runner.
 5. **Stub** – Otherwise the stub returns a placeholder response.
 
-**Per-node rule:** Nodes with `runner: "claude-code"` use the Claude Code runner when `claudeCodeRunner` is set; nodes with `runner: "codex"` use the Codex runner when `codexRunner` is set. If the requested built-in runner is not set, the run fails with a clear `"<runner> runner required"` message. Nodes without a built-in per-node runner use the default runner (OpenClaw > LLM > stub).
+**Per-node rule:** Nodes with `runner: "claude-code"` use the Claude Code runner when `claudeCodeRunner` is set; nodes with `runner: "codex"` use the Codex runner when `codexRunner` is set. If the requested built-in runner is not set, the run fails with a clear `"<runner> runner required"` message. Nodes without a built-in per-node runner use the default runner available in the current environment.
 
-- **CLI (`ripline run`):** If the CLI was registered by the plugin inside OpenClaw, it receives the OpenClaw agent runner and uses it. Otherwise, it uses an LLM runner if config is present (env, config file, or `--agent-provider` / `--agent-model`), and optionally Claude Code and/or Codex runners from env/config; or the stub. Use `--demo` for a deterministic stub.
-- **HTTP server:** The server uses the runners passed in at startup. When started by the plugin inside OpenClaw, the plugin passes only the OpenClaw runner. When started standalone (e.g. `ripline serve`), it uses an LLM runner and/or built-in code runners if config is present, otherwise the stub. To force the stub even when an LLM runner would be available, set **`RIPLINE_AGENT_RUNNER=stub`** in the environment before starting the server.
+- **CLI (`ripline run`):** Uses configured standalone runners when present, otherwise the stub. Use `--demo` for a deterministic stub run.
+- **HTTP server:** Uses the runners passed in at startup. To force the stub even when an LLM runner would be available, set **`RIPLINE_AGENT_RUNNER=stub`** before starting the server.
 
 ---
 
@@ -87,10 +85,6 @@ When running **standalone** (not inside OpenClaw), you can configure the **Claud
 
 - **Environment:** `RIPLINE_CLAUDE_CODE_MODE` (plan | execute), `RIPLINE_CLAUDE_CODE_CWD`, `RIPLINE_CLAUDE_CODE_MODEL` (default model, e.g. `claude-sonnet-4-6`), `RIPLINE_CLAUDE_CODE_MAX_TURNS`, `RIPLINE_CLAUDE_CODE_TIMEOUT` (seconds).
 - **Config file:** In `.ripline/agent.json` or `ripline.config.json`, use a top-level **`claudeCode`** key: `{ "claudeCode": { "mode": "execute", "cwd": "/path/to/project", "model": "claude-sonnet-4-6", "maxTurns": 10, "timeoutSeconds": 120 } }`. The optional **`model`** sets the default for all Claude Code nodes; per-node **`model`** overrides it.
-- **Plugin config:** When the plugin runs without OpenClaw, you can set `pluginConfig.claudeCode` with the same shape.
-
-**Important:** When the pipeline runs **inside OpenClaw**, `claudeCodeRunner` is **not** set. Agent nodes with `runner: "claude-code"` will fail with "claude-code runner required". Use the default runner (OpenClaw) for those environments.
-
 **Example: spec then build queue with Claude Code**
 
 ```yaml
@@ -134,10 +128,6 @@ When running **standalone** (not inside OpenClaw), you can configure the **Codex
 
 - **Environment:** `RIPLINE_CODEX_MODE` (plan | execute), `RIPLINE_CODEX_CWD`, `RIPLINE_CODEX_MODEL`, `RIPLINE_CODEX_TIMEOUT` (seconds).
 - **Config file:** In `.ripline/agent.json` or `ripline.config.json`, use a top-level **`codex`** key: `{ "codex": { "mode": "execute", "cwd": "/path/to/project", "model": "gpt-5.4", "timeoutSeconds": 120 } }`.
-- **Plugin config:** When the plugin runs without OpenClaw, you can set `pluginConfig.codex` with the same shape.
-
-**Important:** When the pipeline runs **inside OpenClaw**, `codexRunner` is **not** set. Agent nodes with `runner: "codex"` will fail with "codex runner required". Use the default runner (OpenClaw) for those environments.
-
 **Example: implement with Codex**
 
 ```yaml
@@ -346,13 +336,13 @@ Any non-zero exit code or invalid JSON is surfaced as an error; the run record i
 - `src/claude-code-runner.ts` – `createClaudeCodeRunner(config)` for Claude Code (plan/execute)
 - `src/codex-runner.ts` – `createCodexRunner(config)` for Codex (plan/execute)
 - `src/agent-runner-config.ts` – config resolution (env, file, plugin)
-- `src/interfaces/` – pluggable interfaces: `EventSink`, `QueueStore`, `RunnerRegistry`
+- `src/interfaces/` – pluggable interfaces: `EventSink` and `RunnerRegistry`
 
 ## Node options
 
 - **`resetSession`** (optional, default `true`): When `true` or omitted, the node runs with a new session (context isolation). When `false`, the node uses the run-level `sessionId` for conversation continuity.
 - **`sessionId`** (optional, on node): Reserved for future use (e.g. explicit "use this session" override). Run-level session is set by the runner; nodes with `resetSession: false` receive it via execution context.
-- **`runner`** (optional): Set to `"claude-code"` or `"codex"` to use that built-in runner for this node when configured; otherwise the default runner (OpenClaw > LLM > stub) is used.
+- **`runner`** (optional): Set to `"claude-code"` or `"codex"` to use that built-in runner for this node when configured; otherwise Ripline uses the default runner available in the current environment.
 - **`mode`** (optional, when `runner: "claude-code"` or `"codex"`): `"plan"` (read-only) or `"execute"` (default).
 - **`model`** (optional, when `runner: "claude-code"` or `"codex"`): Model to use for this node. Overrides the default from config or CLI. Omit to use the default.
 - **`cwd`** (optional, when `runner: "claude-code"` or `"codex"`): Working directory for the run; supports template interpolation (e.g. `{{ run.inputs.repoPath }}`). Must be an existing directory and must not contain `..`.

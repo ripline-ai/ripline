@@ -1,21 +1,21 @@
-# Example Pipelines (Implement Story, Spec→Build→Queue, Write Tech Script)
+# Example Pipelines
 
-The `pipelines/examples/` directory includes **three pipeline patterns**, each in two variants:
+The `pipelines/examples/` directory includes several reusable patterns for standalone Ripline usage.
 
-| Pattern | OpenClaw variant | Claude Code variant |
-|--------|-------------------|----------------------|
-| **Implement Story** | `implement_story_openclaw` | `implement_story_claude` |
-| **Spec → Build → Queue** | `spec_then_build_queue_openclaw` | `spec_then_build_queue_claude` |
-| **Write Tech Script** | `write_tech_script_openclaw` | `write_tech_script_claude` |
+## Included examples
 
-## OpenClaw vs Claude Code variants
+- `hello_world` — minimal input → transform → output
+- `parallel_agents` — multiple agent steps with explicit edges
+- `daily-brief` — recurring summary-style workflow
+- `implement_story_claude` / `implement_story_codex` — single coding task in a target repo
+- `spec_then_build_queue_claude` / `spec_then_build_queue_codex` — spec first, then fan out implementation work
+- `write_tech_script_claude` — longer-form content generation with file output
 
-- **OpenClaw** variants are intended to run **inside an OpenClaw host**. They use the default agent runner (no `runner: claude-code`) and may use hardcoded paths (e.g. `/home/openclaw/wintermute`, `/home/openclaw/obsidian/Scripts`). Use these when Ripline is loaded as a plugin in OpenClaw.
-- **Claude Code** variants run **standalone** (e.g. `ripline run` or `ripline serve`). They set `runner: claude-code` on agent nodes and use **parameterized paths** via `run.inputs` (e.g. `cwd: "{{ run.inputs.projectRoot }}"`). Supply those inputs with a [profile](../pipelines-and-profiles) or `--input`.
-- **Codex** follows the same standalone pattern as the Claude variants. Start from the Claude example and replace `runner: claude-code` with `runner: codex`, then configure the Codex runner in env or config.
-- Concrete Codex examples are included in `pipelines/examples/implement_story_codex.yaml` and `pipelines/examples/spec_then_build_queue_codex.yaml`.
+## Claude Code vs Codex variants
 
-See [Migrating pipelines from OpenClaw](../migrating-from-openclaw) for how to move from hardcoded paths to profile-driven inputs.
+- **Claude Code** variants use `runner: claude-code` and typically expect `cwd` or path inputs from the run input or a profile.
+- **Codex** variants follow the same workflow shape with `runner: codex`.
+- Both are intended to be copyable starting points, not framework-mandated patterns.
 
 ---
 
@@ -23,8 +23,7 @@ See [Migrating pipelines from OpenClaw](../migrating-from-openclaw) for how to m
 
 **Purpose:** Run a single development story: implement the described work in a codebase and commit.
 
-- **Input:** One task with `id`, `title`, and `detail` (typically provided by an enqueue when this pipeline is spawned).
-- **OpenClaw:** Uses default runner; `cwd` is `/home/openclaw/wintermute`.
+- **Input:** One task with `id`, `title`, and `detail`.
 - **Claude/Codex:** Use `runner: claude-code` or `runner: codex` with `cwd: "{{ run.inputs.projectRoot }}"`. Set `projectRoot` in a profile or when invoking.
 
 **Usually invoked by** the Spec → Build → Queue pipeline (spawn/enqueue), not run directly. To run alone for testing:
@@ -48,10 +47,9 @@ ripline run implement_story_codex --input '{"projectRoot":"/path/to/repo","task"
 - **Input:** `task` (string) — e.g. "Add a settings page with theme toggle and notification preferences."
 - **Flow:** intake → spec (agent) → decompose (agent) → queue (agent, outputs JSON) → parse (transform) → spawn (enqueue) → **collect** (collect_children) → **verify** (agent) → result.
 - **Model split (optional):** Use Sonnet for spec, decompose, queue, and verify (reasoning); use Haiku for the per-story implement step (speed). The doc examples in `docs/pipelines/examples/` illustrate this.
-- **Spawn:** The enqueue node creates one run of `implement_story_openclaw` or `implement_story_claude` per parsed task. The parent run pauses until all children are terminal (completed or errored). The **collect_children** node then aggregates child run results (including partial failures) so the **verify** step can run build/tests and reason over outcomes.
+- **Spawn:** The enqueue node creates one run of `implement_story_claude` or `implement_story_codex` per parsed task. The parent run pauses until all children are terminal (completed or errored). The **collect_children** node then aggregates child run results so the **verify** step can run build/tests and reason over outcomes.
 
-**OpenClaw:** All agent nodes use the default runner; spawn targets `implement_story_openclaw`.  
-**Claude/Codex:** All agent nodes use a built-in code runner; the example files ship with `runner: claude-code`, but you can switch them to `runner: codex`. Use a profile to set `projectRoot` so spawned runs and the verify step have the correct working directory.
+All agent nodes use a built-in code runner. The example files ship with either `runner: claude-code` or `runner: codex`. Use a profile to set `projectRoot` so spawned runs and the verify step have the correct working directory.
 
 **Run:**
 
@@ -74,7 +72,6 @@ ripline run spec_then_build_queue_codex --profile my-project --input '{"task":"A
 
 - **Input:** `idea` (string, video concept/title), `duration_minutes` (number).
 - **Flow:** intake → tech_brief (agent) → write (agent) → fact_check (agent) → save (agent, writes file) → result.
-- **OpenClaw:** Save node uses `cwd: /home/openclaw/obsidian/Scripts`.
 - **Claude/Codex:** Save node uses `cwd: "{{ run.inputs.scriptsPath }}"`. Set `scriptsPath` in a profile or `--input`.
 
 **Run:**
@@ -106,4 +103,4 @@ ripline run spec_then_build_queue_claude --profile my-project --input '{"task":"
 ripline run write_tech_script_claude --profile my-project --input '{"idea":"Intro to Ripline","duration_minutes":8}'
 ```
 
-These example pipelines live in `pipelines/examples/` and are intended as clearer, copy-paste-friendly references than the mission-control and area-owner examples.
+These example pipelines live in `pipelines/examples/` and are intended to be copy-paste-friendly starting points for standalone Ripline workflows.

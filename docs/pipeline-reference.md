@@ -182,12 +182,12 @@ The expression runs with `with (context) { return (expression); }`, so the follo
 
 ### `agent`
 
-Calls an agent runner (OpenClaw, LLM, Claude Code, or Codex) with a prompt and returns a text artifact. This is the primary node type for AI-powered work.
+Calls an agent runner (LLM, Claude Code, Codex, or OpenClaw) with a prompt and returns a text artifact. This is the primary node type for agent-driven work.
 
 ```yaml
 - id: summarize
   type: agent
-  agentId: main                   # optional — agent persona (OpenClaw only)
+  agentId: main                   # optional — agent identifier for OpenClaw integrations
   prompt: |
     Summarize the following content:
     {{ enrich.text }}
@@ -205,8 +205,8 @@ Calls an agent runner (OpenClaw, LLM, Claude Code, or Codex) with a prompt and r
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `prompt` | string | ✅ | The prompt sent to the agent. Supports `{{ }}` template interpolation. |
-| `agentId` | string | — | Agent ID passed to the OpenClaw runner (e.g. `vector`, `nova`). Ignored by LLM, Claude Code, and Codex runners. |
-| `thinking` | string | — | Thinking level: `off`, `minimal`, `low`, `medium`, `high`. Passed to OpenClaw runner only. |
+| `agentId` | string | — | Agent ID passed to the OpenClaw runner when that integration is active. Ignored by LLM, Claude Code, and Codex runners. |
+| `thinking` | string | — | Thinking level: `off`, `minimal`, `low`, `medium`, `high`. Used by integrations that support it. |
 | `timeoutSeconds` | number | — | Per-node deadline in seconds. The node is marked `errored` if exceeded. |
 | `resetSession` | boolean | — | When `true` (default), use a fresh session UUID per node for context isolation. When `false`, share the run-level session ID for multi-turn continuity. |
 | `sessionId` | string | — | Reserved for future explicit session override. |
@@ -559,7 +559,7 @@ Completed runs are stored in `.ripline/runs/<runId>/run.json`:
 
 ---
 
-## Full example: multi-agent spec pipeline
+## Full example: spec-then-build pipeline
 
 ```yaml
 id: spec_and_build

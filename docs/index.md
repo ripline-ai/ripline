@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: "Ripline"
-  text: "Run multi-step workflows with agents and scripts"
-  tagline: "Define your steps in YAML, run them, and see every step. When something fails or you need to change the flow, pick up from where it stopped or edit and rerun—no starting over."
+  text: "Repeatable agent workflows"
+  tagline: "Define workflows as explicit steps with contracts between them. Run them, inspect them, and rerun them without hidden context."
   actions:
     - theme: brand
       text: Get Started
@@ -15,21 +15,21 @@ hero:
 
 features:
   - icon: 🔗
-    title: Workflows as a graph
-    details: Each step is a node—agent prompts, scripts, API calls, approvals. Connect them in YAML or JSON with branches, loops, and conditions.
+    title: Explicit Step Boundaries
+    details: Each workflow step is declared in YAML or JSON with clear edges, inputs, and outputs.
   - icon: ⚡
-    title: Edit and go
-    details: Change a pipeline file and the next run uses the new version. No redeploy or restart.
+    title: Repeatable Runs
+    details: Pipelines live as files, runs are persisted, and failed workflows can be retried without rebuilding the whole process by hand.
   - icon: 🤖
-    title: Any agent you use
-    details: Ollama, OpenAI, Anthropic, Claude Code, or your own runner. Pluggable RunnerRegistry — choose the runner per step and mix them in one pipeline.
+    title: Context Isolation
+    details: Agent nodes start with fresh context by default, so one step does not silently contaminate the next.
   - icon: 🔍
-    title: See what ran
-    details: Every run is logged—which node ran, what went in and out, how long it took. Resume from the exact step that failed.
+    title: Runtime Contracts
+    details: Validate pipeline and node boundaries with JSON Schema so bad payloads fail at the edge instead of leaking downstream.
   - icon: 🔌
-    title: CLI, API, or plugin
-    details: Run from the terminal, call the HTTP API from a dashboard or cron, or plug into OpenClaw. Same pipelines everywhere.
+    title: CLI, API, or OpenClaw
+    details: Run Ripline from the terminal, trigger it over HTTP, or host it inside OpenClaw when that integration fits your setup.
   - icon: 📋
-    title: Schemas per step
-    details: Define what each step expects and produces. Ripline checks it at runtime so steps don’t get the wrong data.
+    title: Flexible Runners
+    details: Use LLM providers, Claude Code, Codex, or a custom runner per workflow step.
 ---

@@ -11,7 +11,6 @@ Ripline includes a first-party integration for [OpenClaw](https://github.com/cra
 | `createOpenClawAgentRunner(api)` | Factory that creates an `AgentRunner` backed by the OpenClaw agent subprocess. |
 | `registerOpenClawRunner(registry, api)` | Convenience helper — detects the OpenClaw runtime and registers the runner into a `RunnerRegistry`. |
 | `hasOpenClawRuntime(api)` | Type-guard returning `true` when the OpenClaw runtime API is present. |
-| `WintermuteEventSink` | `EventSink` implementation that forwards pipeline events to the Wintermute task management HTTP API. |
 
 ---
 
@@ -63,19 +62,6 @@ Any non-zero exit code or invalid JSON is surfaced as an error in the run record
 
 ---
 
-## WintermuteEventSink
-
-`WintermuteEventSink` implements the `EventSink` interface and forwards pipeline events to the Wintermute task management API. Register it in your plugin setup:
-
-```typescript
-import { WintermuteEventSink } from 'ripline/integrations/openclaw';
-
-const sink = new WintermuteEventSink({ baseUrl: 'http://localhost:3000' });
-// pass sink to the Ripline plugin/scheduler
-```
-
----
-
 ## Using the pluggable interfaces
 
 The OpenClaw integration is built on top of Ripline's core pluggable interfaces — the same interfaces you can use to build any custom integration:
@@ -84,9 +70,8 @@ The OpenClaw integration is built on top of Ripline's core pluggable interfaces 
 |-----------|---------|
 | `RunnerRegistry` | Map runner type strings to `AgentRunner` implementations |
 | `EventSink` | Receive pipeline events (started, completed, errored) |
-| `QueueStore` | Persist and load background queue items |
 
-All three are exported from `src/interfaces/`. Built-in implementations include `DefaultRunnerRegistry`, `NoopEventSink`, `ConsoleEventSink`, `WebhookEventSink`, `MemoryQueueStore`, and `YamlFileQueueStore`.
+These are exported from `src/interfaces/`. Built-in implementations include `DefaultRunnerRegistry`, `NoopEventSink`, `ConsoleEventSink`, and `WebhookEventSink`.
 
 ---
 
@@ -94,9 +79,8 @@ All three are exported from `src/interfaces/`. Built-in implementations include 
 
 ```
 src/integrations/openclaw/
-├── index.ts               # re-exports and registerOpenClawRunner helper
-├── openclaw-runner.ts     # createOpenClawAgentRunner + OpenClawPluginApi type
-└── wintermute-event-sink.ts  # WintermuteEventSink
+├── index.ts            # re-exports and registerOpenClawRunner helper
+└── openclaw-runner.ts  # createOpenClawAgentRunner + OpenClawPluginApi type
 ```
 
 ---
@@ -104,5 +88,4 @@ src/integrations/openclaw/
 ## Further reading
 
 - [Agent integration](../agent-integration) — runner selection, Claude Code runner, LLM runner
-- [Migrating pipelines from OpenClaw](../migrating-from-openclaw) — parameterise hardcoded paths and move to profiles
 - [Configuration reference](../configuration) — plugin config fields

@@ -1,6 +1,6 @@
 # Getting Started
 
-Ripline is a graph-native pipeline engine for orchestrating multi-agent workflows. You declare the flow as a YAML DAG, Ripline executes it reliably, and every run is fully traceable and resumable.
+Ripline is a workflow engine for repeatable AI agent pipelines. You define each step explicitly, keep context isolated by default, and validate boundaries with contracts where needed.
 
 ## Installation
 
@@ -16,7 +16,7 @@ Once built, the `ripline` CLI is available via `node bin/ripline.js` or, if the 
 
 ## Hello World
 
-The minimal pipeline has three steps: **input** (load JSON), **transform** (shape data), **output** (write artifact).
+The minimal pipeline has three steps: **input** (load JSON), **transform** (shape data), and **output** (write artifact).
 
 **Pipeline** (`pipelines/examples/hello-world.yaml`):
 
@@ -57,6 +57,12 @@ npm run demo
 ```
 
 Outputs are written to `.ripline/runs/<runId>/run.json` and, if you pass `-o <path>`, to that file.
+
+## What to understand next
+
+- **Pipelines are explicit.** Nodes, edges, retries, and templates are all declared in the pipeline file.
+- **Agent steps are isolated by default.** Set `resetSession: false` only when you intentionally want continuity across steps.
+- **Contracts are optional but useful.** Add JSON Schema at pipeline or node boundaries when you want stricter guarantees.
 
 ## Next steps
 

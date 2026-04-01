@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This document is the complete reference for all Ripline configuration files, environment variables, and plugin config options.
+This document is the complete reference for Ripline configuration files, environment variables, and supported OpenClaw host options.
 
 ---
 
@@ -93,7 +93,7 @@ Optional. Place this file in the root of a project to set project-local override
 
 ## Agent config — `~/.ripline/agent.json` or `ripline.config.json`
 
-Configure the standalone agent runner (Ollama, OpenAI, or Anthropic) used when running outside of an OpenClaw host.
+Configure the standalone agent runner (Ollama, OpenAI, or Anthropic) used when running Ripline directly.
 
 You can put this in either:
 - `~/.ripline/agent.json` — user-level default
@@ -171,9 +171,9 @@ Configure the Codex runner. Place in `ripline.config.json` under `codex` or set 
 
 ---
 
-## Plugin config (OpenClaw host)
+## OpenClaw host config
 
-When Ripline is loaded as an OpenClaw plugin, these fields are set in the host's plugin config block (in `openclaw.plugin.json` or the host config).
+When Ripline is loaded inside OpenClaw, these fields are set in the host's plugin config block.
 
 ```jsonc
 {
@@ -216,7 +216,7 @@ When Ripline is loaded as an OpenClaw plugin, these fields are set in the host's
 | `httpPath` | string | — | Base URL path for the HTTP API when mounted by the OpenClaw host (default: `/pipelines`). |
 | `httpPort` | number | — | Port for the HTTP server when started by the plugin (default: `4001`). |
 | `authToken` | string | — | If set, all HTTP requests must include `Authorization: Bearer <token>`. |
-| `agentRunner` | object | — | Standalone LLM agent config. Used when the plugin runs without an OpenClaw runtime. Same shape as the [agent config](#agent-config). |
+| `agentRunner` | object | — | Standalone LLM agent config. Same shape as the [agent config](#agent-config). |
 | `claudeCode` | object | — | Claude Code runner config. Same shape as [Claude Code config](#claude-code-config). |
 | `codex` | object | — | Codex runner config. Same shape as [Codex config](#codex-config). |
 
@@ -233,7 +233,7 @@ All environment variables override the corresponding config file values unless a
 | `RIPLINE_AGENT_PROVIDER` | Standalone agent provider: `ollama`, `openai`, or `anthropic`. |
 | `RIPLINE_AGENT_MODEL` | Standalone agent model name. |
 | `RIPLINE_AGENT_BASE_URL` | Custom base URL for the agent API endpoint. |
-| `RIPLINE_AGENT_RUNNER` | Force runner: `stub` bypasses OpenClaw and LLM runners even if configured. |
+| `RIPLINE_AGENT_RUNNER` | Force runner: `stub` bypasses the default LLM runner even if configured. |
 | `OPENAI_API_KEY` | OpenAI API key (used when provider is `openai` and no `apiKey` in config). |
 | `ANTHROPIC_API_KEY` | Anthropic API key (used when provider is `anthropic` and no `apiKey` in config). |
 

@@ -1,50 +1,48 @@
-# Cron and automation (AgentMail, Telegram)
+# Cron and automation
 
-Run the area-owner pipeline on a schedule and send the backlog summary by email or to Telegram.
+Ripline works well in cron, CI, or any non-interactive automation where you want a repeatable workflow invocation with explicit inputs and outputs.
 
-## Cron entry (daily 13:00 CT)
-
-```bash
-# Run pipeline and email backlog summary
-0 13 * * * cd /path/to/ripline && npm run build && node bin/ripline.js run -p pipelines/templates/ripline-area-owner.yaml -i samples/ripline-area-owner-inputs.json -o dist/backlog-cron.json 2>&1 | mail -s "Ripline backlog" you@example.com
-```
-
-Or use the dedicated cron script (prints summary to stdout):
+## Minimal cron example
 
 ```bash
-0 13 * * * cd /path/to/ripline && npx tsx scripts/run-area-owner-cron.ts 2>&1 | mail -s "Ripline backlog" you@example.com
+0 * * * * cd /path/to/ripline && node bin/ripline.js run \
+  --pipeline pipelines/examples/hello-world.yaml \
+  --input '{"person":"cron","goal":"hourly check-in"}' \
+  --output /tmp/ripline-output.json
 ```
 
-## AgentMail
+## Using input and output files
 
-To send the summary via [AgentMail](https://agentmail.to) (or OpenClaw’s email tool), run the pipeline and then have your agent read the output file and send it:
+For larger inputs, keep them in files instead of embedding JSON in the cron entry:
 
-1. **Cron** runs at 13:00 CT and writes the backlog to `dist/backlog-cron.json` (or `RIPLINE_OUT`).
-2. **OpenClaw cron job** (or a follow-up job) runs an agent that:
-   - Reads `dist/backlog-cron.json` (or the summary text from the cron script’s stdout).
-   - Composes a short “Ripline backlog” email and sends it via AgentMail (or your configured email tool).
+```bash
+node bin/ripline.js run \
+  --pipeline /path/to/pipeline.yaml \
+  --input /path/to/inputs.json \
+  --output /path/to/output.json
+```
 
-Example (pseudo-config): schedule a daily job that runs `npx tsx scripts/run-area-owner-cron.ts`, captures stdout, and passes that text to the agent’s “send email” action with subject “Ripline backlog”.
+This makes scheduled runs easier to review, diff, and regenerate.
 
-## Telegram
+## CI example
 
-To post the summary to a Telegram channel or chat:
+```bash
+npm install
+npm run build
+node bin/ripline.js run \
+  --pipeline pipelines/examples/hello-world.yaml \
+  --input samples/hello-world-inputs.json
+```
 
-1. Run the cron script and capture stdout:  
-   `npx tsx scripts/run-area-owner-cron.ts > /tmp/ripline-summary.txt`
-2. Use a Telegram bot or script to send the file (or its contents) to your channel/chat. For example, with `curl` and a bot token:
+## Failure handling
 
-   ```bash
-   curl -s -X POST "https://api.telegram.org/bot<BOT_TOKEN>/sendMessage" \
-     -d "chat_id=<CHAT_ID>" \
-     -d "text=$(cat /tmp/ripline-summary.txt)"
-   ```
+- Ripline exits with a non-zero status on failure, so cron and CI can alert or retry.
+- Use `ripline run --resume <runId>` when you want to continue a persisted run after a failure.
+- Use `ripline logs <runId>` or the HTTP log endpoints to inspect failures without rerunning immediately.
 
-3. Or schedule an OpenClaw job that runs the pipeline, reads the summary (from file or script output), and calls your Telegram integration to post it.
+## Helpful environment variables
 
-## Env vars (optional)
-
-| Variable        | Description |
-|----------------|-------------|
-| `RIPLINE_INPUTS` | Path to JSON inputs (default: `samples/ripline-area-owner-inputs.json`) |
-| `RIPLINE_OUT`    | Path for backlog JSON (default: `dist/backlog-cron.json`) |
+| Variable | Description |
+| --- | --- |
+| `RIPLINE_INPUTS` | Path to a JSON input file for helper scripts or wrappers |
+| `RIPLINE_OUT` | Path to write final JSON output for helper scripts or wrappers |

@@ -1,15 +1,15 @@
 # Ripline HTTP API
 
-Ripline exposes an HTTP surface so dashboards, Discord bots, cron jobs, or any HTTP client can trigger and inspect pipeline runs.
+Ripline exposes an HTTP API for triggering runs, inspecting state, retrying failed work, and streaming updates.
 
 ## Base URL and port
 
 - **Default port:** `4001`
-- **Base path:** By default routes are at the root. When mounted by OpenClaw, the host uses `config.httpPath` (e.g. `/pipelines`) as the prefix.
+- **Base path:** By default routes are at the root. When Ripline is mounted inside OpenClaw, the host can apply `config.httpPath` (for example `/pipelines`) as a prefix.
 
 ## Authentication
 
-If the plugin is configured with `authToken`, every request must include:
+If Ripline is configured with `authToken`, every request must include:
 
 ```http
 Authorization: Bearer <your-auth-token>
@@ -42,8 +42,8 @@ curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:4001/pipelines
 {
   "pipelines": [
     {
-      "id": "ripline-area-owner",
-      "name": "Ripline Area Owner Loop",
+      "id": "hello_world",
+      "name": "Hello World Pipeline",
       "tags": []
     }
   ]
@@ -61,17 +61,17 @@ Starts a new run for the given pipeline. Optional body: `inputs` (object) and `e
 
 **Example (no auth):**
 ```bash
-curl -X POST http://localhost:4001/pipelines/ripline-area-owner/run \
+curl -X POST http://localhost:4001/pipelines/hello_world/run \
   -H "Content-Type: application/json" \
-  -d '{}'
+  -d '{"inputs":{"person":"World"}}'
 ```
 
 **Example (with inputs and env):**
 ```bash
-curl -X POST http://localhost:4001/pipelines/ripline-area-owner/run \
+curl -X POST http://localhost:4001/pipelines/hello_world/run \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{"inputs":{"area":"eng"},"env":{"ENV":"staging"}}'
+  -d '{"inputs":{"person":"World","goal":"get started"},"env":{"ENV":"staging"}}'
 ```
 
 **Response (202 Accepted):**
@@ -98,14 +98,14 @@ curl http://localhost:4001/runs/550e8400-e29b-41d4-a716-446655440000
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
-  "pipelineId": "ripline-area-owner",
+  "pipelineId": "hello_world",
   "status": "completed",
   "startedAt": 1234567890000,
   "updatedAt": 1234567895000,
-  "inputs": {},
+  "inputs": { "person": "World" },
   "outputs": { ... },
   "steps": [
-    { "nodeId": "area-owner-intake", "status": "completed", "startedAt": ..., "finishedAt": ... },
+    { "nodeId": "intake", "status": "completed", "startedAt": ..., "finishedAt": ... },
     ...
   ]
 }
@@ -205,147 +205,9 @@ Server-Sent Events stream of new log lines. The server polls the run log file an
 curl -N http://localhost:4001/runs/550e8400-e29b-41d4-a716-446655440000/logs/stream
 ```
 
-## Background Queue
+## OpenClaw host config
 
-Endpoints for managing the background work queue and auto-execution toggle. Items are priority-scored and executed sequentially by the AutoExecutor.
-
-### List queue items
-
-```http
-GET /queue
-```
-
-Returns all queue items with their computed priority scores, sorted descending.
-
-**Response (200):**
-```json
-{
-  "items": [
-    {
-      "id": "uuid",
-      "pipeline": "my_pipeline",
-      "inputs": { "task": "..." },
-      "priority": 2.5,
-      "severityWeight": 1,
-      "manualBoost": 0,
-      "createdAt": 1711584000000,
-      "status": "pending",
-      "retries": 0,
-      "maxRetries": 3,
-      "needsReview": false,
-      "computedPriority": 3.7
-    }
-  ]
-}
-```
-
-### List approved (pending) items
-
-```http
-GET /queue/approved
-```
-
-Returns only items with status `pending`, sorted by computed priority descending.
-
-### Add a queue item
-
-```http
-POST /queue
-Content-Type: application/json
-```
-
-**Request body:**
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `pipeline` | string | **yes** | — | Pipeline ID to execute |
-| `inputs` | object | no | `{}` | Pipeline inputs |
-| `severityWeight` | number | no | `1` | Base priority weight |
-| `manualBoost` | number | no | `0` | Manual priority adjustment |
-| `maxRetries` | number | no | config default (3) | Circuit-breaker retry limit |
-
-**Example:**
-```bash
-curl -X POST http://localhost:4001/queue \
-  -H "Content-Type: application/json" \
-  -d '{"pipeline": "implement_story", "inputs": {"task": "add OAuth"}, "severityWeight": 2}'
-```
-
-**Response (201):** The created queue item.
-
-### Update a queue item
-
-```http
-PATCH /queue/:id
-Content-Type: application/json
-```
-
-**Updatable fields:** `priority` (number), `manualBoost` (number), `severityWeight` (number), `status` (one of: `pending`, `running`, `completed`, `errored`, `failed`).
-
-**Response (200):** The updated queue item. **404** if not found.
-
-### Delete a queue item
-
-```http
-DELETE /queue/:id
-```
-
-**Response:** `204 No Content`. **404** if not found.
-
-### Toggle auto-execution
-
-```http
-PUT /config/background-queue
-Content-Type: application/json
-```
-
-Enables or disables the AutoExecutor at runtime. The change is persisted to `~/.ripline/config.json` so it survives restarts.
-
-**Request body:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `enabled` | boolean | **yes** | `true` to enable auto-dispatch, `false` to stop |
-
-**Example — enable:**
-```bash
-curl -X PUT http://localhost:4001/config/background-queue \
-  -H "Content-Type: application/json" \
-  -d '{"enabled": true}'
-```
-
-**Response (200):**
-```json
-{
-  "backgroundQueue": {
-    "enabled": true,
-    "maxRetries": 3
-  }
-}
-```
-
-**Behavior:** When enabled, the AutoExecutor immediately checks the queue and dispatches the highest-priority pending item. When disabled, the current run finishes but no new items are dispatched. Re-enabling resumes dispatch.
-
-### Read current config
-
-```http
-GET /config/background-queue
-```
-
-Returns the current background queue config state.
-
-**Response (200):**
-```json
-{
-  "enabled": true
-}
-```
-
----
-
-## Plugin config
-
-In `openclaw.plugin.json` (or the host config), you can set:
+If you run Ripline inside OpenClaw, configure it in the host plugin block:
 
 | Key         | Description |
 |------------|-------------|

@@ -36,7 +36,7 @@
 
 ### Iconography
 - Wordmark features a double-wave ligature inside the “R”.
-- Secondary mark: rotated rectangle with two stacked wave strokes → works as favicon, lane badge, or mission-control chip.
+- Secondary mark: rotated rectangle with two stacked wave strokes → works as favicon, lane badge, or compact product chip.
 - Illustrations should feel like sonar readouts: thick strokes, minimal gradients, rely on noise or halftone textures over drop shadows.
 
 ### Motion cues
@@ -50,7 +50,7 @@
 
 ## 5. Assets & References
 - **Docs:** `docs/pipeline-readme.md` (README drop-in)
-- **Palette tokens:** Add to Mission Control tokens file as `--ripline-*` (pending build)
+- **Palette tokens:** Publish as `--ripline-*` design tokens when the shared design system is ready
 - **Kanban card:** `task-pipeline-brand` updated with this spec
 
 ## 6. Next Iterations
