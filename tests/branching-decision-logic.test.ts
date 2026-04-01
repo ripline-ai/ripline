@@ -672,6 +672,55 @@ describe("Loop node executor (executeLoop)", () => {
     // Exit after 3 iterations (checked after each)
     expect((result.value as unknown[]).length).toBe(3);
   });
+
+  it("checkpoints sequential loop progress so resume can continue mid-node", async () => {
+    const store = new MemoryRunStore();
+    const record = await store.createRun({ pipelineId: "loop-resume", inputs: {} });
+    record.status = "running";
+    await store.save(record);
+
+    const node: LoopNode = {
+      id: "loop1",
+      type: "loop",
+      collection: "[1, 2, 3]",
+      body: {
+        entry: ["body"],
+        nodes: [
+          { id: "body", type: "transform", expression: "loop.item * 10" },
+        ],
+      },
+      exitCondition: "loop.results.length >= 2",
+    };
+    const ctx = makeContext({
+      runId: record.id,
+      currentNodeIndex: 4,
+      store,
+    });
+
+    const first = await executeLoop(node, ctx);
+    expect(first.value).toEqual([10, 20]);
+
+    const saved = await store.load(record.id);
+    expect(saved?.cursor?.nextNodeIndex).toBe(4);
+    expect((saved?.cursor?.context.artifacts as Record<string, unknown>)["__sequential_loop_state_loop1"]).toEqual({
+      nextIndex: 2,
+      iterationResults: [10, 20],
+    });
+
+    const resumeCtx = makeContext({
+      runId: record.id,
+      currentNodeIndex: 4,
+      store,
+      artifacts: { ...(saved?.cursor?.context.artifacts as Record<string, unknown>) },
+      outputs: { ...(saved?.cursor?.context.outputs as Record<string, unknown> ?? {}) },
+    });
+    const resumedNode: LoopNode = {
+      ...node,
+      exitCondition: undefined,
+    };
+    const resumed = await executeLoop(resumedNode, resumeCtx);
+    expect(resumed.value).toEqual([10, 20, 30]);
+  });
 });
 
 /* -------------------------------------------------------------------------- */

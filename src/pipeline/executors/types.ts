@@ -27,6 +27,8 @@ export type ExecutorContext = {
   outPath?: string;
   /** Current run ID (set when running a stored run); required for enqueue node. */
   runId?: string;
+  /** Current node index in the pipeline execution order; used for in-node checkpointing. */
+  currentNodeIndex?: number;
   /** Run store (set when queue is available); required for enqueue to update parent. */
   store?: RunStore;
   /** Queue to enqueue child runs; required for enqueue node. */

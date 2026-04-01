@@ -462,7 +462,7 @@ export class DeterministicRunner extends EventEmitter {
 
       for (let attempt = 1; attempt <= effectiveMaxAttempts; attempt++) {
         try {
-          const executorContext = this.getExecutorContext(node, context, record);
+          const executorContext = this.getExecutorContext(node, context, record, i);
           const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner; codexRunner?: AgentRunner; agentDefinitions?: Record<string, AgentDefinition>; skillsRegistry?: SkillsRegistry; skillsDir?: string } = {};
           if (this.runnerOptions.agentRunner !== undefined) execOptions.agentRunner = this.runnerOptions.agentRunner;
           if (this.runnerOptions.claudeCodeRunner !== undefined) execOptions.claudeCodeRunner = this.runnerOptions.claudeCodeRunner;
@@ -685,7 +685,8 @@ export class DeterministicRunner extends EventEmitter {
   private getExecutorContext(
     node: PipelineNode,
     context: RunContext,
-    record?: PipelineRunRecord
+    record?: PipelineRunRecord,
+    currentNodeIndex?: number,
   ): import("./executors/types.js").ExecutorContext {
     const base = this.getNodeContext(node, context);
     return {
@@ -695,6 +696,7 @@ export class DeterministicRunner extends EventEmitter {
       ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
       ...(record && {
         runId: record.id,
+        ...(currentNodeIndex !== undefined && { currentNodeIndex }),
         store: this.store,
         queue: this.runnerOptions.queue,
         ...(this.runnerOptions.log && {

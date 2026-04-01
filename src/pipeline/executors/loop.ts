@@ -44,6 +44,11 @@ type ParallelLoopState = {
   resultKey?: string;
 };
 
+type SequentialLoopState = {
+  nextIndex: number;
+  iterationResults: unknown[];
+};
+
 /**
  * Custom error thrown when one or more child runs in a wave fail.
  * Carries the error category from the child for propagation to the parent run.
@@ -60,6 +65,40 @@ class WaveFailureError extends Error {
 /** Artifact key used to persist parallel-loop state across pause/resume cycles. */
 function parallelStateKey(nodeId: string): string {
   return `__parallel_loop_state_${nodeId}`;
+}
+
+function sequentialStateKey(nodeId: string): string {
+  return `__sequential_loop_state_${nodeId}`;
+}
+
+async function checkpointSequentialLoop(
+  node: LoopNode,
+  context: ExecutorContext,
+  state: SequentialLoopState,
+): Promise<void> {
+  if (
+    context.runId === undefined ||
+    context.store === undefined ||
+    context.currentNodeIndex === undefined
+  ) {
+    return;
+  }
+
+  const record = await context.store.load(context.runId);
+  if (!record) return;
+
+  context.artifacts[sequentialStateKey(node.id)] = state;
+  context.artifacts[node.id] = state.iterationResults;
+
+  await context.store.updateCursor(record, {
+    nextNodeIndex: context.currentNodeIndex,
+    context: {
+      inputs: context.inputs,
+      artifacts: context.artifacts,
+      outputs: context.outputs,
+      ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
+    },
+  });
 }
 
 /**
@@ -431,9 +470,14 @@ export async function executeLoop(
   const itemVar = node.itemVar ?? "item";
   const indexVar = node.indexVar;
   const bodyNodes = node.body.nodes ?? [];
-  const iterationResults: unknown[] = [];
+  const stateKey = sequentialStateKey(node.id);
+  const sequentialState = (context.artifacts[stateKey] as SequentialLoopState | undefined) ?? {
+    nextIndex: 0,
+    iterationResults: [],
+  };
+  const iterationResults = sequentialState.iterationResults;
 
-  for (let i = 0; i < Math.min(collection.length, maxIterations); i++) {
+  for (let i = sequentialState.nextIndex; i < Math.min(collection.length, maxIterations); i++) {
     const item = collection[i];
 
     // Expose current item as loop.{itemVar} in artifacts so agent prompts can
@@ -456,6 +500,8 @@ export async function executeLoop(
     // Capture last body node's artifact as the iteration result
     const lastBodyNode = bodyNodes[bodyNodes.length - 1];
     iterationResults.push(lastBodyNode ? context.artifacts[lastBodyNode.id] : null);
+    sequentialState.nextIndex = i + 1;
+    await checkpointSequentialLoop(node, context, sequentialState);
 
     // Evaluate exitCondition after each iteration; break early if truthy
     if (node.exitCondition) {
@@ -477,6 +523,7 @@ export async function executeLoop(
 
   // Clean up loop context variable
   delete context.artifacts["loop"];
+  delete context.artifacts[stateKey];
 
   const value = iterationResults;
   context.artifacts[node.id] = value;
