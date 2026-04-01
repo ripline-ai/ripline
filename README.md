@@ -17,7 +17,7 @@ Ripline is a pipeline engine for turning that into something explicit and repeat
 - **Each boundary can be validated.** Pipeline and node contracts use JSON Schema so data mismatches fail early.
 - **Each run is inspectable.** Runs are persisted, resumable, and easy to replay.
 
-Ripline is not a general "multi-agent platform." It is a workflow engine for repeatable agent-driven work.
+Ripline is a workflow engine for repeatable agent-driven work.
 
 ## Feature highlights
 
