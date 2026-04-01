@@ -26,6 +26,7 @@ describe("CLI run", () => {
     expect(out).toContain("--no-profile");
     expect(out).toContain("--env");
     expect(out).toContain("--resume");
+    expect(out).toContain("--detach");
     expect(out).toContain("--out");
     expect(out).toContain("--verbose");
     expect(out).toContain("--demo");

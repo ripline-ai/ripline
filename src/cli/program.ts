@@ -2,7 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import chalk from "chalk";
 import type { AgentRunner } from "../pipeline/executors/agent.js";
 import { loadPipelineDefinition, resolvePipelineFile } from "../lib/pipeline/loader.js";
@@ -77,6 +77,48 @@ function parseQueueConcurrencies(flags: string[]): Record<string, number> {
   return result;
 }
 
+function buildDetachedRunArgs(params: {
+  pipelinePath?: string;
+  runId: string;
+  profile?: string;
+  input?: string;
+  inputs?: string;
+  pipelineDir?: string;
+  profileDir?: string;
+  noProfile?: boolean;
+  envFlags?: string[];
+  out?: string;
+  runsDir?: string;
+  verbose?: boolean;
+  demo?: boolean;
+  agentProvider?: string;
+  agentModel?: string;
+  agentBaseUrl?: string;
+  resume?: boolean;
+}): string[] {
+  const args = ["run"];
+  if (params.pipelinePath) {
+    args.push("--pipeline", params.pipelinePath);
+  }
+  if (params.profile) args.push("--profile", params.profile);
+  if (params.input) args.push("--input", params.input);
+  else if (params.inputs) args.push("--inputs", params.inputs);
+  if (params.pipelineDir) args.push("--pipeline-dir", params.pipelineDir);
+  if (params.profileDir) args.push("--profile-dir", params.profileDir);
+  if (params.noProfile) args.push("--no-profile");
+  for (const envFlag of params.envFlags ?? []) args.push("--env", envFlag);
+  if (params.out) args.push("--out", params.out);
+  if (params.runsDir) args.push("--runs-dir", params.runsDir);
+  if (params.verbose) args.push("--verbose");
+  if (params.demo) args.push("--demo");
+  if (params.agentProvider) args.push("--agent-provider", params.agentProvider);
+  if (params.agentModel) args.push("--agent-model", params.agentModel);
+  if (params.agentBaseUrl) args.push("--agent-base-url", params.agentBaseUrl);
+  if (params.resume) args.push("--resume", params.runId);
+  else args.push("--start-run-id", params.runId);
+  return args;
+}
+
 export function createRiplineCliProgram(options: RiplineCliOptions = {}): Command {
   const program = new Command("ripline");
   const defaultRunsDir = options.defaults?.runsDir ?? path.join(process.cwd(), ".ripline", "runs");
@@ -100,6 +142,8 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
     .option("--no-profile", "Disable default profile for this run")
     .option("-e, --env <key=value>", "Env key=value pairs merged into context (repeatable)", collectEnv, [])
     .option("--resume <runId>", "Resume a paused or failed run by ID")
+    .option("--detach", "Launch the run in a detached background process and print the runId")
+    .addOption(new Option("--start-run-id <runId>").hideHelp())
     .option("-o, --out <path>", "Write final outputs to this JSON file")
     .option("--runs-dir <path>", "Directory for run state (default: .ripline/runs or RIPLINE_RUNS_DIR)")
     .option("-v, --verbose", "Pretty logging with node id/type/duration")
@@ -127,6 +171,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       const verbose = opts.verbose ?? false;
       const isDemo = opts.demo === true;
       const enqueue = opts.enqueue === true;
+      const detach = opts.detach === true;
       const tailQueue = opts.tail === "queue";
       const follow = opts.follow === true;
 
@@ -299,6 +344,50 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       const runner = new DeterministicRunner(definition, runnerOptions);
       const store = runnerOptions.store as PipelineRunStore;
 
+      if (detach) {
+        if (opts.startRunId !== undefined) {
+          console.error(chalk.red("--detach cannot be combined with --start-run-id"));
+          process.exit(1);
+        }
+        const runId = opts.resume !== undefined
+          ? opts.resume
+          : (await store.createRun({
+              pipelineId: definition.id,
+              inputs,
+            })).id;
+        const detachedRunParams: Parameters<typeof buildDetachedRunArgs>[0] = {
+          runId,
+          ...(pipelinePath
+            ? { pipelinePath: path.resolve(pipelinePath) }
+            : (pipelineId ? { pipelinePath: resolvePipelineFile(pipelineId, pipelineDir) } : {})),
+          ...(opts.profile !== undefined ? { profile: opts.profile as string } : {}),
+          ...(opts.input !== undefined ? { input: opts.input as string } : {}),
+          ...(opts.inputs !== undefined ? { inputs: opts.inputs as string } : {}),
+          ...(opts.pipelineDir !== undefined ? { pipelineDir: opts.pipelineDir as string } : {}),
+          ...(opts.profileDir !== undefined ? { profileDir: opts.profileDir as string } : {}),
+          ...(opts.noProfile === true ? { noProfile: true } : {}),
+          ...((opts.env ?? []).length > 0 ? { envFlags: opts.env as string[] } : {}),
+          ...(opts.out !== undefined ? { out: opts.out as string } : {}),
+          ...(opts.runsDir !== undefined ? { runsDir: opts.runsDir as string } : {}),
+          ...(verbose ? { verbose: true } : {}),
+          ...(isDemo ? { demo: true } : {}),
+          ...(opts.agentProvider !== undefined ? { agentProvider: opts.agentProvider as string } : {}),
+          ...(opts.agentModel !== undefined ? { agentModel: opts.agentModel as string } : {}),
+          ...(opts.agentBaseUrl !== undefined ? { agentBaseUrl: opts.agentBaseUrl as string } : {}),
+          ...(opts.resume !== undefined ? { resume: true } : {}),
+        };
+        const childArgs = buildDetachedRunArgs(detachedRunParams);
+        const child = spawn(process.execPath, [process.argv[1]!, ...childArgs], {
+          cwd,
+          detached: true,
+          stdio: "ignore",
+          env: process.env,
+        });
+        child.unref();
+        console.log(runId);
+        return;
+      }
+
       const nodeStartedAt = new Map<string, number>();
       let activeRunId: string | undefined;
       let exiting = false;
@@ -344,10 +433,16 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       process.on("SIGHUP", onSigHup);
 
       try {
-        const runOpts: { inputs: Record<string, unknown>; resumeRunId?: string; env?: Record<string, string> } = {
+        const runOpts: {
+          inputs: Record<string, unknown>;
+          resumeRunId?: string;
+          startRunId?: string;
+          env?: Record<string, string>;
+        } = {
           inputs,
         };
         if (opts.resume !== undefined) runOpts.resumeRunId = opts.resume;
+        if (opts.startRunId !== undefined) runOpts.startRunId = opts.startRunId;
         if (Object.keys(env).length > 0) runOpts.env = env;
         const record = await runner.run(runOpts);
 

@@ -60,6 +60,7 @@ ripline run [pipelineId] [options]
 | `--no-profile` | Disable the default profile for this run (even if `defaultProfile` is set in user config). |
 | `-e, --env <key=value>` | Add an environment key-value pair to the run context. Repeatable: `-e FOO=bar -e BAR=baz`. |
 | `--resume <runId>` | Resume a paused or errored run by ID. Prior completed steps are replayed; execution continues from the first errored or paused node (or the next unfinished node). |
+| `--detach` | Start the run in a detached background process, print the `runId`, and exit immediately. Use this for long-running local runs that should survive the caller shell or terminal session. |
 | `-o, --out <path>` | Write final run outputs to this JSON file on completion. |
 | `--runs-dir <path>` | Directory for run state files (default: `.ripline/runs` or `RIPLINE_RUNS_DIR`). |
 | `-v, --verbose` | Enable verbose logging — prints node ID, type, duration, and status for each step. |
@@ -105,6 +106,9 @@ ripline run daily_brief -i inputs.json -o output.json
 
 # Resume a paused or errored run
 ripline run --resume 550e8400-e29b-41d4-a716-446655440000
+
+# Start a long-running local run in the background
+ripline run build_from_plan_isolated --input inputs.json --detach
 
 # Run with verbose logging and a specific agent provider
 ripline run my_pipeline --agent-provider ollama --agent-model llama3.2 --verbose
