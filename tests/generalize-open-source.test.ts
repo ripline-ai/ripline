@@ -404,6 +404,20 @@ describe("Story-6: Schema extensibility — runner field accepts arbitrary strin
     expect(result.success).toBe(true);
   });
 
+  it("agentNode runner field accepts 'codex'", async () => {
+    const { pipelineDefinitionSchema } = await import("../src/schema.js");
+    const result = pipelineDefinitionSchema.safeParse({
+      id: "test",
+      entry: ["n1"],
+      nodes: [
+        { id: "n1", type: "agent", prompt: "hello", runner: "codex" },
+        { id: "out", type: "output" },
+      ],
+      edges: [{ from: { node: "n1" }, to: { node: "out" } }],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("agentNode runner field accepts custom runner strings (not locked to 'openclaw')", async () => {
     const { pipelineDefinitionSchema } = await import("../src/schema.js");
     const result = pipelineDefinitionSchema.safeParse({

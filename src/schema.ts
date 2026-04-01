@@ -227,8 +227,8 @@ const nodeSchema = z.lazy(() =>
   ])
 ) as z.ZodType<PipelineNode>;
 
-const claudeCodeAgentDefinitionSchema = z.object({
-  runner: z.literal("claude-code"),
+const builtinAgentDefinitionSchema = z.object({
+  runner: z.enum(["claude-code", "codex"]),
   systemPrompt: z.string().optional(),
   model: z.string().min(1).optional(),
   mode: z.enum(["plan", "execute"]).optional(),
@@ -246,7 +246,7 @@ const externalAgentDefinitionSchema = z.object({
 });
 
 export const agentDefinitionSchema = z.union([
-  claudeCodeAgentDefinitionSchema,
+  builtinAgentDefinitionSchema,
   externalAgentDefinitionSchema,
 ]);
 

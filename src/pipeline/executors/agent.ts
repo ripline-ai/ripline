@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentNode, AgentDefinition, ClaudeCodeAgentDefinition, McpServerConfig, SkillsRegistry } from "../../types.js";
+import type { AgentNode, AgentDefinition, BuiltinAgentDefinition, BuiltinAgentRunner, McpServerConfig, NodeContainerConfig, SkillsRegistry } from "../../types.js";
 import type { Logger } from "../../log.js";
 import { interpolateTemplate } from "../../expression.js";
 import type { ExecutorContext, NodeResult } from "./types.js";
 import { detectHttpError, HttpResponseError } from "../../lib/http-response-guard.js";
-import { normalizeContainerConfig, DEFAULT_BUILD_IMAGE } from "../../run-container-pool.js";
+import type { RunContainerPool } from "../../run-container-pool.js";
 
 /** Result of a single agent (sessions_spawn) call. */
 export type AgentResult = {
@@ -23,8 +23,8 @@ export type AgentRunner = (params: {
   sessionId?: string;
   thinking?: "off" | "minimal" | "low" | "medium" | "high";
   timeoutSeconds?: number;
-  /** Set when node has runner: claude-code; runners that don't use it ignore. */
-  runner?: "claude-code";
+  /** Set when node uses a built-in code runner; other runners ignore it. */
+  runner?: BuiltinAgentRunner;
   mode?: "plan" | "execute";
   cwd?: string;
   /** When runner is claude-code: allow bypass for this node when global bypass is enabled. Omit/false = dontAsk. */
@@ -39,6 +39,13 @@ export type AgentRunner = (params: {
   nodeId?: string;
   /** Run-scoped logger (child with runId/nodeId). When set, logs go here in addition to or instead of stderr. */
   log?: Logger;
+  /** Generic container execution context provided by Ripline. */
+  containerContext?: {
+    pool: RunContainerPool;
+    runId: string;
+    nodeContainer?: NodeContainerConfig;
+    defaultImage?: string;
+  };
 }) => Promise<AgentResult>;
 
 function resolveSkillsContent(skillsFile: string | undefined, effectiveCwd: string | undefined): string | null {
@@ -80,27 +87,32 @@ const interpolationContext = (context: ExecutorContext) => ({
 export async function executeAgent(
   node: AgentNode,
   context: ExecutorContext,
-  runners: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner },
+  runners: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner; codexRunner?: AgentRunner },
   agentDefinitions?: Record<string, AgentDefinition>,
   skillsRegistry?: SkillsRegistry,
   skillsDir?: string
 ): Promise<NodeResult> {
   const agentId = node.agentId ?? "default";
   const agentDef = agentDefinitions?.[agentId];
-  const claudeCodeDef =
-    agentDef && "runner" in agentDef && agentDef.runner === "claude-code"
-      ? (agentDef as ClaudeCodeAgentDefinition)
+  const builtinDef =
+    agentDef && "runner" in agentDef && (agentDef.runner === "claude-code" || agentDef.runner === "codex")
+      ? (agentDef as BuiltinAgentDefinition)
       : undefined;
 
-  // Determine which runner to use: node.runner takes precedence, then agent definition runner
-  const useClaudeCode = node.runner === "claude-code" || claudeCodeDef !== undefined;
-  const runner = useClaudeCode
-    ? (runners.claudeCodeRunner ?? runners.agentRunner)
-    : runners.agentRunner;
+  const runnerType = (() => {
+    if (node.runner === "claude-code" || node.runner === "codex") return node.runner;
+    return builtinDef?.runner;
+  })();
+  const runner =
+    runnerType === "claude-code"
+      ? (runners.claudeCodeRunner ?? runners.agentRunner)
+      : runnerType === "codex"
+        ? (runners.codexRunner ?? runners.agentRunner)
+        : runners.agentRunner;
 
   if (!runner) {
-    const msg = useClaudeCode
-      ? "Agent node requires claude-code runner (configure Claude Code runner or provide an external agentRunner)"
+    const msg = runnerType
+      ? `Agent node requires ${runnerType} runner (configure the ${runnerType} runner or provide an external agentRunner)`
       : "Agent node requires agentRunner in runner options";
     throw new Error(msg);
   }
@@ -111,20 +123,20 @@ export async function executeAgent(
   // Merge fields: node wins over agent definition (cwd needed for SKILLS.md discovery)
   const resolvedCwd = (() => {
     if (node.cwd !== undefined && node.cwd.trim() !== "") return interpolateTemplate(node.cwd.trim(), ctx);
-    if (claudeCodeDef?.cwd !== undefined && claudeCodeDef.cwd.trim() !== "") return claudeCodeDef.cwd.trim();
+    if (builtinDef?.cwd !== undefined && builtinDef.cwd.trim() !== "") return builtinDef.cwd.trim();
     return undefined;
   })();
 
   // Prepend systemPrompt from agent definition when present
-  if (claudeCodeDef?.systemPrompt) {
-    prompt = `${claudeCodeDef.systemPrompt}\n\n${prompt}`;
+  if (builtinDef?.systemPrompt) {
+    prompt = `${builtinDef.systemPrompt}\n\n${prompt}`;
   }
 
   // Inject skills context: per-skill .md files from skillsDir + SKILLS.md/skillsFile from cwd
-  if (claudeCodeDef) {
-    const allSkillNames = [...(claudeCodeDef.skills ?? []), ...(node.skills ?? [])];
+  if (builtinDef) {
+    const allSkillNames = [...(builtinDef.skills ?? []), ...(node.skills ?? [])];
     const skillTextContent = resolveSkillTextContent(allSkillNames, skillsDir);
-    const cwdSkillsContent = resolveSkillsContent(claudeCodeDef.skillsFile, resolvedCwd);
+    const cwdSkillsContent = resolveSkillsContent(builtinDef.skillsFile, resolvedCwd);
     const combined = [skillTextContent, cwdSkillsContent].filter(Boolean).join("\n\n");
     if (combined) {
       prompt = `<skills>\n${combined.trim()}\n</skills>\n\n${prompt}`;
@@ -138,16 +150,16 @@ export async function executeAgent(
 
   const effectiveModel =
     (node.model !== undefined && node.model.trim() !== "" ? node.model.trim() : undefined) ??
-    claudeCodeDef?.model;
-  const effectiveMode = node.mode ?? claudeCodeDef?.mode;
-  const effectiveThinking = node.thinking ?? claudeCodeDef?.thinking;
-  const effectiveTimeout = node.timeoutSeconds ?? claudeCodeDef?.timeoutSeconds;
-  const effectiveDangerously = node.dangerouslySkipPermissions ?? claudeCodeDef?.dangerouslySkipPermissions;
+    builtinDef?.model;
+  const effectiveMode = node.mode ?? builtinDef?.mode;
+  const effectiveThinking = node.thinking ?? builtinDef?.thinking;
+  const effectiveTimeout = node.timeoutSeconds ?? builtinDef?.timeoutSeconds;
+  const effectiveDangerously = node.dangerouslySkipPermissions ?? builtinDef?.dangerouslySkipPermissions;
 
   // Resolve MCP servers (lowest → highest precedence):
   // registry-resolved agent skills < agent mcpServers < registry-resolved node skills < node mcpServers
   const effectiveMcpServers = (() => {
-    if (!useClaudeCode) return undefined;
+    if (runnerType !== "claude-code") return undefined;
     const resolveSkillNames = (names: string[] | undefined): Record<string, McpServerConfig> => {
       if (!names || !skillsRegistry) return {};
       const out: Record<string, McpServerConfig> = {};
@@ -161,8 +173,8 @@ export async function executeAgent(
       return out;
     };
     const merged = {
-      ...resolveSkillNames(claudeCodeDef?.skills),
-      ...(claudeCodeDef?.mcpServers ?? {}),
+      ...resolveSkillNames(builtinDef?.skills),
+      ...(builtinDef?.mcpServers ?? {}),
       ...resolveSkillNames(node.skills),
       ...(node.mcpServers ?? {}),
     };
@@ -180,40 +192,34 @@ export async function executeAgent(
     context.runId !== undefined &&
     (node.container !== undefined || context.containerPool.hasContainer(context.runId));
 
-  let result: AgentResult;
-  if (useContainer && context.containerPool && context.runId) {
-    result = await runAgentInContainer(
-      prompt,
-      context.containerPool,
-      context.runId,
-      node.container,
-      resolvedCwd,
-      effectiveModel,
-      effectiveDangerously,
-      effectiveMode,
-      effectiveTimeout,
-      context.defaultContainerImage,
-    );
-  } else {
-    result = await runner({
-      agentId,
-      prompt,
-      resetSession,
-      // Pass sessionId when available in context (resume scenarios always carry session from cursor,
-      // and resetSession:false nodes use it for shared-conversation continuity).
-      ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
-      ...(effectiveThinking !== undefined && { thinking: effectiveThinking }),
-      ...(effectiveTimeout !== undefined && { timeoutSeconds: effectiveTimeout }),
-      ...(useClaudeCode && { runner: "claude-code" }),
-      ...(effectiveMode !== undefined && { mode: effectiveMode }),
-      ...(resolvedCwd !== undefined && { cwd: resolvedCwd }),
-      ...(effectiveDangerously !== undefined && { dangerouslySkipPermissions: effectiveDangerously }),
-      ...(effectiveModel !== undefined && { model: effectiveModel }),
-      ...(effectiveMcpServers !== undefined && { mcpServers: effectiveMcpServers }),
-      ...(context.runId !== undefined && { runId: context.runId, nodeId: node.id }),
-      ...(context.log !== undefined && { log: context.log }),
-    });
-  }
+  const result = await runner({
+    agentId,
+    prompt,
+    resetSession,
+    // Pass sessionId when available in context (resume scenarios always carry session from cursor,
+    // and resetSession:false nodes use it for shared-conversation continuity).
+    ...(context.sessionId !== undefined && { sessionId: context.sessionId }),
+    ...(effectiveThinking !== undefined && { thinking: effectiveThinking }),
+    ...(effectiveTimeout !== undefined && { timeoutSeconds: effectiveTimeout }),
+    ...(runnerType !== undefined && { runner: runnerType }),
+    ...(effectiveMode !== undefined && { mode: effectiveMode }),
+    ...(resolvedCwd !== undefined && { cwd: resolvedCwd }),
+    ...(effectiveDangerously !== undefined && { dangerouslySkipPermissions: effectiveDangerously }),
+    ...(effectiveModel !== undefined && { model: effectiveModel }),
+    ...(effectiveMcpServers !== undefined && { mcpServers: effectiveMcpServers }),
+    ...(context.runId !== undefined && { runId: context.runId, nodeId: node.id }),
+    ...(context.log !== undefined && { log: context.log }),
+    ...(useContainer && context.containerPool && context.runId
+      ? {
+          containerContext: {
+            pool: context.containerPool,
+            runId: context.runId,
+            ...(node.container !== undefined ? { nodeContainer: node.container } : {}),
+            ...(context.defaultContainerImage !== undefined ? { defaultImage: context.defaultContainerImage } : {}),
+          },
+        }
+      : {}),
+  });
 
   // AC1: Check agent output for HTTP error responses (e.g. rate-limit 429).
   // curl exits 0 even on 4xx/5xx, so the agent "succeeds" but the output is an
@@ -237,65 +243,4 @@ export async function executeAgent(
   };
   context.artifacts[node.id] = value;
   return { artifactKey: node.id, value };
-}
-
-/**
- * Run a Claude Code agent invocation inside the run-level persistent container.
- * Builds a `claude -p <prompt>` CLI command and execs it via the container pool.
- */
-async function runAgentInContainer(
-  prompt: string,
-  pool: import("../../run-container-pool.js").RunContainerPool,
-  runId: string,
-  nodeContainer: import("../../types.js").NodeContainerConfig | undefined,
-  workdir: string | undefined,
-  model: string | undefined,
-  dangerouslySkipPermissions: boolean | undefined,
-  mode: "plan" | "execute" | undefined,
-  timeoutSeconds: number | undefined,
-  defaultImage?: string,
-): Promise<AgentResult> {
-  // Resolve node-level container config for extra env / workdir override
-  const resolved = nodeContainer !== undefined
-    ? normalizeContainerConfig(nodeContainer, {
-        image: defaultImage ?? DEFAULT_BUILD_IMAGE,
-        ...(workdir !== undefined && { workdir }),
-      })
-    : undefined;
-
-  const effectiveWorkdir = resolved?.workdir ?? workdir;
-  const env = resolved?.env;
-
-  // Build the claude CLI invocation.
-  // Wrap with the shell `timeout` command when a timeout is set — the `claude`
-  // CLI has no --timeout flag, so we rely on the OS-level timeout wrapper.
-  const claudeArgs: string[] = ["claude", "-p", prompt, "--output-format", "text"];
-
-  if (dangerouslySkipPermissions) {
-    claudeArgs.push("--dangerously-skip-permissions");
-  }
-
-  if (model) {
-    claudeArgs.push("--model", model);
-  }
-
-  if (mode === "plan") {
-    // Read-only: no write/edit tools
-    claudeArgs.push("--disallowed-tools", "Write,Edit,MultiEdit");
-  }
-
-  const args: string[] =
-    timeoutSeconds !== undefined
-      ? ["timeout", String(timeoutSeconds), ...claudeArgs]
-      : claudeArgs;
-
-  const result = await pool.exec(runId, args, env, effectiveWorkdir);
-
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `agent container exec failed with exit code ${result.exitCode}: ${(result.stderr || result.stdout).slice(0, 500)}`,
-    );
-  }
-
-  return { text: result.stdout.trim() };
 }

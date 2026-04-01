@@ -19,6 +19,7 @@ const DEFAULT_TIMEOUT_MS = 5000;
 type LoopOptions = {
   agentRunner?: AgentRunner;
   claudeCodeRunner?: AgentRunner;
+  codexRunner?: AgentRunner;
   agentDefinitions?: Record<string, AgentDefinition>;
   skillsRegistry?: SkillsRegistry;
   skillsDir?: string;
@@ -78,6 +79,7 @@ async function executeBodyNode(
       {
         ...(options?.agentRunner !== undefined && { agentRunner: options.agentRunner }),
         ...(options?.claudeCodeRunner !== undefined && { claudeCodeRunner: options.claudeCodeRunner }),
+        ...(options?.codexRunner !== undefined && { codexRunner: options.codexRunner }),
       },
       options?.agentDefinitions,
       options?.skillsRegistry,

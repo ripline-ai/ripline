@@ -10,9 +10,9 @@ Ripline reads configuration from three separate files, each scoped to a differen
 
 | File | Scope | Purpose |
 |------|-------|---------|
-| `~/.ripline/config.json` | User (global) | Default pipeline/profile directories, default profile, Claude Code user-level settings |
+| `~/.ripline/config.json` | User (global) | Default pipeline/profile directories, default profile, built-in runner user-level settings |
 | `ripline.config.json` | Project (local) | Per-project pipeline/profile directory overrides; commit alongside your code |
-| `~/.ripline/agent.json` | User (global) | Standalone agent runner configuration (provider, model, API key, base URL, Claude Code) |
+| `~/.ripline/agent.json` | User (global) | Standalone agent runner configuration (provider, model, API key, base URL, Claude Code, Codex) |
 
 ---
 
@@ -27,6 +27,9 @@ Optional. Applied globally for the current user.
   "defaultProfile": null,
   "claudeCode": {
     "allowDangerouslySkipPermissions": false
+  },
+  "codex": {
+    "allowDangerouslySkipPermissions": false
   }
 }
 ```
@@ -40,6 +43,7 @@ Optional. Applied globally for the current user.
 | `skillsDir` | string | `~/.ripline/skills` | Directory containing per-skill markdown files. See [Text skills](agent-integration#text-skills). Supports `~` expansion. |
 | `defaultProfile` | string \| null | `null` | Profile name applied to every run unless `--profile` or `--no-profile` is passed. |
 | `claudeCode.allowDangerouslySkipPermissions` | boolean | `false` | **User-level gate** for the bypass permissions feature in the Claude Code runner. Must be `true` here (or via the env var) for any node with `dangerouslySkipPermissions: true` to use bypass mode. See [Agent integration](agent-integration#bypass-permissions-mode-advanced). |
+| `codex.allowDangerouslySkipPermissions` | boolean | `false` | **User-level gate** for the dangerous bypass mode in the Codex runner. Must be `true` here (or via the env var) for any node with `dangerouslySkipPermissions: true` to use bypass mode. |
 
 ---
 
@@ -65,6 +69,12 @@ Optional. Place this file in the root of a project to set project-local override
     "cwd": "./",
     "maxTurns": 10,
     "timeoutSeconds": 120
+  },
+  "codex": {
+    "mode": "execute",
+    "cwd": "./",
+    "model": "gpt-5.4",
+    "timeoutSeconds": 120
   }
 }
 ```
@@ -77,6 +87,7 @@ Optional. Place this file in the root of a project to set project-local override
 | `profileDir` | string | — | Override the profile directory for this project. |
 | `agent` / `agentRunner` | object | — | Standalone LLM agent config. Either key is accepted. See [Agent config](#agent-config). |
 | `claudeCode` | object | — | Claude Code runner config. See [Claude Code config](#claude-code-config). |
+| `codex` | object | — | Codex runner config. See [Codex config](#codex-config). |
 
 ---
 
@@ -134,6 +145,32 @@ Configure the Claude Code runner. Place in `ripline.config.json` under `claudeCo
 
 ---
 
+## Codex config
+
+Configure the Codex runner. Place in `ripline.config.json` under `codex` or set via environment variables.
+
+```json
+{
+  "codex": {
+    "mode": "execute",
+    "cwd": "/path/to/project",
+    "model": "gpt-5.4",
+    "timeoutSeconds": 120
+  }
+}
+```
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | `"plan"` \| `"execute"` | `"execute"` | Default mode for all Codex nodes. `"plan"` = `read-only` sandbox. `"execute"` = `workspace-write` sandbox. Per-node `mode` overrides this. |
+| `cwd` | string | — | Default working directory for all Codex nodes. Per-node `cwd` overrides this. |
+| `model` | string | — | Default model for Codex nodes. Per-node `model` overrides this. |
+| `timeoutSeconds` | number | — | Timeout in seconds per Codex invocation. |
+
+---
+
 ## Plugin config (OpenClaw host)
 
 When Ripline is loaded as an OpenClaw plugin, these fields are set in the host's plugin config block (in `openclaw.plugin.json` or the host config).
@@ -158,6 +195,12 @@ When Ripline is loaded as an OpenClaw plugin, these fields are set in the host's
       "cwd": "/path/to/project",
       "maxTurns": 10,
       "timeoutSeconds": 120
+    },
+    "codex": {                            // optional — Codex runner
+      "mode": "execute",
+      "cwd": "/path/to/project",
+      "model": "gpt-5.4",
+      "timeoutSeconds": 120
     }
   }
 }
@@ -175,6 +218,7 @@ When Ripline is loaded as an OpenClaw plugin, these fields are set in the host's
 | `authToken` | string | — | If set, all HTTP requests must include `Authorization: Bearer <token>`. |
 | `agentRunner` | object | — | Standalone LLM agent config. Used when the plugin runs without an OpenClaw runtime. Same shape as the [agent config](#agent-config). |
 | `claudeCode` | object | — | Claude Code runner config. Same shape as [Claude Code config](#claude-code-config). |
+| `codex` | object | — | Codex runner config. Same shape as [Codex config](#codex-config). |
 
 ---
 
@@ -202,6 +246,16 @@ All environment variables override the corresponding config file values unless a
 | `RIPLINE_CLAUDE_CODE_MAX_TURNS` | Maximum turns per Claude Code invocation. |
 | `RIPLINE_CLAUDE_CODE_TIMEOUT` | Timeout in seconds per Claude Code invocation. |
 | `RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS` | Set to `true` to enable the global bypass permissions gate. Must still be combined with `dangerouslySkipPermissions: true` on individual nodes. |
+
+### Codex runner
+
+| Variable | Description |
+|----------|-------------|
+| `RIPLINE_CODEX_MODE` | Codex mode: `plan` or `execute`. |
+| `RIPLINE_CODEX_CWD` | Default working directory for Codex. |
+| `RIPLINE_CODEX_MODEL` | Default model for Codex nodes. |
+| `RIPLINE_CODEX_TIMEOUT` | Timeout in seconds per Codex invocation. |
+| `RIPLINE_CODEX_DANGEROUSLY_SKIP_PERMISSIONS` | Set to `true` to enable the global dangerous-bypass gate. Must still be combined with `dangerouslySkipPermissions: true` on individual nodes. |
 
 ### Run storage
 

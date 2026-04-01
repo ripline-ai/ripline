@@ -58,6 +58,8 @@ export type ServerConfig = PipelinePluginConfig & {
   agentRunner?: AgentRunner;
   /** For agent nodes with runner: claude-code. Not set when an external agent runner is used instead. */
   claudeCodeRunner?: AgentRunner;
+  /** For agent nodes with runner: codex. Not set when an external agent runner is used instead. */
+  codexRunner?: AgentRunner;
   /** Named agent definitions. Loaded from ripline.config.json in pipelinesDir when not provided. */
   agentDefinitions?: Record<string, AgentDefinition>;
   /** Skills registry. Loaded from ripline.config.json in pipelinesDir when not provided. */
@@ -77,10 +79,11 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
   await store.init();
 
   const claudeCodeRunner = config.claudeCodeRunner;
+  const codexRunner = config.codexRunner;
   const agentRunner =
     process.env.RIPLINE_AGENT_RUNNER === "stub"
       ? stubAgentRunner
-      : (config.agentRunner ?? claudeCodeRunner ?? stubAgentRunner);
+      : (config.agentRunner ?? claudeCodeRunner ?? codexRunner ?? stubAgentRunner);
   const agentDefinitions =
     config.agentDefinitions ?? loadAgentDefinitionsFromFile(config.pipelinesDir) ?? undefined;
   const skillsRegistry =
@@ -134,6 +137,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           ...(hasQueues && { queueConcurrencies: mergedQueueConcurrencies }),
           agentRunner,
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+          ...(codexRunner !== undefined && { codexRunner }),
           ...(agentDefinitions !== undefined && { agentDefinitions }),
           ...(skillsRegistry !== undefined && { skillsRegistry }),
           skillsDir,
@@ -218,6 +222,7 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
           log: runLog,
           agentRunner,
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+          ...(codexRunner !== undefined && { codexRunner }),
           ...(agentDefinitions !== undefined && { agentDefinitions }),
           ...(skillsRegistry !== undefined && { skillsRegistry }),
           skillsDir,

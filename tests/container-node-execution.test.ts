@@ -233,12 +233,10 @@ describe("RunContainerPool", () => {
       expect(args).toContain("4g");
     });
 
-    it("mounts host ~/.claude into container at the host path read-only and sets HOME/user when directory exists", async () => {
-      // existsSync already mocked to return true for all paths
+    it("does not inject runner-specific credentials or user overrides", async () => {
       mockDockerCli();
-      const os = await import("node:os");
 
-      await pool.acquire("run-claude-creds", {
+      await pool.acquire("run-generic", {
         image: DEFAULT_BUILD_IMAGE,
         logFile: "/tmp/test.log",
       });
@@ -247,40 +245,29 @@ describe("RunContainerPool", () => {
         (c: any[]) => c[0] === "docker" && c[1][0] === "run",
       );
       const args: string[] = runCall[1];
-      const home = os.homedir();
-      // .claude directory is mounted at the same host path inside the container
-      const expectedMount = `${home}/.claude:${home}/.claude:ro`;
-      expect(args).toContain("--volume");
-      expect(args).toContain(expectedMount);
-      // HOME env is set so claude resolves credentials correctly
-      expect(args).toContain("--env");
-      expect(args).toContain(`HOME=${home}`);
-      // Container runs as the host user UID:GID
-      expect(args).toContain("--user");
-      const uid = process.getuid?.() ?? 0;
-      const gid = process.getgid?.() ?? 0;
-      expect(args).toContain(`${uid}:${gid}`);
+      expect(args).not.toContain("--user");
+      const claudeMount = args.find((a: string) => a.includes("/.claude:") && a.includes(":ro"));
+      expect(claudeMount).toBeUndefined();
     });
 
-    it("skips Claude credentials mount when ~/.claude directory does not exist", async () => {
-      const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    it("only mounts env and volumes explicitly provided by the caller", async () => {
       mockDockerCli();
 
-      try {
-        await pool.acquire("run-no-creds", {
-          image: DEFAULT_BUILD_IMAGE,
-          logFile: "/tmp/test.log",
-        });
+      await pool.acquire("run-explicit", {
+        image: DEFAULT_BUILD_IMAGE,
+        env: { HOME: "/workspace/home" },
+        volumes: { "/host/config": "/workspace/config" },
+        logFile: "/tmp/test.log",
+      });
 
-        const runCall = (child_process.execFile as any).mock.calls.find(
-          (c: any[]) => c[0] === "docker" && c[1][0] === "run",
-        );
-        const args: string[] = runCall[1];
-        const claudeMount = args.find((a: string) => a.includes("/.claude:") && a.includes(":ro"));
-        expect(claudeMount).toBeUndefined();
-      } finally {
-        existsSpy.mockRestore();
-      }
+      const runCall = (child_process.execFile as any).mock.calls.find(
+        (c: any[]) => c[0] === "docker" && c[1][0] === "run",
+      );
+      const args: string[] = runCall[1];
+      expect(args).toContain("--env");
+      expect(args).toContain("HOME=/workspace/home");
+      expect(args).toContain("--volume");
+      expect(args).toContain("/host/config:/workspace/config");
     });
 
     it("throws when docker run fails", async () => {

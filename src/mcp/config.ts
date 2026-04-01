@@ -1,9 +1,10 @@
 import path from "node:path";
 import os from "node:os";
 import { resolvePipelineDir } from "../config.js";
-import { resolveStandaloneLlmAgentConfig, resolveClaudeCodeConfig } from "../agent-runner-config.js";
+import { resolveStandaloneLlmAgentConfig, resolveClaudeCodeConfig, resolveCodexConfig } from "../agent-runner-config.js";
 import { createLlmAgentRunner } from "../llm-agent-runner.js";
 import { createClaudeCodeRunner } from "../claude-code-runner.js";
+import { createCodexRunner } from "../codex-runner.js";
 import type { AgentRunner } from "../pipeline/executors/agent.js";
 
 export type McpServerConfig = {
@@ -70,4 +71,14 @@ export function resolveStandaloneClaudeCodeRunner(homedir: string = os.homedir()
   const config = resolveClaudeCodeConfig({ homedir });
   if (!config) return undefined;
   return createClaudeCodeRunner(config);
+}
+
+/**
+ * Build the Codex runner for nodes with runner: codex.
+ * Returns the runner when config is available, undefined otherwise.
+ */
+export function resolveStandaloneCodexRunner(homedir: string = os.homedir()): AgentRunner | undefined {
+  const config = resolveCodexConfig({ homedir });
+  if (!config) return undefined;
+  return createCodexRunner(config);
 }

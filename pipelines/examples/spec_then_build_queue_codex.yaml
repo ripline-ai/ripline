@@ -1,0 +1,81 @@
+# Spec → Build → Queue (Codex)
+# Runs standalone: uses runner: codex for all agent nodes. Spawns implement_story_codex per task.
+# Input: task (string) — the feature or idea to spec and break down.
+# Use a profile to set projectRoot for the spawned implement_story_codex runs.
+id: spec_then_build_queue_codex
+name: Spec → Build → Queue (Codex)
+entry: [intake]
+nodes:
+  - id: intake
+    type: input
+
+  - id: spec
+    type: agent
+    runner: codex
+    mode: execute
+    timeoutSeconds: 300
+    prompt: "Write a clear user-flow and design spec for: {{task}}"
+
+  - id: decompose
+    type: agent
+    runner: codex
+    mode: execute
+    timeoutSeconds: 300
+    prompt: |
+      Based on the spec below, break the feature into small implementation stories (title, description, acceptance criteria).
+
+      Spec:
+      {{spec.text}}
+
+  - id: queue
+    type: agent
+    runner: codex
+    mode: execute
+    prompt: |
+      Output ONLY a valid JSON array — no markdown fencing, no explanation, no prose. Each element must have exactly these keys: id (string), title (string), description (string). Create one element per implementation task based on:
+
+      {{decompose.text}}
+
+  - id: parse
+    type: transform
+    expression: "(function(text) { var m = text.match(/```(?:json)?\\s*([\\s\\S]*?)\\s*```/); var raw = JSON.parse(m ? m[1] : text.trim()); return raw.map(function(t) { return { id: String(t.id), title: t.title, detail: t.detail || t.description || '' }; }); })(artifacts.queue.text)"
+
+  - id: spawn
+    type: enqueue
+    pipelineId: implement_story_codex
+    tasksSource: parse
+    mode: per-item
+
+  - id: collect
+    type: collect_children
+    description: "Gather child run results (and partial failures) for downstream verification"
+
+  - id: verify
+    type: agent
+    runner: codex
+    mode: execute
+    cwd: "{{ run.inputs.projectRoot }}"
+    timeoutSeconds: 600
+    prompt: |
+      All implementation stories have completed. Summary: {{JSON.stringify(artifacts.collect.summary)}}.
+
+      Now do a full verification pass on the project at the current working directory:
+      1. Run the build. Fix any type errors or compilation failures and commit the fixes.
+      2. Run the test suite. Fix any failing tests and commit the fixes.
+      3. If anything could not be fixed, leave a clear note in your output describing what remains.
+
+      Be thorough but focused — only fix real build/test failures, do not refactor or add features.
+
+  - id: result
+    type: output
+    source: verify
+
+edges:
+  - { from: { node: intake },    to: { node: spec } }
+  - { from: { node: spec },      to: { node: decompose } }
+  - { from: { node: decompose }, to: { node: queue } }
+  - { from: { node: queue },     to: { node: parse } }
+  - { from: { node: parse },     to: { node: spawn } }
+  - { from: { node: spawn },     to: { node: collect } }
+  - { from: { node: collect },   to: { node: verify } }
+  - { from: { node: verify },    to: { node: result } }

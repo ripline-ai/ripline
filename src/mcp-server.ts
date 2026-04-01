@@ -4,7 +4,7 @@ import { PipelineRunStore } from "./run-store.js";
 import { createRunQueue } from "./run-queue.js";
 import { PipelineRegistry } from "./registry.js";
 import { createScheduler } from "./scheduler.js";
-import { resolveMcpConfig, resolveStandaloneAgentRunner, resolveStandaloneClaudeCodeRunner } from "./mcp/config.js";
+import { resolveMcpConfig, resolveStandaloneAgentRunner, resolveStandaloneClaudeCodeRunner, resolveStandaloneCodexRunner } from "./mcp/config.js";
 import { createMcpServer } from "./mcp/server.js";
 import type { McpToolContext } from "./mcp/tools.js";
 
@@ -18,6 +18,7 @@ async function main() {
   const registry = new PipelineRegistry(config.pipelinesDir);
   const agentRunner = resolveStandaloneAgentRunner();
   const claudeCodeRunner = resolveStandaloneClaudeCodeRunner();
+  const codexRunner = resolveStandaloneCodexRunner();
 
   const scheduler = createScheduler({
     store,
@@ -26,6 +27,7 @@ async function main() {
     maxConcurrency: config.maxConcurrency,
     agentRunner,
     ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+    ...(codexRunner !== undefined && { codexRunner }),
   });
 
   scheduler.start();

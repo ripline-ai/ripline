@@ -14,4 +14,8 @@ Three real-world patterns are provided in **OpenClaw** and **Claude Code** varia
 | Spec → Build → Queue | [spec_then_build_queue_openclaw.yaml](spec_then_build_queue_openclaw.yaml) | [spec_then_build_queue_claude.yaml](spec_then_build_queue_claude.yaml) |
 | Write Tech Script | [write_tech_script_openclaw.yaml](write_tech_script_openclaw.yaml) | [write_tech_script_claude.yaml](write_tech_script_claude.yaml) |
 
-OpenClaw variants use the default runner and hardcoded paths; Claude variants use `runner: claude-code` and paths from `run.inputs` (supply via profile or `--input`). See [Example pipelines (docs)](../../docs/pipelines/example-pipelines.md) for inputs, profiles, and how to run them.
+OpenClaw variants use the default runner and hardcoded paths; Claude variants use `runner: claude-code` and paths from `run.inputs` (supply via profile or `--input`). A concrete Codex example is also included: [implement_story_codex.yaml](implement_story_codex.yaml). See [Example pipelines (docs)](../../docs/pipelines/example-pipelines.md) for inputs, profiles, and how to run them.
+
+Additional Codex examples:
+- [implement_story_codex.yaml](implement_story_codex.yaml)
+- [spec_then_build_queue_codex.yaml](spec_then_build_queue_codex.yaml)

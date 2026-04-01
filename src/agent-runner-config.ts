@@ -3,6 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import type { LlmAgentRunnerConfig } from "./llm-agent-runner.js";
 import type { ClaudeCodeRunnerConfig } from "./claude-code-runner.js";
+import type { CodexRunnerConfig } from "./codex-runner.js";
 import { loadUserConfig } from "./config.js";
 import { agentDefinitionSchema, skillsRegistrySchema } from "./schema.js";
 import type { AgentDefinition, SkillsRegistry } from "./types.js";
@@ -156,6 +157,11 @@ const ENV_CLAUDE_CODE_MODEL = "RIPLINE_CLAUDE_CODE_MODEL";
 const ENV_CLAUDE_CODE_MAX_TURNS = "RIPLINE_CLAUDE_CODE_MAX_TURNS";
 const ENV_CLAUDE_CODE_TIMEOUT = "RIPLINE_CLAUDE_CODE_TIMEOUT";
 const ENV_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS = "RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS";
+const ENV_CODEX_MODE = "RIPLINE_CODEX_MODE";
+const ENV_CODEX_CWD = "RIPLINE_CODEX_CWD";
+const ENV_CODEX_MODEL = "RIPLINE_CODEX_MODEL";
+const ENV_CODEX_TIMEOUT = "RIPLINE_CODEX_TIMEOUT";
+const ENV_CODEX_DANGEROUSLY_SKIP_PERMISSIONS = "RIPLINE_CODEX_DANGEROUSLY_SKIP_PERMISSIONS";
 
 function parseClaudeCodeMode(value: string): ClaudeCodeRunnerConfig["mode"] | null {
   const lower = value.toLowerCase();
@@ -308,5 +314,98 @@ export function resolveClaudeCodeConfig(options?: {
   const merged: ClaudeCodeRunnerConfig = { ...base };
   merged.allowDangerouslySkipPermissions =
     base.allowDangerouslySkipPermissions === true || userConfig.claudeCode?.allowDangerouslySkipPermissions === true;
+  return merged;
+}
+
+function parseCodexMode(value: string): CodexRunnerConfig["mode"] | null {
+  const lower = value.toLowerCase();
+  if (lower === "plan" || lower === "execute") return lower;
+  return null;
+}
+
+export function normalizeCodexConfigFromPlugin(raw: unknown): CodexRunnerConfig | null {
+  const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const block = source.codex as unknown;
+  if (!block || typeof block !== "object") return null;
+
+  const b = block as Record<string, unknown>;
+  const modeRaw = typeof b.mode === "string" ? b.mode : undefined;
+  const mode = modeRaw ? parseCodexMode(modeRaw) : "execute";
+  if (!mode) return null;
+
+  const config: CodexRunnerConfig = { mode };
+  if (typeof b.cwd === "string" && b.cwd.trim()) config.cwd = b.cwd.trim();
+  if (typeof b.model === "string" && b.model.trim()) config.model = b.model.trim();
+  if (typeof b.timeoutSeconds === "number" && b.timeoutSeconds > 0) config.timeoutSeconds = b.timeoutSeconds;
+  if (b.outputFormat === "json" || b.outputFormat === "text") config.outputFormat = b.outputFormat;
+  return config;
+}
+
+export function resolveCodexConfigFromEnv(
+  env?: Record<string, string>
+): CodexRunnerConfig | null {
+  const modeRaw = getEnv(env, ENV_CODEX_MODE);
+  const mode = modeRaw ? parseCodexMode(modeRaw) : "execute";
+  if (!mode) return null;
+
+  const config: CodexRunnerConfig = { mode };
+  const cwd = getEnv(env, ENV_CODEX_CWD);
+  if (cwd) config.cwd = cwd;
+  const model = getEnv(env, ENV_CODEX_MODEL);
+  if (model) config.model = model;
+  if (getEnv(env, ENV_CODEX_DANGEROUSLY_SKIP_PERMISSIONS) === "true") {
+    config.allowDangerouslySkipPermissions = true;
+  }
+  const timeoutRaw = getEnv(env, ENV_CODEX_TIMEOUT);
+  if (timeoutRaw) {
+    const n = parseInt(timeoutRaw, 10);
+    if (Number.isInteger(n) && n > 0) config.timeoutSeconds = n;
+  }
+  return config;
+}
+
+export function loadCodexConfigFromFile(cwd: string): CodexRunnerConfig | null {
+  const tryFile = (filePath: string, getBlock: (data: Record<string, unknown>) => unknown) => {
+    try {
+      const content = fs.readFileSync(filePath, "utf-8");
+      const data = JSON.parse(content) as Record<string, unknown>;
+      const block = getBlock(data);
+      if (!block || typeof block !== "object") return null;
+      return normalizeCodexConfigFromPlugin({ codex: block });
+    } catch {
+      return null;
+    }
+  };
+
+  const riplineAgent = path.join(cwd, ".ripline", "agent.json");
+  if (fs.existsSync(riplineAgent)) {
+    const cfg = tryFile(riplineAgent, (d) => d.codex ?? d);
+    if (cfg) return cfg;
+  }
+
+  const riplineConfig = path.join(cwd, "ripline.config.json");
+  if (fs.existsSync(riplineConfig)) {
+    const cfg = tryFile(riplineConfig, (d) => d.codex);
+    if (cfg) return cfg;
+  }
+
+  return null;
+}
+
+export function resolveCodexConfig(options?: {
+  cwd?: string;
+  env?: Record<string, string>;
+  homedir?: string;
+}): CodexRunnerConfig | null {
+  const cwd = options?.cwd ?? process.cwd();
+  const fromEnv = resolveCodexConfigFromEnv(options?.env);
+  const fromFile = loadCodexConfigFromFile(cwd);
+  const base = fromEnv ?? fromFile ?? null;
+  if (!base) return null;
+  const home = options?.homedir ?? os.homedir();
+  const userConfig = loadUserConfig(home);
+  const merged: CodexRunnerConfig = { ...base };
+  merged.allowDangerouslySkipPermissions =
+    base.allowDangerouslySkipPermissions === true || userConfig.codex?.allowDangerouslySkipPermissions === true;
   return merged;
 }

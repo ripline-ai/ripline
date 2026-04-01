@@ -40,7 +40,7 @@ When Ripline is loaded as a plugin inside an OpenClaw host, the host provides a 
 
 - All `agent` nodes use the OpenClaw runtime's configured models, tools, and sandbox.
 - `agentId` on each node selects the OpenClaw agent persona to invoke (e.g. `vector`, `nova`).
-- The `claude-code` runner is **not available** inside OpenClaw. Nodes with `runner: "claude-code"` will fail with a clear error message.
+- Built-in standalone runners like `claude-code` and `codex` are **not available** inside OpenClaw. Nodes that request them will fail with a clear error message.
 - The HTTP server mounts at the path and port specified in plugin config.
 
 ---

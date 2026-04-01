@@ -15,9 +15,11 @@ import { createRunQueue } from "../run-queue.js";
 import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "../log.js";
 import { createLlmAgentRunner, type LlmAgentRunnerConfig } from "../llm-agent-runner.js";
 import { createClaudeCodeRunner } from "../claude-code-runner.js";
+import { createCodexRunner } from "../codex-runner.js";
 import {
   resolveStandaloneLlmAgentConfig,
   resolveClaudeCodeConfig,
+  resolveCodexConfig,
   loadAgentDefinitionsFromFile,
   loadSkillsRegistryFromFile,
 } from "../agent-runner-config.js";
@@ -32,6 +34,7 @@ export type RiplineCliOptions = {
   };
   agentRunner?: AgentRunner;
   claudeCodeRunner?: AgentRunner;
+  codexRunner?: AgentRunner;
 };
 
 function getVersion(): string {
@@ -155,6 +158,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       let outPath: string | undefined;
       let agentRunner: AgentRunner | undefined = options.agentRunner;
       let claudeCodeRunner: AgentRunner | undefined = options.claudeCodeRunner;
+      let codexRunner: AgentRunner | undefined = options.codexRunner;
 
       if (tailQueue) {
         const store = new PipelineRunStore(runsDir);
@@ -250,6 +254,10 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
           const claudeCodeConfig = resolveClaudeCodeConfig({ cwd, homedir });
           if (claudeCodeConfig) claudeCodeRunner = createClaudeCodeRunner(claudeCodeConfig);
         }
+        if (!codexRunner) {
+          const codexConfig = resolveCodexConfig({ cwd, homedir });
+          if (codexConfig) codexRunner = createCodexRunner(codexConfig);
+        }
       }
 
       const env = parseEnvPairs(opts.env ?? []);
@@ -276,6 +284,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         ...(outPath !== undefined && { outPath }),
         ...(agentRunner !== undefined && { agentRunner }),
         ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+        ...(codexRunner !== undefined && { codexRunner }),
         ...(agentDefinitions !== undefined && { agentDefinitions }),
         ...(skillsRegistry !== undefined && { skillsRegistry }),
         skillsDir,
@@ -641,6 +650,8 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       const agentRunner = llmConfig ? createLlmAgentRunner(llmConfig) : undefined;
       const claudeCodeConfig = resolveClaudeCodeConfig({ cwd: process.cwd(), homedir: os.homedir() });
       const claudeCodeRunner = claudeCodeConfig ? createClaudeCodeRunner(claudeCodeConfig) : undefined;
+      const codexConfig = resolveCodexConfig({ cwd: process.cwd(), homedir: os.homedir() });
+      const codexRunner = codexConfig ? createCodexRunner(codexConfig) : undefined;
       // Inject the self-referential Ripline URL into process.env so Claude Code
       // agents (and the Python scripts they run) can access it via os.environ
       // without hardcoding localhost ports.  Caller-set env vars always take precedence.
@@ -670,6 +681,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       if (opts.authToken) console.log(chalk.gray("  auth: Bearer token required"));
       if (agentRunner) console.log(chalk.gray("  agent: LLM runner (standalone)"));
       if (claudeCodeRunner) console.log(chalk.gray("  agent: Claude Code runner (standalone)"));
+      if (codexRunner) console.log(chalk.gray("  agent: Codex runner (standalone)"));
 
       // Resolve container build config from user config
       let containerBuild: ContainerBuildConfig | undefined;
@@ -696,6 +708,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         ...(opts.authToken && { authToken: opts.authToken }),
         ...(agentRunner && { agentRunner }),
         ...(claudeCodeRunner && { claudeCodeRunner }),
+        ...(codexRunner && { codexRunner }),
         ...(containerBuild !== undefined && { containerBuild }),
       });
       process.on("SIGINT", () => close().then(() => process.exit(0)));

@@ -6,9 +6,11 @@ import type { OpenClawPluginApi } from "./integrations/openclaw/index.js";
 import { registerOpenClawRunner } from "./integrations/openclaw/index.js";
 import { createLlmAgentRunner } from "./llm-agent-runner.js";
 import { createClaudeCodeRunner } from "./claude-code-runner.js";
+import { createCodexRunner } from "./codex-runner.js";
 import {
   normalizeLlmAgentConfigFromPlugin,
   normalizeClaudeCodeConfigFromPlugin,
+  normalizeCodexConfigFromPlugin,
 } from "./agent-runner-config.js";
 import { resolveConfig } from "./config.js";
 import { DefaultRunnerRegistry } from "./interfaces/runner-registry.js";
@@ -36,6 +38,8 @@ function buildRunnerRegistry(api: PluginApi): DefaultRunnerRegistry {
   // Core runners
   const claudeCodeConfig = normalizeClaudeCodeConfigFromPlugin(api.pluginConfig);
   if (claudeCodeConfig) registry.register("claude-code", createClaudeCodeRunner(claudeCodeConfig));
+  const codexConfig = normalizeCodexConfigFromPlugin(api.pluginConfig);
+  if (codexConfig) registry.register("codex", createCodexRunner(codexConfig));
 
   const llmConfig = normalizeLlmAgentConfigFromPlugin(api.pluginConfig);
   if (llmConfig) registry.register("llm-agent", createLlmAgentRunner(llmConfig));
@@ -65,11 +69,14 @@ function resolvePath(value: string): string {
 export { createOpenClawAgentRunner, type OpenClawPluginApi } from "./integrations/openclaw/index.js";
 export { createLlmAgentRunner, type LlmAgentRunnerConfig } from "./llm-agent-runner.js";
 export { createClaudeCodeRunner, type ClaudeCodeRunnerConfig } from "./claude-code-runner.js";
+export { createCodexRunner, type CodexRunnerConfig } from "./codex-runner.js";
 export {
   normalizeLlmAgentConfigFromPlugin,
   normalizeClaudeCodeConfigFromPlugin,
+  normalizeCodexConfigFromPlugin,
   resolveStandaloneLlmAgentConfig,
   resolveClaudeCodeConfig,
+  resolveCodexConfig,
   resolveLlmAgentConfigFromEnv,
   loadLlmAgentConfigFromFile,
 } from "./agent-runner-config.js";
@@ -127,6 +134,7 @@ export default {
     const registry = buildRunnerRegistry(api);
     const agentRunner = registry.resolve("openclaw") ?? registry.resolve("llm-agent");
     const claudeCodeRunner = registry.resolve("claude-code");
+    const codexRunner = registry.resolve("codex");
     let serverHandle: { close: () => Promise<void> } | null = null;
 
     api.registerCli(
@@ -138,6 +146,7 @@ export default {
           },
           ...(agentRunner !== undefined && { agentRunner }),
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+          ...(codexRunner !== undefined && { codexRunner }),
         });
         program.addCommand(ripline);
       },
@@ -156,6 +165,7 @@ export default {
           ...(cfg.authToken ? { authToken: cfg.authToken } : {}),
           ...(agentRunner !== undefined && { agentRunner }),
           ...(claudeCodeRunner !== undefined && { claudeCodeRunner }),
+          ...(codexRunner !== undefined && { codexRunner }),
         };
         api.logger.info(
           `[pipeline] serving pipelines from ${options.pipelinesDir} (runs=${options.runsDir}) on port ${options.httpPort}`,

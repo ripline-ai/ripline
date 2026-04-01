@@ -40,6 +40,8 @@ vi.mock("node:fs", async () => {
 import * as child_process from "node:child_process";
 
 import { RunContainerPool, DEFAULT_BUILD_IMAGE } from "../../src/run-container-pool.js";
+import { createClaudeCodeRunner } from "../../src/claude-code-runner.js";
+import { createCodexRunner } from "../../src/codex-runner.js";
 import { executeShell } from "../../src/pipeline/executors/shell.js";
 import { executeAgent } from "../../src/pipeline/executors/agent.js";
 import type { AgentRunner } from "../../src/pipeline/executors/agent.js";
@@ -292,6 +294,8 @@ describe("executeShell — container routing", () => {
 describe("executeAgent — container routing", () => {
   let pool: RunContainerPool;
   const mockRunner: AgentRunner = vi.fn(async () => ({ text: "runner-result" }));
+  const claudeCodeRunner = createClaudeCodeRunner({ mode: "execute" });
+  const codexRunner = createCodexRunner({ mode: "execute" });
 
   beforeEach(() => {
     pool = new RunContainerPool(silentLogger);
@@ -319,7 +323,7 @@ describe("executeAgent — container routing", () => {
       containerPool: pool,
     };
 
-    const result = await executeAgent(node, context, { agentRunner: mockRunner, claudeCodeRunner: mockRunner });
+    const result = await executeAgent(node, context, { agentRunner: mockRunner, claudeCodeRunner });
 
     // Should have called docker exec with 'claude' command
     const spawnCalls = (child_process.spawn as any).mock.calls;
@@ -355,7 +359,7 @@ describe("executeAgent — container routing", () => {
       containerPool: pool,
     };
 
-    const result = await executeAgent(node, context, { agentRunner: mockRunner, claudeCodeRunner: mockRunner });
+    const result = await executeAgent(node, context, { agentRunner: mockRunner, claudeCodeRunner });
 
     const spawnCalls = (child_process.spawn as any).mock.calls;
     const execCall = spawnCalls.find((c: any[]) => c[0] === "docker" && c[1][0] === "exec");
@@ -431,13 +435,45 @@ describe("executeAgent — container routing", () => {
       containerPool: pool,
     };
 
-    await executeAgent(node, context, { agentRunner: mockRunner, claudeCodeRunner: mockRunner });
+    await executeAgent(node, context, { agentRunner: mockRunner, claudeCodeRunner });
 
     const spawnCalls = (child_process.spawn as any).mock.calls;
     const execCall = spawnCalls.find((c: any[]) => c[0] === "docker" && c[1][0] === "exec");
     expect(execCall).toBeDefined();
     const dockerArgs: string[] = execCall[1];
     expect(dockerArgs).toContain("--dangerously-skip-permissions");
+  });
+
+  it("routes codex agents through containerPool.exec using codex exec", async () => {
+    mockDockerForExec({ containerId: "codexcont123", execExitCode: 0, execStdout: "codex answer" });
+    await pool.acquire("run-codex-1", { image: DEFAULT_BUILD_IMAGE, logFile: "/tmp/test.log" });
+
+    const node: AgentNode = {
+      id: "agent-codex",
+      type: "agent",
+      prompt: "Ship it",
+      runner: "codex",
+      container: {},
+    };
+    const context: ExecutorContext = {
+      inputs: {},
+      artifacts: {},
+      env: {},
+      outputs: {},
+      runId: "run-codex-1",
+      containerPool: pool,
+    };
+
+    const result = await executeAgent(node, context, { agentRunner: mockRunner, codexRunner });
+
+    const spawnCalls = (child_process.spawn as any).mock.calls;
+    const execCall = spawnCalls.find((c: any[]) => c[0] === "docker" && c[1][0] === "exec");
+    expect(execCall).toBeDefined();
+    const dockerArgs: string[] = execCall[1];
+    expect(dockerArgs).toContain("codex");
+    expect(dockerArgs).toContain("exec");
+    expect(mockRunner).not.toHaveBeenCalled();
+    expect((result.value as { text: string }).text).toBe("codex answer");
   });
 
   it("throws when container exec returns non-zero exit code", async () => {
@@ -448,6 +484,7 @@ describe("executeAgent — container routing", () => {
       id: "agent-error",
       type: "agent",
       prompt: "Do something that fails",
+      runner: "claude-code",
       container: {},
     };
     const context: ExecutorContext = {
@@ -460,8 +497,36 @@ describe("executeAgent — container routing", () => {
     };
 
     await expect(
-      executeAgent(node, context, { agentRunner: mockRunner, claudeCodeRunner: mockRunner }),
+      executeAgent(node, context, { agentRunner: mockRunner, claudeCodeRunner }),
     ).rejects.toThrow("agent container exec failed");
+  });
+
+  it("passes container context to custom runners without forcing container exec", async () => {
+    let captured: Parameters<AgentRunner>[0] | null = null;
+    const customRunner: AgentRunner = vi.fn(async (params) => {
+      captured = params;
+      return { text: "runner-result" };
+    });
+
+    const node: AgentNode = {
+      id: "agent-custom",
+      type: "agent",
+      prompt: "Hello from custom",
+      container: {},
+    };
+    const context: ExecutorContext = {
+      inputs: {},
+      artifacts: {},
+      env: {},
+      outputs: {},
+      runId: "run-custom-ctx",
+      containerPool: pool,
+    };
+
+    await executeAgent(node, context, { agentRunner: customRunner });
+
+    expect(captured?.containerContext?.runId).toBe("run-custom-ctx");
+    expect(captured?.containerContext?.pool).toBe(pool);
   });
 });
 

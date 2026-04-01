@@ -24,6 +24,7 @@ export type SchedulerConfig = {
   queueConcurrencies?: Record<string, number>;
   agentRunner?: AgentRunner;
   claudeCodeRunner?: AgentRunner;
+  codexRunner?: AgentRunner;
   /** Named agent definitions (from ripline.config.json or profile). */
   agentDefinitions?: Record<string, AgentDefinition>;
   /** Skills registry for resolving agent skill shorthand names to MCP server configs. */
@@ -163,6 +164,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
     queueConcurrencies,
     agentRunner,
     claudeCodeRunner,
+    codexRunner,
     agentDefinitions,
     skillsRegistry,
     skillsDir,
@@ -341,6 +343,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
             ...(log !== undefined && { log }),
             ...(agentRunner && { agentRunner }),
             ...(claudeCodeRunner && { claudeCodeRunner }),
+            ...(codexRunner && { codexRunner }),
             ...(agentDefinitions !== undefined && { agentDefinitions }),
             ...(skillsRegistry !== undefined && { skillsRegistry }),
             ...(skillsDir !== undefined && { skillsDir }),
@@ -384,6 +387,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                   ...(parentLog !== undefined && { log: parentLog }),
                   ...(agentRunner && { agentRunner }),
                   ...(claudeCodeRunner && { claudeCodeRunner }),
+                  ...(codexRunner && { codexRunner }),
                   ...(agentDefinitions !== undefined && { agentDefinitions }),
                   ...(skillsRegistry !== undefined && { skillsRegistry }),
                   ...(skillsDir !== undefined && { skillsDir }),
@@ -441,6 +445,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
                   ...(parentLog !== undefined && { log: parentLog }),
                   ...(agentRunner && { agentRunner }),
                   ...(claudeCodeRunner && { claudeCodeRunner }),
+                  ...(codexRunner && { codexRunner }),
                   ...(agentDefinitions !== undefined && { agentDefinitions }),
                   ...(skillsRegistry !== undefined && { skillsRegistry }),
                   ...(skillsDir !== undefined && { skillsDir }),

@@ -208,6 +208,29 @@ describe("Agent executor", () => {
     expect((result.value as { text: string }).text).toBe("from claude");
   });
 
+  it("routes to codexRunner when agent definition has runner: codex", async () => {
+    let usedRunner: string | null = null;
+    const agentRunner: AgentRunner = async () => { usedRunner = "agentRunner"; return { text: "from agent" }; };
+    const codexRunner: AgentRunner = async () => { usedRunner = "codexRunner"; return { text: "from codex" }; };
+    const node: AgentNode = {
+      id: "n",
+      type: "agent",
+      agentId: "writer",
+      prompt: "Write something.",
+    };
+    const context: ExecutorContext = { inputs: {}, artifacts: {}, env: {}, outputs: {} };
+
+    const result = await executeAgent(
+      node,
+      context,
+      { agentRunner, codexRunner },
+      { writer: { runner: "codex" } }
+    );
+
+    expect(usedRunner).toBe("codexRunner");
+    expect((result.value as { text: string }).text).toBe("from codex");
+  });
+
   it("prepends systemPrompt from agent definition to node prompt", async () => {
     let capturedParams: Parameters<AgentRunner>[0] | null = null;
     const capturingRunner: AgentRunner = async (params) => { capturedParams = params; return { text: "ok" }; };
@@ -293,6 +316,26 @@ describe("Agent executor", () => {
     );
 
     expect(usedRunner).toBe("agentRunner");
+  });
+
+  it("passes runner: codex through to the codex runner", async () => {
+    let capturedParams: Parameters<AgentRunner>[0] | null = null;
+    const capturingRunner: AgentRunner = async (params) => { capturedParams = params; return { text: "ok" }; };
+    const node: AgentNode = {
+      id: "n",
+      type: "agent",
+      prompt: "Do something",
+      runner: "codex",
+      mode: "plan",
+      model: "gpt-5.4",
+    };
+    const context: ExecutorContext = { inputs: {}, artifacts: {}, env: {}, outputs: {} };
+
+    await executeAgent(node, context, { codexRunner: capturingRunner });
+
+    expect(capturedParams?.runner).toBe("codex");
+    expect(capturedParams?.mode).toBe("plan");
+    expect(capturedParams?.model).toBe("gpt-5.4");
   });
 
   it("appends output schema instruction to prompt when contracts.output is set", async () => {

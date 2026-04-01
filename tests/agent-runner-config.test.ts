@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   normalizeClaudeCodeConfigFromPlugin,
+  normalizeCodexConfigFromPlugin,
   resolveClaudeCodeConfigFromEnv,
+  resolveCodexConfigFromEnv,
 } from "../src/agent-runner-config.js";
 
 describe("Claude Code config – model", () => {
@@ -52,6 +54,37 @@ describe("Claude Code config – model", () => {
     it("omits model when RIPLINE_CLAUDE_CODE_MODEL is not set", () => {
       const config = resolveClaudeCodeConfigFromEnv({
         RIPLINE_CLAUDE_CODE_MODE: "execute",
+      });
+      expect(config).not.toBeNull();
+      expect(config?.model).toBeUndefined();
+    });
+  });
+});
+
+describe("Codex config – model", () => {
+  describe("normalizeCodexConfigFromPlugin", () => {
+    it("sets model when codex.model is a non-empty string", () => {
+      const config = normalizeCodexConfigFromPlugin({
+        codex: { mode: "execute", model: "gpt-5.4" },
+      });
+      expect(config).not.toBeNull();
+      expect(config?.model).toBe("gpt-5.4");
+    });
+  });
+
+  describe("resolveCodexConfigFromEnv", () => {
+    it("sets model when RIPLINE_CODEX_MODEL is set", () => {
+      const config = resolveCodexConfigFromEnv({
+        RIPLINE_CODEX_MODE: "execute",
+        RIPLINE_CODEX_MODEL: "gpt-5.4",
+      });
+      expect(config).not.toBeNull();
+      expect(config?.model).toBe("gpt-5.4");
+    });
+
+    it("omits model when RIPLINE_CODEX_MODEL is not set", () => {
+      const config = resolveCodexConfigFromEnv({
+        RIPLINE_CODEX_MODE: "execute",
       });
       expect(config).not.toBeNull();
       expect(config?.model).toBeUndefined();

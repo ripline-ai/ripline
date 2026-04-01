@@ -3,6 +3,7 @@ import path from "node:path";
 import type { McpServerConfig } from "./types.js";
 import type { AgentResult, AgentRunner } from "./pipeline/executors/agent.js";
 import { stripAnsi, extractLastJson } from "./stdout-parser.js";
+import { normalizeContainerConfig, DEFAULT_BUILD_IMAGE } from "./run-container-pool.js";
 
 const PLAN_MODE_DENY_TOOLS = ["Write", "Edit", "MultiEdit"];
 const MAX_TURNS_CEILING_EXECUTE = 200;
@@ -136,6 +137,10 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
   const outputFormat = config.outputFormat ?? "text";
 
   return async (params): Promise<AgentResult> => {
+    if (params.containerContext) {
+      return runClaudeCodeInContainer(params, outputFormat);
+    }
+
     const mode = params.mode ?? defaultMode;
     const rawCwd = params.cwd ?? defaultCwd ?? process.cwd();
     const cwd = validateCwd(rawCwd);
@@ -348,4 +353,62 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
       throw new Error(String(err));
     }
   };
+}
+
+async function runClaudeCodeInContainer(
+  params: Parameters<AgentRunner>[0],
+  outputFormat: "text" | "json"
+): Promise<AgentResult> {
+  const resolved = params.containerContext?.nodeContainer !== undefined
+    ? normalizeContainerConfig(params.containerContext.nodeContainer, {
+        image: params.containerContext.defaultImage ?? DEFAULT_BUILD_IMAGE,
+        ...(params.cwd !== undefined && { workdir: params.cwd }),
+      })
+    : undefined;
+
+  const effectiveWorkdir = resolved?.workdir ?? params.cwd;
+  const env = resolved?.env;
+
+  const claudeArgs: string[] = ["claude", "-p", params.prompt, "--output-format", "text"];
+  if (params.dangerouslySkipPermissions) {
+    claudeArgs.push("--dangerously-skip-permissions");
+  }
+  if (params.model) {
+    claudeArgs.push("--model", params.model);
+  }
+  if (params.mode === "plan") {
+    claudeArgs.push("--disallowed-tools", "Write,Edit,MultiEdit");
+  }
+
+  const args =
+    params.timeoutSeconds !== undefined
+      ? ["timeout", String(params.timeoutSeconds), ...claudeArgs]
+      : claudeArgs;
+
+  const result = await params.containerContext!.pool.exec(
+    params.containerContext!.runId,
+    args,
+    env,
+    effectiveWorkdir,
+  );
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `agent container exec failed with exit code ${result.exitCode}: ${(result.stderr || result.stdout).slice(0, 500)}`
+    );
+  }
+
+  let text = stripAnsi(result.stdout).trim();
+  if (outputFormat === "json") {
+    const extracted = extractLastJson(text);
+    text = extracted ?? text;
+    try {
+      JSON.parse(text);
+    } catch {
+      throw new Error(
+        `Claude Code runner: outputFormat is "json" but response was not valid JSON: ${text.slice(0, 200)}`
+      );
+    }
+  }
+  return { text };
 }

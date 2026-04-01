@@ -230,6 +230,11 @@ The following environment variables are read by the CLI and affect its behavior.
 | `RIPLINE_CLAUDE_CODE_MAX_TURNS` | Maximum turns for Claude Code sessions. |
 | `RIPLINE_CLAUDE_CODE_TIMEOUT` | Timeout in seconds for Claude Code sessions. |
 | `RIPLINE_CLAUDE_CODE_DANGEROUSLY_SKIP_PERMISSIONS` | Set to `true` to enable bypass permissions mode globally (see [Agent integration](agent-integration#bypass-permissions-mode-advanced)). |
+| `RIPLINE_CODEX_MODE` | Codex runner mode: `plan` or `execute`. |
+| `RIPLINE_CODEX_CWD` | Default working directory for the Codex runner. |
+| `RIPLINE_CODEX_MODEL` | Default model for Codex sessions. |
+| `RIPLINE_CODEX_TIMEOUT` | Timeout in seconds for Codex sessions. |
+| `RIPLINE_CODEX_DANGEROUSLY_SKIP_PERMISSIONS` | Set to `true` to enable Codex dangerous bypass mode globally. |
 | `RIPLINE_INPUTS` | Path to a JSON inputs file (used by helper scripts, e.g. cron). |
 | `RIPLINE_OUT` | Output path for run artifacts (used by helper scripts). |
 

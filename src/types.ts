@@ -63,6 +63,8 @@ export type RiplineUserConfig = {
   defaultProfile?: string;
   /** Only from ~/.ripline/config.json; never from pipeline/profile/input. */
   claudeCode?: { allowDangerouslySkipPermissions?: boolean };
+  /** Only from ~/.ripline/config.json; never from pipeline/profile/input. */
+  codex?: { allowDangerouslySkipPermissions?: boolean };
   /** Background queue configuration. */
   backgroundQueue?: BackgroundQueueConfig;
   /** Telegram notification configuration. */
@@ -107,8 +109,10 @@ export type RetryPolicy = {
 
 export type ErrorCategory = "transient" | "permanent" | "unknown";
 
-export type ClaudeCodeAgentDefinition = {
-  runner: "claude-code";
+export type BuiltinAgentRunner = "claude-code" | "codex";
+
+export type BuiltinAgentDefinition = {
+  runner: BuiltinAgentRunner;
   /** Prepended to the node's prompt at run time. */
   systemPrompt?: string;
   model?: string;
@@ -131,7 +135,7 @@ export type ExternalAgentDefinition = {
   runner?: string;
 };
 
-export type AgentDefinition = ClaudeCodeAgentDefinition | ExternalAgentDefinition;
+export type AgentDefinition = BuiltinAgentDefinition | ExternalAgentDefinition;
 
 /**
  * Container configuration for node-level or run-level container execution.

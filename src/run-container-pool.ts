@@ -16,7 +16,6 @@
 
 import { execFile, execFileSync, spawn } from "node:child_process";
 import path from "node:path";
-import os from "node:os";
 import fs from "node:fs";
 import { createLogger, type Logger } from "./log.js";
 import type { NodeContainerConfig } from "./types.js";
@@ -93,37 +92,6 @@ export class RunContainerPool {
       for (const [hostPath, containerPath] of Object.entries(volumes)) {
         args.push("--volume", `${hostPath}:${containerPath}`);
       }
-    }
-
-    // Mount host Claude CLI credentials into the container so `claude` commands
-    // can authenticate.  The directory is mounted read-only to prevent the
-    // container from modifying host credentials.
-    //
-    // The container image runs as a non-root user whose UID may differ from the
-    // host user.  To allow reading the host credentials (which are owned by the
-    // host user and have mode 600), we:
-    //   1. Run the container as the host UID:GID via --user.
-    //   2. Set HOME to the host home directory so `claude` resolves ~/.claude
-    //      correctly regardless of what the image's /etc/passwd says.
-    //   3. Mount both ~/.claude/ and ~/.claude.json (the legacy config file that
-    //      some Claude CLI versions expect at $HOME/.claude.json).
-    const hostHome = os.homedir();
-    const hostClaudeDir = path.join(hostHome, ".claude");
-    const hostClaudeJson = path.join(hostHome, ".claude.json");
-    const hostUid = process.getuid?.() ?? 0;
-    const hostGid = process.getgid?.() ?? 0;
-    args.push("--user", `${hostUid}:${hostGid}`);
-    args.push("--env", `HOME=${hostHome}`);
-    if (fs.existsSync(hostClaudeDir)) {
-      args.push("--volume", `${hostClaudeDir}:${hostClaudeDir}:ro`);
-      // Claude Code needs a writable location for session-env (temp session state).
-      // The .claude dir is mounted :ro above, so we overlay session-env with a
-      // writable tmpfs so the CLI can create its session directories without
-      // mutating host credentials.
-      args.push("--tmpfs", `${hostClaudeDir}/session-env:exec,uid=${hostUid},gid=${hostGid}`);
-    }
-    if (fs.existsSync(hostClaudeJson)) {
-      args.push("--volume", `${hostClaudeJson}:${hostClaudeJson}:ro`);
     }
 
     if (resourceLimits?.cpus) {

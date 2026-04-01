@@ -182,7 +182,7 @@ The expression runs with `with (context) { return (expression); }`, so the follo
 
 ### `agent`
 
-Calls an agent runner (OpenClaw, LLM, or Claude Code) with a prompt and returns a text artifact. This is the primary node type for AI-powered work.
+Calls an agent runner (OpenClaw, LLM, Claude Code, or Codex) with a prompt and returns a text artifact. This is the primary node type for AI-powered work.
 
 ```yaml
 - id: summarize
@@ -194,10 +194,10 @@ Calls an agent runner (OpenClaw, LLM, or Claude Code) with a prompt and returns 
   thinking: medium                # optional — thinking level
   timeoutSeconds: 120             # optional — per-node timeout
   resetSession: true              # optional — isolate session context (default: true)
-  runner: claude-code             # optional — use Claude Code runner for this node
-  mode: plan                      # optional — plan | execute (Claude Code only)
-  cwd: "{{ run.inputs.repoPath }}" # optional — working directory (Claude Code only)
-  dangerouslySkipPermissions: false # optional — bypass permissions (Claude Code only)
+  runner: codex                   # optional — use a built-in code runner for this node
+  mode: plan                      # optional — plan | execute (Claude Code or Codex)
+  cwd: "{{ run.inputs.repoPath }}" # optional — working directory (Claude Code or Codex)
+  dangerouslySkipPermissions: false # optional — bypass permissions (built-in code runners)
 ```
 
 #### Fields
@@ -205,23 +205,25 @@ Calls an agent runner (OpenClaw, LLM, or Claude Code) with a prompt and returns 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `prompt` | string | ✅ | The prompt sent to the agent. Supports `{{ }}` template interpolation. |
-| `agentId` | string | — | Agent ID passed to the OpenClaw runner (e.g. `vector`, `nova`). Ignored by LLM and Claude Code runners. |
+| `agentId` | string | — | Agent ID passed to the OpenClaw runner (e.g. `vector`, `nova`). Ignored by LLM, Claude Code, and Codex runners. |
 | `thinking` | string | — | Thinking level: `off`, `minimal`, `low`, `medium`, `high`. Passed to OpenClaw runner only. |
 | `timeoutSeconds` | number | — | Per-node deadline in seconds. The node is marked `errored` if exceeded. |
 | `resetSession` | boolean | — | When `true` (default), use a fresh session UUID per node for context isolation. When `false`, share the run-level session ID for multi-turn continuity. |
 | `sessionId` | string | — | Reserved for future explicit session override. |
 | `channel` | string | — | Reserved for future delivery channel configuration. |
 | `deliver` | boolean | — | Reserved for future delivery configuration. |
-| `runner` | `"claude-code"` | — | Route this node to the Claude Code runner. If `claudeCodeRunner` is not configured, the run fails with a clear error. |
-| `mode` | `"plan"` \| `"execute"` | — | Claude Code runner only. `"plan"` = read-only (PreToolUse hook denies writes). `"execute"` = full access (default). |
-| `cwd` | string | — | Claude Code runner only. Working directory; supports `{{ }}` interpolation. Must resolve to an existing directory. Must not contain `..`. |
-| `dangerouslySkipPermissions` | boolean | — | Claude Code runner only. When `true` and global bypass is enabled, the node runs with `--dangerously-skip-permissions`. Omit or `false` = use `dontAsk` mode. See [Agent integration](agent-integration#bypass-permissions-mode-advanced). |
+| `runner` | `"claude-code"` \| `"codex"` | — | Route this node to a built-in code runner. If that runner is not configured, the run fails with a clear error. |
+| `mode` | `"plan"` \| `"execute"` | — | Built-in code runners only. `"plan"` = read-only. `"execute"` = write-capable/default. Exact behavior depends on the runner. |
+| `cwd` | string | — | Built-in code runners only. Working directory; supports `{{ }}` interpolation. Must resolve to an existing directory. Must not contain `..`. |
+| `dangerouslySkipPermissions` | boolean | — | Built-in code runners only. Enables the runner's dangerous bypass mode when the corresponding global gate is enabled. See [Agent integration](agent-integration#bypass-permissions-mode-advanced). |
 | `skills` | string[] | — | Named skills to attach to this node. Each name is resolved in two ways: (1) as an MCP server from the skills registry (wires in a tool server), and (2) as a text file at `<skillsDir>/<name>.md` (injects usage instructions into the prompt). A skill may be one or both. See [Skills](agent-integration#skills). |
 | `mcpServers` | object | — | Explicit MCP server configs keyed by name, merged on top of registry-resolved skills. Node-level entries win over agent-definition entries. |
 
 **Output:** `{ text: string, tokenUsage?: { input: number, output: number } }` stored as the node's artifact.
 
 See [Agent integration](agent-integration) for full runner selection rules and configuration.
+
+If you run agent nodes in a container, the container is generic user-provided execution context. Ripline does not inject runner binaries or credentials into that container; your image must already contain the requested runner and any required auth/config.
 
 ---
 

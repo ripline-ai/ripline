@@ -1,0 +1,33 @@
+# Implement Story (Codex)
+# Runs standalone: uses runner: codex and cwd from run inputs (e.g. profile).
+# Good starting point for Codex-based implementation workflows.
+# Provide projectRoot via profile or --input so the agent runs in the right repo.
+id: implement_story_codex
+name: Implement Story (Codex)
+entry: [task_in]
+nodes:
+  - id: task_in
+    type: input
+
+  - id: implement
+    type: agent
+    runner: codex
+    mode: execute
+    cwd: "{{ run.inputs.projectRoot }}"
+    timeoutSeconds: 600
+    prompt: |
+      Implement the following development story in the project at the current working directory. Write the necessary code changes, then commit your work with a descriptive commit message referencing the story ID.
+
+      Story ID: {{task.id}}
+      Title: {{task.title}}
+
+      Details:
+      {{task.detail}}
+
+  - id: result
+    type: output
+    source: implement
+
+edges:
+  - { from: { node: task_in },   to: { node: implement } }
+  - { from: { node: implement }, to: { node: result } }

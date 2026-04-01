@@ -25,6 +25,7 @@ export { executeSwitch } from "./switch.js";
 export type ExecutorRegistryOptions = {
   agentRunner?: AgentRunner;
   claudeCodeRunner?: AgentRunner;
+  codexRunner?: AgentRunner;
   /** Named agent definitions. Claude Code agents are routed automatically by their runner field. */
   agentDefinitions?: Record<string, AgentDefinition>;
   /** Skills registry for resolving agent skill shorthand names to MCP server configs. */
@@ -47,6 +48,7 @@ function registerExecutors() {
     {
       ...(options?.agentRunner !== undefined && { agentRunner: options.agentRunner }),
       ...(options?.claudeCodeRunner !== undefined && { claudeCodeRunner: options.claudeCodeRunner }),
+      ...(options?.codexRunner !== undefined && { codexRunner: options.codexRunner }),
       ...(options?.agentDefinitions !== undefined && { agentDefinitions: options.agentDefinitions }),
       ...(options?.skillsRegistry !== undefined && { skillsRegistry: options.skillsRegistry }),
       ...(options?.skillsDir !== undefined && { skillsDir: options.skillsDir }),
@@ -62,6 +64,7 @@ function registerExecutors() {
       {
         ...(options?.agentRunner !== undefined && { agentRunner: options.agentRunner }),
         ...(options?.claudeCodeRunner !== undefined && { claudeCodeRunner: options.claudeCodeRunner }),
+        ...(options?.codexRunner !== undefined && { codexRunner: options.codexRunner }),
       },
       options?.agentDefinitions,
       options?.skillsRegistry,

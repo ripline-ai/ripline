@@ -25,7 +25,7 @@ In short: turn messy cross-team workflows into a graph you can see, change, and 
 - Type-checked registry that watches `pipelines/` and validates on save
 - In-memory and file-backed run store with resumable IDs and JSON payload snapshots
 - CLI runner, HTTP API server, and MCP server — use whichever surface fits the work
-- **Per-node agent runners:** LLM providers (Ollama, OpenAI, Anthropic) or `runner: claude-code` with **plan** (read-only) or **execute** mode; see [Agent integration](docs/agent-integration.md)
+- **Per-node agent runners:** LLM providers (Ollama, OpenAI, Anthropic), `runner: claude-code`, or `runner: codex`, with **plan** (read-only) or **execute** mode where supported; see [Agent integration](docs/agent-integration.md)
 - **Pluggable core interfaces:** `EventSink`, `QueueStore`, and `RunnerRegistry` — swap out any piece without forking the engine
 - Optional [OpenClaw integration](src/integrations/openclaw/) for running inside an OpenClaw host (see [OpenClaw Integration](#openclaw-integration))
 
@@ -146,7 +146,7 @@ Run-scoped logs are written to `<runsDir>/<runId>/log.txt` whenever a run is exe
 
 You can run pipelines with real agent nodes using Ollama, OpenAI, or Anthropic — no external dependencies required. Set `RIPLINE_AGENT_PROVIDER` and `RIPLINE_AGENT_MODEL` (and `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for those providers), or use a config file (`.ripline/agent.json` or `ripline.config.json` with an `agent` section). CLI flags work too: `ripline run --agent-provider ollama --agent-model llama3.2`.
 
-For Claude Code runner (plan/execute mode with filesystem tools), see [Using Claude Code as a runner](docs/agent-integration.md#using-claude-code-as-a-runner).
+For built-in tool-using runners, see [Using Claude Code as a runner](docs/agent-integration.md#using-claude-code-as-a-runner) and [Using Codex as a runner](docs/agent-integration.md#using-codex-as-a-runner).
 
 See [Agent integration](docs/agent-integration.md) for full configuration details.
 
@@ -248,7 +248,7 @@ Ripline can be loaded as a plugin inside an [OpenClaw](https://github.com/craigj
 When loaded as a plugin:
 
 - The host provides a configured agent runner; all `agent` nodes run through the OpenClaw runtime automatically.
-- The `claude-code` runner is **not available** when inside OpenClaw (use the host's runner instead).
+- Built-in standalone runners like `claude-code` and `codex` are **not available** when inside OpenClaw (use the host's runner instead).
 - The HTTP server mounts at the path and port specified in plugin config.
 
 **Plugin config example:**
@@ -281,7 +281,7 @@ The integration lives in [`src/integrations/openclaw/`](src/integrations/opencla
 | [Configuration reference](docs/configuration.md) | All config files, env vars, plugin config, and precedence rules |
 | [HTTP API](docs/http-api.md) | REST endpoints for triggering and inspecting runs |
 | [Pipelines and profiles](docs/pipelines-and-profiles.md) | Pipeline directory, profile system, and user config |
-| [Agent integration](docs/agent-integration.md) | LLM, Claude Code, and OpenClaw runner configuration |
+| [Agent integration](docs/agent-integration.md) | LLM, Claude Code, Codex, and OpenClaw runner configuration |
 | [Automation and cron](docs/automation-cron.md) | Cron jobs, CI, and messaging integrations |
 | [OpenClaw integration](docs/integrations/openclaw.md) | Loading Ripline as an OpenClaw plugin, WintermuteEventSink, pluggable interfaces |
 | [Migrating from OpenClaw](docs/migrating-from-openclaw.md) | Parameterising hardcoded paths and profiles |
@@ -314,7 +314,7 @@ Ripline is designed for workflows where multiple specialized agents must coordin
 ### How it works
 
 ```
-Pipeline YAML  →  Ripline scheduler  →  Agent runner (LLM / Claude Code / OpenClaw)  →  JSON artifact
+Pipeline YAML  →  Ripline scheduler  →  Agent runner (LLM / Claude Code / Codex / OpenClaw)  →  JSON artifact
                    (4 concurrent          (isolated session,
                     workers)               fresh context)
 ```
