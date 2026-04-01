@@ -382,6 +382,43 @@ describe("RunContainerPool", () => {
         "utf8",
       ]);
     });
+
+    it("marks exec as timed out and kills docker exec when timeout is exceeded", async () => {
+      const kill = vi.fn();
+      (child_process.execFile as any).mockImplementation(
+        (_cmd: string, args: string[], cbOrOpts?: any, cb?: any) => {
+          const callback = typeof cbOrOpts === "function" ? cbOrOpts : cb;
+          if (!callback) return { kill: vi.fn(), on: vi.fn() } as any;
+          if (args[0] === "run") callback(null, "timeoutcont12\n", "");
+          else callback(null, "", "");
+          return { kill: vi.fn(), on: vi.fn() } as any;
+        },
+      );
+      (child_process.execFileSync as any).mockReturnValue("");
+      (child_process.spawn as any).mockImplementation(() => {
+        const closeListeners: Array<(code: number) => void> = [];
+        const mockProc = {
+          stdout: { on: vi.fn() },
+          stderr: { on: vi.fn() },
+          kill,
+          on: (event: string, cb: (code: number) => void) => {
+            if (event === "close") closeListeners.push(cb);
+          },
+        };
+        setTimeout(() => {
+          for (const cb of closeListeners) cb(null as unknown as number);
+        }, 30);
+        return mockProc as any;
+      });
+
+      await pool.acquire("run-timeout-exec", { image: DEFAULT_BUILD_IMAGE, logFile: "/tmp/test.log" });
+      const result = await pool.exec("run-timeout-exec", ["sleep", "999"], undefined, undefined, 5);
+
+      expect(kill).toHaveBeenCalledWith("SIGTERM");
+      expect(result.timedOut).toBe(true);
+      expect(result.exitCode).toBe(124);
+      expect(result.stderr).toContain("[timed out after 1s]");
+    });
   });
 
   /* ── release ──────────────────────────────────────────────────────── */

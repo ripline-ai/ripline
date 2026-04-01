@@ -128,4 +128,27 @@ describe("Codex runner", () => {
       })
     ).rejects.toThrow(/actual failure line/);
   });
+
+  it("reports container exec timeouts using the node timeout", async () => {
+    const runner = createCodexRunner({ mode: "execute" });
+    await expect(
+      runner({
+        agentId: "default",
+        prompt: "Hi",
+        cwd,
+        timeoutSeconds: 42,
+        containerContext: {
+          runId: "run-1",
+          pool: {
+            exec: vi.fn().mockResolvedValue({
+              exitCode: 124,
+              stdout: "",
+              stderr: "[timed out after 42s]",
+              timedOut: true,
+            }),
+          } as any,
+        },
+      })
+    ).rejects.toThrow(/request timed out after 42s/);
+  });
 });

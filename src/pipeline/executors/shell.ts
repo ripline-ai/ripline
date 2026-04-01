@@ -43,6 +43,7 @@ export async function executeShell(
           node.container,
           cwd,
           context.defaultContainerImage,
+          timeoutMs,
         )
       : runCommand(command, cwd, timeoutMs)
   );
@@ -79,6 +80,7 @@ async function runCommandInContainer(
   nodeContainer: import("../../types.js").NodeContainerConfig | undefined,
   workdir: string,
   defaultImage?: string,
+  timeoutMs?: number,
 ): Promise<{ exitCode: number; output: string }> {
   // Resolve node-level container config for extra env / workdir override
   const resolved = nodeContainer !== undefined
@@ -88,7 +90,10 @@ async function runCommandInContainer(
   const effectiveWorkdir = resolved?.workdir ?? workdir;
   const env = resolved?.env;
 
-  const result = await pool.exec(runId, ["sh", "-c", command], env, effectiveWorkdir);
+  const result = await pool.exec(runId, ["sh", "-c", command], env, effectiveWorkdir, timeoutMs);
+  if (result.timedOut) {
+    throw new Error(`shell: command timed out after ${Math.ceil((timeoutMs ?? 0) / 1000)}s`);
+  }
   const output = result.stdout + (result.stderr ? result.stderr : "");
   return { exitCode: result.exitCode, output };
 }

@@ -195,6 +195,7 @@ async function runCodexInContainer(
   params: Parameters<AgentRunner>[0],
   outputFormat: "text" | "json"
 ): Promise<AgentResult> {
+  const timeoutMs = (params.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000;
   const resolved = params.containerContext?.nodeContainer !== undefined
     ? normalizeContainerConfig(params.containerContext.nodeContainer, {
         image: params.containerContext.defaultImage ?? DEFAULT_BUILD_IMAGE,
@@ -226,7 +227,12 @@ async function runCodexInContainer(
     args,
     env,
     effectiveWorkdir,
+    timeoutMs,
   );
+
+  if (result.timedOut) {
+    throw new Error(`Codex runner: request timed out after ${timeoutMs / 1000}s`);
+  }
 
   if (result.exitCode !== 0) {
     throw new Error(

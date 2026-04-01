@@ -359,6 +359,10 @@ async function runClaudeCodeInContainer(
   params: Parameters<AgentRunner>[0],
   outputFormat: "text" | "json"
 ): Promise<AgentResult> {
+  const timeoutMs =
+    params.timeoutSeconds !== undefined
+      ? params.timeoutSeconds * 1000
+      : undefined;
   const resolved = params.containerContext?.nodeContainer !== undefined
     ? normalizeContainerConfig(params.containerContext.nodeContainer, {
         image: params.containerContext.defaultImage ?? DEFAULT_BUILD_IMAGE,
@@ -390,7 +394,12 @@ async function runClaudeCodeInContainer(
     args,
     env,
     effectiveWorkdir,
+    timeoutMs,
   );
+
+  if (result.timedOut) {
+    throw new Error(`Claude Code runner: request timed out after ${Math.ceil((timeoutMs ?? 0) / 1000)}s`);
+  }
 
   if (result.exitCode !== 0) {
     throw new Error(

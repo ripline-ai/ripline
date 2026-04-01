@@ -41,6 +41,7 @@ export interface ExecResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  timedOut?: boolean;
 }
 
 /* ── DEFAULT BUILD IMAGE ─────────────────────────────────────────────── */
@@ -155,6 +156,7 @@ export class RunContainerPool {
     command: string[],
     env?: Record<string, string>,
     workdir?: string,
+    timeoutMs?: number,
   ): Promise<ExecResult> {
     const containerId = this.containers.get(runId);
     if (!containerId) {
@@ -177,6 +179,7 @@ export class RunContainerPool {
     return new Promise((resolve) => {
       let stdout = "";
       let stderr = "";
+      let timedOut = false;
       const proc = spawn("docker", args, {
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -184,7 +187,23 @@ export class RunContainerPool {
       proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
       proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
 
+      const timeoutId =
+        timeoutMs !== undefined && timeoutMs > 0
+          ? setTimeout(() => {
+              timedOut = true;
+              try { proc.kill("SIGTERM"); } catch { /* ignore */ }
+              setTimeout(() => {
+                try { proc.kill("SIGKILL"); } catch { /* ignore */ }
+              }, 5000).unref();
+            }, timeoutMs)
+          : undefined;
+
       proc.on("close", (code: number | null) => {
+        if (timeoutId) clearTimeout(timeoutId);
+        if (timedOut) {
+          const timeoutLine = `\n[timed out after ${Math.ceil((timeoutMs ?? 0) / 1000)}s]`;
+          stderr += timeoutLine;
+        }
         if (logFile) {
           const lines: string[] = [];
           if (stdout) lines.push(stdout);
@@ -197,10 +216,11 @@ export class RunContainerPool {
             }
           }
         }
-        resolve({ exitCode: code ?? 1, stdout, stderr });
+        resolve({ exitCode: timedOut ? 124 : (code ?? 1), stdout, stderr, timedOut });
       });
 
       proc.on("error", (err: Error) => {
+        if (timeoutId) clearTimeout(timeoutId);
         resolve({ exitCode: 1, stdout, stderr: stderr + err.message });
       });
     });
