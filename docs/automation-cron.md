@@ -39,6 +39,7 @@ node bin/ripline.js run \
 - Ripline exits with a non-zero status on failure, so cron and CI can alert or retry.
 - Use `ripline run --resume <runId>` when you want to continue a persisted run after a failure.
 - Use `ripline logs <runId>` or the HTTP log endpoints to inspect failures without rerunning immediately.
+- Long-lived servers now reclaim dead-owned `running` records before auto-dispatch treats the queue as blocked. This prevents a crashed standalone `ripline run` process from wedging background execution until the next full restart.
 
 ## Helpful environment variables
 
