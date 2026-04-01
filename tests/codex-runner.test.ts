@@ -106,4 +106,26 @@ describe("Codex runner", () => {
       runner({ agentId: "default", prompt: "Hi", cwd })
     ).rejects.toThrow(/Codex runner exited with code 2: boom/);
   });
+
+  it("reports the tail of container exec failures instead of the banner head", async () => {
+    const runner = createCodexRunner({ mode: "execute" });
+    await expect(
+      runner({
+        agentId: "default",
+        prompt: "Hi",
+        cwd,
+        dangerouslySkipPermissions: true,
+        containerContext: {
+          runId: "run-1",
+          pool: {
+            exec: vi.fn().mockResolvedValue({
+              exitCode: 1,
+              stdout: "Reading additional input from stdin...\nOpenAI Codex v0.118.0\nactual failure line\nmore detail",
+              stderr: "",
+            }),
+          } as any,
+        },
+      })
+    ).rejects.toThrow(/actual failure line/);
+  });
 });

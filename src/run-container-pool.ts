@@ -51,6 +51,7 @@ export const DEFAULT_BUILD_IMAGE = "ubuntu:22.04";
 
 export class RunContainerPool {
   private readonly containers: Map<string, string> = new Map(); // runId → containerId
+  private readonly logFiles: Map<string, string> = new Map(); // runId → container log path
   private readonly logger: Logger;
 
   constructor(logger?: Logger) {
@@ -140,6 +141,7 @@ export class RunContainerPool {
     });
 
     this.containers.set(runId, containerId);
+    this.logFiles.set(runId, logFile);
     this.logger.log("info", `[run-container-pool] Container ${containerId} started for run ${runId}`);
     return containerId;
   }
@@ -158,6 +160,7 @@ export class RunContainerPool {
     if (!containerId) {
       throw new Error(`No container found for run ${runId} — call acquire() first`);
     }
+    const logFile = this.logFiles.get(runId);
 
     const args: string[] = ["exec"];
     if (workdir) {
@@ -182,6 +185,18 @@ export class RunContainerPool {
       proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
 
       proc.on("close", (code: number | null) => {
+        if (logFile) {
+          const lines: string[] = [];
+          if (stdout) lines.push(stdout);
+          if (stderr) lines.push(stderr);
+          if (lines.length > 0) {
+            try {
+              fs.appendFileSync(logFile, lines.join("") + (lines.join("").endsWith("\n") ? "" : "\n"), "utf8");
+            } catch {
+              // Logging must never break the underlying exec path.
+            }
+          }
+        }
         resolve({ exitCode: code ?? 1, stdout, stderr });
       });
 
@@ -200,6 +215,7 @@ export class RunContainerPool {
     if (!containerId) return;
 
     this.containers.delete(runId);
+    this.logFiles.delete(runId);
     try {
       execFileSync("docker", ["rm", "-f", containerId], { stdio: "ignore" });
       this.logger.log("info", `[run-container-pool] Container ${containerId} removed for run ${runId}`);

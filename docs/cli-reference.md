@@ -84,6 +84,8 @@ When a pipeline defines a run-level `container`, `ripline run` now starts that p
 
 Ripline starts those run-level containers as the current host UID/GID so mounted repositories, workspaces, and local tool state keep normal file permissions instead of becoming unreadable inside the container.
 
+For run-level containers, each `docker exec` step now appends its stdout/stderr to the run-scoped `container.log` file in the run directory. When a container-routed agent step fails, check `GET /runs/:runId/container-logs` or the local `container.log` file first; the saved log includes the tail of the failing command output rather than only the startup banner.
+
 ### Examples
 
 ```bash

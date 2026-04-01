@@ -27,6 +27,7 @@ vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return {
     ...actual,
+    appendFileSync: vi.fn().mockReturnValue(undefined),
     mkdirSync: vi.fn().mockReturnValue(undefined),
     openSync: vi.fn().mockReturnValue(99),
     closeSync: vi.fn().mockReturnValue(undefined),
@@ -339,6 +340,47 @@ describe("RunContainerPool", () => {
       expect(execCall).toBeDefined();
       expect(execCall[1]).toContain("--env");
       expect(execCall[1]).toContain("MY_VAR=my_value");
+    });
+
+    it("appends exec stdout and stderr to the run container log file", async () => {
+      const appendSpy = vi.spyOn(fs, "appendFileSync").mockReturnValue(undefined as never);
+      mockDockerCli({ execExitCode: 1, execStdout: "stdout line\n" });
+      (child_process.spawn as any).mockImplementation((cmd: string, args: string[]) => {
+        const stdoutListeners: Array<(d: Buffer) => void> = [];
+        const closeListeners: Array<(code: number) => void> = [];
+        const stderrListeners: Array<(d: Buffer) => void> = [];
+        const mockProc = {
+          stdout: {
+            on: (event: string, cb: (d: Buffer) => void) => {
+              if (event === "data") stdoutListeners.push(cb);
+            },
+          },
+          stderr: {
+            on: (event: string, cb: (d: Buffer) => void) => {
+              if (event === "data") stderrListeners.push(cb);
+            },
+          },
+          on: (event: string, cb: (code: number) => void) => {
+            if (event === "close") closeListeners.push(cb);
+          },
+        };
+        setImmediate(() => {
+          for (const cb of stdoutListeners) cb(Buffer.from("stdout line\n"));
+          for (const cb of stderrListeners) cb(Buffer.from("stderr line\n"));
+          for (const cb of closeListeners) cb(1);
+        });
+        return mockProc as any;
+      });
+
+      await pool.acquire("run-log-exec", { image: DEFAULT_BUILD_IMAGE, logFile: "/tmp/test.log" });
+      const result = await pool.exec("run-log-exec", ["false"]);
+
+      expect(result.exitCode).toBe(1);
+      expect(appendSpy.mock.calls).toContainEqual([
+        "/tmp/test.log",
+        "stdout line\nstderr line\n",
+        "utf8",
+      ]);
     });
   });
 

@@ -67,6 +67,17 @@ function logChunk(
   }
 }
 
+function summarizeCommandFailure(stdout: string, stderr: string): string {
+  const combined = stripAnsi(`${stderr}\n${stdout}`)
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== "");
+  const tail = combined.slice(-12).join("\n").trim();
+  if (tail) return tail.slice(0, 2000);
+  const fallback = stripAnsi(stderr || stdout).trim();
+  return fallback.slice(0, 2000);
+}
+
 export function createCodexRunner(config: CodexRunnerConfig): AgentRunner {
   const defaultMode = config.mode;
   const defaultCwd = config.cwd;
@@ -219,7 +230,7 @@ async function runCodexInContainer(
 
   if (result.exitCode !== 0) {
     throw new Error(
-      `agent container exec failed with exit code ${result.exitCode}: ${(result.stderr || result.stdout).slice(0, 500)}`
+      `agent container exec failed with exit code ${result.exitCode}: ${summarizeCommandFailure(result.stdout, result.stderr)}`
     );
   }
 
