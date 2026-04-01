@@ -2,23 +2,17 @@ import { spawn } from "node:child_process";
 import type { ShellNode } from "../../types.js";
 import type { ExecutorContext, NodeResult } from "./types.js";
 import { normalizeContainerConfig, DEFAULT_BUILD_IMAGE } from "../../run-container-pool.js";
+import { interpolateTemplate } from "../../expression.js";
 
 const DEFAULT_TIMEOUT_S = 120;
 
-/** Interpolate {{key}} placeholders from artifacts and inputs into a string. */
-function interpolate(template: string, context: ExecutorContext): string {
-  return template.replace(/\{\{(\w+(?:\.\w+)*)\}\}/g, (_, key) => {
-    const parts = key.split(".");
-    let val: unknown = parts[0] in context.artifacts
-      ? context.artifacts[parts[0]]
-      : context.inputs[parts[0]];
-    for (let i = 1; i < parts.length; i++) {
-      if (val == null || typeof val !== "object") return "";
-      val = (val as Record<string, unknown>)[parts[i]];
-    }
-    return val != null ? String(val) : "";
-  });
-}
+const interpolationContext = (context: ExecutorContext) => ({
+  inputs: context.inputs,
+  ...context.inputs,
+  ...context.artifacts,
+  env: context.env,
+  run: { inputs: context.inputs },
+});
 
 /**
  * Run a shell command, capture combined stdout+stderr, return structured result.
@@ -28,8 +22,9 @@ export async function executeShell(
   node: ShellNode,
   context: ExecutorContext
 ): Promise<NodeResult> {
-  const command = interpolate(node.command, context);
-  const cwd = node.cwd ?? process.cwd();
+  const ctx = interpolationContext(context);
+  const command = interpolateTemplate(node.command, ctx);
+  const cwd = node.cwd ? interpolateTemplate(node.cwd, ctx) : process.cwd();
   const timeoutMs = (node.timeoutSeconds ?? DEFAULT_TIMEOUT_S) * 1000;
   const failOnNonZero = node.failOnNonZero !== false;
 

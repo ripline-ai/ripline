@@ -287,6 +287,36 @@ describe("executeShell — container routing", () => {
     expect(dockerArgs[shIdx + 1]).toBe("-c");
     expect(dockerArgs[shIdx + 2]).toBe("npm run test");
   });
+
+  it("interpolates shell cwd before docker exec workdir resolution", async () => {
+    mockDockerForExec({ containerId: "cwdinterp1234", execExitCode: 0, execStdout: "" });
+    await pool.acquire("run-cwd-check", { image: DEFAULT_BUILD_IMAGE, logFile: "/tmp/test.log" });
+
+    const node: ShellNode = {
+      id: "check-cwd",
+      type: "shell",
+      command: "pwd",
+      cwd: "/workspaces/{{idea_id}}/repo",
+    };
+    const context: ExecutorContext = {
+      inputs: { idea_id: "demo-idea" },
+      artifacts: {},
+      env: {},
+      outputs: {},
+      runId: "run-cwd-check",
+      containerPool: pool,
+    };
+
+    await executeShell(node, context);
+
+    const spawnCalls = (child_process.spawn as any).mock.calls;
+    const execCall = spawnCalls.find((c: any[]) => c[0] === "docker" && c[1][0] === "exec");
+    expect(execCall).toBeDefined();
+    const dockerArgs: string[] = execCall[1];
+    const workdirIdx = dockerArgs.indexOf("--workdir");
+    expect(workdirIdx).toBeGreaterThan(-1);
+    expect(dockerArgs[workdirIdx + 1]).toBe("/workspaces/demo-idea/repo");
+  });
 });
 
 /* ── Agent executor — container routing ──────────────────────────────── */
