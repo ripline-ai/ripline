@@ -333,6 +333,18 @@ Invokes another registered pipeline as a child or inline sub-flow.
 | `inputMapping` | object | — | Map of `{ childInputKey: jsExpression }` used to build the child run's inputs from the current context. |
 | `mode` | `"child"` \| `"inline"` | — | `"child"` creates a new run record tracked via `childRunIds`. `"inline"` runs the sub-pipeline in the current run's context (no separate run record). |
 
+If you need to trigger a follow-up pipeline from a `shell` or `agent` node instead of using `run_pipeline`, prefer Ripline's HTTP API over editing queue files directly. The supported path is `POST /pipelines/:id/run`, and Ripline includes a small helper for this:
+
+```bash
+node /home/openclaw/ripline/scripts/enqueue-pipeline-run.mjs \
+  --ripline-url http://localhost:4001 \
+  --dedupe-input-key idea_id \
+  --inputs-json '{"idea_id":"abc123"}' \
+  verify_and_promote_build_from_plan_isolated
+```
+
+This keeps queueing logic on the API boundary and avoids hidden runtime dependencies like PyYAML inside build containers.
+
 ---
 
 ### `enqueue`
