@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { PipelineRunRecord, PipelineRunStep, PipelineRunStatus } from "./types.js";
-import type { RunStore, RunStoreCreateParams, RunStoreCursor, RunStoreListOptions } from "./run-store.js";
+import type {
+  RunStore,
+  RunStoreCreateParams,
+  RunStoreCursor,
+  RunStoreListOptions,
+  RecoverStaleRunsOptions,
+} from "./run-store.js";
 
 export class MemoryRunStore implements RunStore {
   private readonly records = new Map<string, PipelineRunRecord>();
@@ -93,11 +99,15 @@ export class MemoryRunStore implements RunStore {
     return true;
   }
 
-  async recoverStaleRuns(): Promise<number> {
+  async recoverStaleRuns(options?: RecoverStaleRunsOptions): Promise<number> {
     let recovered = 0;
     for (const record of this.records.values()) {
       if (record.status === "running") {
+        if (options?.requireOwnerPid && record.ownerPid === undefined) {
+          continue;
+        }
         record.status = "pending";
+        delete record.ownerPid;
         record.updatedAt = Date.now();
         recovered++;
       }

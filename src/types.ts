@@ -493,4 +493,6 @@ export type PipelineRunRecord = {
   containerLogFile?: string;
   /** Feature branch created for container-based builds (e.g. "build/{runId}"). */
   featureBranch?: string;
+  /** Host process currently responsible for advancing this run while it is in `running`. */
+  ownerPid?: number;
 };

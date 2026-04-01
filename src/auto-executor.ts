@@ -51,6 +51,7 @@ export class AutoExecutor {
   private enabled = false;
   private dispatching = false;
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
+  private lastStaleRecoveryAt = 0;
 
   /**
    * Maps pipeline runId → background queue item id.
@@ -341,6 +342,15 @@ export class AutoExecutor {
     this.dispatching = true;
 
     try {
+      const now = Date.now();
+      if (now - this.lastStaleRecoveryAt >= this.reconcileIntervalMs) {
+        this.lastStaleRecoveryAt = now;
+        const recovered = await this.store.recoverStaleRuns({ requireOwnerPid: true });
+        if (recovered > 0) {
+          log.log("warn", `[auto-executor] recovered ${recovered} dead-owned running run(s)`);
+        }
+      }
+
       // Check if any background run is currently active (in-memory fast path)
       if (this.activeRunMap.size > 0) return;
 

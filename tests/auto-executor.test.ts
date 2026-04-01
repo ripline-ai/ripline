@@ -20,6 +20,7 @@ function makeStubStore(records: Map<string, Partial<PipelineRunRecord>> = new Ma
     load: vi.fn(async (id: string) => (records.get(id) as PipelineRunRecord) ?? null),
     save: vi.fn(async () => {}),
     list: vi.fn(async () => []),
+    recoverStaleRuns: vi.fn(async () => 0),
     delete: vi.fn(async () => false),
   } as unknown as RunStore;
 }
@@ -145,6 +146,26 @@ describe("AutoExecutor", () => {
       ae.enable();
       await new Promise((r) => setTimeout(r, 50));
       expect(runQueue.enqueue).not.toHaveBeenCalled();
+    });
+
+    it("attempts live stale-run recovery before deciding the queue is blocked", async () => {
+      const runQueue = makeStubRunQueue("run-abc");
+      const store = makeStubStore();
+      (store.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      (store.recoverStaleRuns as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      bgQueue.add({ pipeline: "recoverable", severityWeight: 10 });
+
+      const ae = new AutoExecutor({
+        backgroundQueue: bgQueue,
+        runQueue,
+        store,
+      });
+      ae.enable();
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(store.recoverStaleRuns).toHaveBeenCalledWith({ requireOwnerPid: true });
+      expect(runQueue.enqueue).toHaveBeenCalledTimes(1);
     });
   });
 

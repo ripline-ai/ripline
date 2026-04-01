@@ -34,6 +34,15 @@ export type RunStoreListOptions = {
   sortOrder?: 'asc' | 'desc';
 };
 
+export type RecoverStaleRunsOptions = {
+  /**
+   * When true, only recover runs that carry an ownerPid and whose owner process
+   * is no longer alive. Use this for live recovery while the scheduler/server
+   * is running so genuinely active runs are left alone.
+   */
+  requireOwnerPid?: boolean;
+};
+
 export interface RunStore {
   createRun(params: RunStoreCreateParams): Promise<PipelineRunRecord>;
   load(runId: string): Promise<PipelineRunRecord | null>;
@@ -56,7 +65,7 @@ export interface RunStore {
    * Should be called once at scheduler startup before workers begin polling.
    * Returns the number of runs recovered.
    */
-  recoverStaleRuns(): Promise<number>;
+  recoverStaleRuns(options?: RecoverStaleRunsOptions): Promise<number>;
   /**
    * Atomically increment the retryCount for a run.
    * Returns the new retryCount value.
@@ -71,6 +80,18 @@ export interface RunStore {
 
 export class PipelineRunStore implements RunStore {
   constructor(private readonly rootDir: string) {}
+
+  private isProcessAlive(pid: number): boolean {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // EPERM means the process exists but we lack permission to signal it.
+      return code === "EPERM";
+    }
+  }
 
   /** Path to run directory: <rootDir>/<runId>/ */
   runDir(runId: string): string {
@@ -229,7 +250,7 @@ export class PipelineRunStore implements RunStore {
     }
   }
 
-  async recoverStaleRuns(): Promise<number> {
+  async recoverStaleRuns(options?: RecoverStaleRunsOptions): Promise<number> {
     const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
     // Remove any claim lock files left by crashed workers
     for (const ent of entries) {
@@ -241,7 +262,15 @@ export class PipelineRunStore implements RunStore {
     // Exception: if a run has exhausted its retry policy, reset to "errored" instead so it
     // doesn't re-enter the queue and cause an infinite crash loop.
     const running = await this.list({ status: "running" });
+    let recovered = 0;
     for (const record of running) {
+      const hasOwnerPid = Number.isInteger(record.ownerPid) && (record.ownerPid ?? 0) > 0;
+      if (options?.requireOwnerPid && !hasOwnerPid) {
+        continue;
+      }
+      if (hasOwnerPid && this.isProcessAlive(record.ownerPid!)) {
+        continue;
+      }
       const retryCount = record.retryCount ?? 0;
       const maxAttempts = record.retryPolicy?.maxAttempts;
       if (maxAttempts !== undefined && retryCount >= maxAttempts) {
@@ -249,9 +278,11 @@ export class PipelineRunStore implements RunStore {
       } else {
         record.status = "pending";
       }
+      delete record.ownerPid;
       await this.save(record);
+      recovered++;
     }
-    return running.length;
+    return recovered;
   }
 
   async incrementRetryCount(runId: string): Promise<number> {

@@ -308,4 +308,35 @@ describe("RunStore", () => {
     },
     15_000
   );
+
+  it("PipelineRunStore: live stale recovery only reclaims dead-owned running runs", async () => {
+    const runsDir = path.join(process.cwd(), ".ripline", "runs", "test-run-store-live-recovery-" + Date.now());
+    const store = new PipelineRunStore(runsDir);
+    await store.init();
+    try {
+      const alive = await store.createRun({ pipelineId: "alive", inputs: {} });
+      alive.status = "running";
+      alive.ownerPid = process.pid;
+      await store.save(alive);
+
+      const dead = await store.createRun({ pipelineId: "dead", inputs: {} });
+      dead.status = "running";
+      dead.ownerPid = 999999;
+      await store.save(dead);
+
+      const legacy = await store.createRun({ pipelineId: "legacy", inputs: {} });
+      legacy.status = "running";
+      await store.save(legacy);
+
+      const recovered = await store.recoverStaleRuns({ requireOwnerPid: true });
+      expect(recovered).toBe(1);
+
+      expect((await store.load(alive.id))!.status).toBe("running");
+      expect((await store.load(dead.id))!.status).toBe("pending");
+      expect((await store.load(dead.id))!.ownerPid).toBeUndefined();
+      expect((await store.load(legacy.id))!.status).toBe("running");
+    } finally {
+      await rmDirRobust(runsDir);
+    }
+  });
 });
