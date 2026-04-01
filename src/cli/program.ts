@@ -278,6 +278,11 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
           );
 
       const runnerOptions: RunnerOptions = {
+        store: await (async () => {
+          const store = new PipelineRunStore(runsDir);
+          await store.init();
+          return store;
+        })(),
         runsDir,
         verbose,
         quiet: true,
@@ -292,8 +297,14 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         containerPool: getGlobalContainerPool(),
       };
       const runner = new DeterministicRunner(definition, runnerOptions);
+      const store = runnerOptions.store as PipelineRunStore;
 
       const nodeStartedAt = new Map<string, number>();
+      let activeRunId: string | undefined;
+      let exiting = false;
+      runner.on("run.started", (record) => {
+        activeRunId = record.id;
+      });
       if (verbose) {
         runner.on("node.started", (e: { nodeId: string; nodeType: string; at: number }) => {
           nodeStartedAt.set(e.nodeId, e.at);
@@ -308,6 +319,29 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
           console.error(chalk.red(`  ✗ ${e.nodeId}`) + chalk.gray(` (${e.nodeType})`) + chalk.red(` ${e.error}`));
         });
       }
+
+      const cleanupActiveRun = async (reason: string, exitCode: number) => {
+        if (exiting) return;
+        exiting = true;
+        try {
+          if (activeRunId) {
+            const loaded = await store.load(activeRunId);
+            if (loaded?.status === "running") {
+              await store.failRun(loaded, `Run interrupted: ${reason}`);
+            }
+            getGlobalContainerPool().release(activeRunId);
+          }
+        } finally {
+          process.exit(exitCode);
+        }
+      };
+
+      const onSigInt = () => { void cleanupActiveRun("SIGINT", 130); };
+      const onSigTerm = () => { void cleanupActiveRun("SIGTERM", 143); };
+      const onSigHup = () => { void cleanupActiveRun("SIGHUP", 129); };
+      process.on("SIGINT", onSigInt);
+      process.on("SIGTERM", onSigTerm);
+      process.on("SIGHUP", onSigHup);
 
       try {
         const runOpts: { inputs: Record<string, unknown>; resumeRunId?: string; env?: Record<string, string> } = {
@@ -329,6 +363,10 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
       } catch (err) {
         console.error(chalk.red(err instanceof Error ? err.message : String(err)));
         process.exit(1);
+      } finally {
+        process.off("SIGINT", onSigInt);
+        process.off("SIGTERM", onSigTerm);
+        process.off("SIGHUP", onSigHup);
       }
     });
 

@@ -319,6 +319,7 @@ export class DeterministicRunner extends EventEmitter {
       const steps: PipelineRunStep[] = order.map((nodeId) => ({ nodeId, status: "pending" }));
       record.steps = steps;
       record.status = "running";
+      record.ownerPid = process.pid;
       await this.store.save(record);
       startIndex = 0;
       this.emit("run.started", record);

@@ -94,6 +94,36 @@ describe("DeterministicRunner", () => {
       expect(saved.steps).toHaveLength(5);
     });
 
+    it("marks fresh runs with ownerPid while executing and clears it on completion", async () => {
+      const def: PipelineDefinition = {
+        id: "owner-pid-test",
+        entry: ["a"],
+        nodes: [
+          { id: "a", type: "input" },
+          { id: "b", type: "transform", expression: "inputs.x + 1" },
+          { id: "c", type: "output", path: "out", source: "b" },
+        ],
+        edges: [
+          { from: { node: "a" }, to: { node: "b" } },
+          { from: { node: "b" }, to: { node: "c" } },
+        ],
+      };
+      const { MemoryRunStore } = await import("../src/run-store-memory.js");
+      const store = new MemoryRunStore();
+      const savedOwnerPids: Array<number | undefined> = [];
+      const originalSave = store.save.bind(store);
+      store.save = async (record) => {
+        savedOwnerPids.push(record.ownerPid);
+        await originalSave(record);
+      };
+
+      const runner = new DeterministicRunner(def, { store });
+      const result = await runner.run({ inputs: { x: 1 } });
+
+      expect(savedOwnerPids).toContain(process.pid);
+      expect(result.ownerPid).toBeUndefined();
+    });
+
     it("emits node.started and node.completed with timestamps", async () => {
       const def = loadPipelineDefinition(riplinePath);
       const runsDir = path.join(process.cwd(), ".ripline", "runs");
