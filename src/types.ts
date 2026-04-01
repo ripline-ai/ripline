@@ -315,9 +315,10 @@ export type ShellNode = NodeBase & {
    * Container execution mode for this node.
    * "isolated" = fresh container per node using the configured build image.
    * Object form = custom image/env/volumes.
+   * false = force host execution even when the run has a container.
    * When unset, inherits from run-level container config (if any).
    */
-  container?: NodeContainerConfig;
+  container?: NodeContainerConfig | false;
 };
 
 export type PipelineNode =

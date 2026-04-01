@@ -256,6 +256,47 @@ describe("executeShell — container routing", () => {
     expect((result.value as { exitCode: number }).exitCode).toBe(0);
   });
 
+  it("supports explicit host execution even when the run has a container", async () => {
+    mockDockerForExec({ containerId: "hostoptout123", execExitCode: 0, execStdout: "should not use container\n" });
+    await pool.acquire("run-shell-host", { image: DEFAULT_BUILD_IMAGE, logFile: "/tmp/test.log" });
+
+    (child_process.spawn as any).mockImplementation((cmd: string) => {
+      const stdoutListeners: Array<(d: Buffer) => void> = [];
+      const closeListeners: Array<(code: number) => void> = [];
+      setImmediate(() => {
+        for (const cb of stdoutListeners) cb(Buffer.from("host output\n"));
+        for (const cb of closeListeners) cb(0);
+      });
+      return {
+        stdout: { on: (e: string, cb: (d: Buffer) => void) => { if (e === "data") stdoutListeners.push(cb); } },
+        stderr: { on: vi.fn() },
+        on: (e: string, cb: any) => { if (e === "close") closeListeners.push(cb); },
+      } as any;
+    });
+
+    const node: ShellNode = {
+      id: "sh-host-opt-out",
+      type: "shell",
+      command: "echo host",
+      container: false,
+    };
+    const context: ExecutorContext = {
+      inputs: {},
+      artifacts: {},
+      env: {},
+      outputs: {},
+      runId: "run-shell-host",
+      containerPool: pool,
+    };
+
+    const result = await executeShell(node, context);
+
+    const spawnCalls = (child_process.spawn as any).mock.calls;
+    const dockerExecCall = spawnCalls.find((c: any[]) => c[0] === "docker" && c[1][0] === "exec");
+    expect(dockerExecCall).toBeUndefined();
+    expect((result.value as { exitCode: number }).exitCode).toBe(0);
+  });
+
   it("includes the command via sh -c when routing through container", async () => {
     mockDockerForExec({ containerId: "cmdcheck12345", execExitCode: 0, execStdout: "" });
     await pool.acquire("run-cmd-check", { image: DEFAULT_BUILD_IMAGE, logFile: "/tmp/test.log" });
@@ -285,7 +326,36 @@ describe("executeShell — container routing", () => {
     const shIdx = dockerArgs.indexOf("sh");
     expect(shIdx).toBeGreaterThan(-1);
     expect(dockerArgs[shIdx + 1]).toBe("-c");
-    expect(dockerArgs[shIdx + 2]).toBe("npm run test");
+    expect(dockerArgs[shIdx + 2]).toBe("set -e\nnpm run test");
+  });
+
+  it("prefixes multi-command shell nodes with set -e so early failures stop the node", async () => {
+    mockDockerForExec({ containerId: "setecmd12345", execExitCode: 1, execStdout: "first failed\n" });
+    await pool.acquire("run-shell-set-e", { image: DEFAULT_BUILD_IMAGE, logFile: "/tmp/test.log" });
+
+    const node: ShellNode = {
+      id: "check-set-e",
+      type: "shell",
+      command: "false\necho should-not-run",
+      container: {},
+    };
+    const context: ExecutorContext = {
+      inputs: {},
+      artifacts: {},
+      env: {},
+      outputs: {},
+      runId: "run-shell-set-e",
+      containerPool: pool,
+    };
+
+    await expect(executeShell(node, context)).rejects.toThrow("shell: command exited with code 1");
+
+    const spawnCalls = (child_process.spawn as any).mock.calls;
+    const execCall = spawnCalls.find((c: any[]) => c[0] === "docker" && c[1][0] === "exec");
+    expect(execCall).toBeDefined();
+    const dockerArgs: string[] = execCall[1];
+    const shIdx = dockerArgs.indexOf("sh");
+    expect(dockerArgs[shIdx + 2]).toBe("set -e\nfalse\necho should-not-run");
   });
 
   it("interpolates shell cwd before docker exec workdir resolution", async () => {

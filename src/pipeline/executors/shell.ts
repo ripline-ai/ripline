@@ -24,6 +24,7 @@ export async function executeShell(
 ): Promise<NodeResult> {
   const ctx = interpolationContext(context);
   const command = interpolateTemplate(node.command, ctx);
+  const wrappedCommand = node.failOnNonZero !== false ? `set -e\n${command}` : command;
   const cwd = node.cwd ? interpolateTemplate(node.cwd, ctx) : process.cwd();
   const timeoutMs = (node.timeoutSeconds ?? DEFAULT_TIMEOUT_S) * 1000;
   const failOnNonZero = node.failOnNonZero !== false;
@@ -35,9 +36,10 @@ export async function executeShell(
   const { exitCode, output } = await (
     context.containerPool &&
     context.runId &&
+    node.container !== false &&
     (node.container !== undefined || context.containerPool.hasContainer(context.runId))
       ? runCommandInContainer(
-          command,
+          wrappedCommand,
           context.containerPool,
           context.runId,
           node.container,
@@ -45,7 +47,7 @@ export async function executeShell(
           context.defaultContainerImage,
           timeoutMs,
         )
-      : runCommand(command, cwd, timeoutMs)
+      : runCommand(wrappedCommand, cwd, timeoutMs)
   );
 
   // Filter to only failing test lines if output looks like jest/npm test output

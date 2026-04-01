@@ -31,6 +31,11 @@ export const nodeContainerConfigSchema = z.union([
   containerConfigObjectSchema,
 ]);
 
+const shellContainerConfigSchema = z.union([
+  nodeContainerConfigSchema,
+  z.literal(false),
+]);
+
 const baseNode = z.object({
   id: z.string().min(1),
   name: z.string().optional(),
@@ -206,8 +211,8 @@ const shellNode = baseNode.extend({
   assigns: z.string().optional(),
   timeoutSeconds: z.number().int().positive().optional(),
   failOnNonZero: z.boolean().optional(),
-  /** Container execution mode for this node. "isolated" = fresh container; object = custom config. */
-  container: nodeContainerConfigSchema.optional(),
+  /** Container execution mode for this node. false = force host execution. */
+  container: shellContainerConfigSchema.optional(),
 });
 
 const nodeSchema = z.lazy(() =>
