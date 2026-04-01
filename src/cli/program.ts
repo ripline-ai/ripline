@@ -12,6 +12,7 @@ import { startServer } from "../server.js";
 import { resolveConfig } from "../config.js";
 import { PipelineRunStore } from "../run-store.js";
 import { createRunQueue } from "../run-queue.js";
+import { getGlobalContainerPool } from "../run-container-pool.js";
 import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "../log.js";
 import { createLlmAgentRunner, type LlmAgentRunnerConfig } from "../llm-agent-runner.js";
 import { createClaudeCodeRunner } from "../claude-code-runner.js";
@@ -288,6 +289,7 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         ...(agentDefinitions !== undefined && { agentDefinitions }),
         ...(skillsRegistry !== undefined && { skillsRegistry }),
         skillsDir,
+        containerPool: getGlobalContainerPool(),
       };
       const runner = new DeterministicRunner(definition, runnerOptions);
 

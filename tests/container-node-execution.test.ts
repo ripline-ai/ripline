@@ -233,7 +233,7 @@ describe("RunContainerPool", () => {
       expect(args).toContain("4g");
     });
 
-    it("does not inject runner-specific credentials or user overrides", async () => {
+    it("does not inject runner-specific credentials and runs containers as the host user", async () => {
       mockDockerCli();
 
       await pool.acquire("run-generic", {
@@ -245,7 +245,8 @@ describe("RunContainerPool", () => {
         (c: any[]) => c[0] === "docker" && c[1][0] === "run",
       );
       const args: string[] = runCall[1];
-      expect(args).not.toContain("--user");
+      expect(args).toContain("--user");
+      expect(args).toContain(`${process.getuid?.()}:${process.getgid?.()}`);
       const claudeMount = args.find((a: string) => a.includes("/.claude:") && a.includes(":ro"));
       expect(claudeMount).toBeUndefined();
     });

@@ -78,6 +78,12 @@ export class RunContainerPool {
     const name = `ripline-run-${runId}`;
     args.push("--name", name);
 
+    const hostUid = typeof process.getuid === "function" ? process.getuid() : undefined;
+    const hostGid = typeof process.getgid === "function" ? process.getgid() : undefined;
+    if (hostUid !== undefined && hostGid !== undefined) {
+      args.push("--user", `${hostUid}:${hostGid}`);
+    }
+
     if (workdir) {
       args.push("--workdir", workdir);
     }

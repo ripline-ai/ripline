@@ -78,6 +78,12 @@ ripline run [pipelineId] [options]
 | `0` | Pipeline completed successfully. |
 | Non-zero | Pipeline errored, failed to load, or an unexpected error occurred. Use in cron/CI for alerts. |
 
+### Container behavior
+
+When a pipeline defines a run-level `container`, `ripline run` now starts that persistent Docker container locally and executes container-routed nodes inside it, matching scheduler behavior more closely.
+
+Ripline starts those run-level containers as the current host UID/GID so mounted repositories, workspaces, and local tool state keep normal file permissions instead of becoming unreadable inside the container.
+
 ### Examples
 
 ```bash
