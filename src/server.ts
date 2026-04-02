@@ -1,5 +1,5 @@
 import path from "node:path";
-import { promises as fs } from "node:fs";
+import { promises as fs, constants as fsConstants } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
@@ -36,6 +36,7 @@ import { registerFocusAreaRoutes } from "./routes/focus-areas.js";
 import { registerEpicRoutes } from "./routes/epics.js";
 import { registerUsageRoutes } from "./routes/usage.js";
 import YAML from "yaml";
+import { writeJsonAtomically } from "./lib/atomic-write.js";
 
 const DEFAULT_RUNS_DIR = ".ripline/runs";
 const DEFAULT_PROFILES_DIR = path.join(
@@ -1043,6 +1044,62 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
   // which lazily tops up the queue to the concurrency limit on each tick.
   // BackgroundQueue storage and REST endpoints remain here as-is.
 
+  const riplineConfigPath = path.join(
+    process.env.HOME ?? path.resolve("."),
+    ".ripline",
+    "config.json",
+  );
+  const riplineConfigLockPath = `${riplineConfigPath}.lock`;
+
+  async function withRiplineConfigLock<T>(fn: () => Promise<T>): Promise<T> {
+    const deadline = Date.now() + 5_000;
+
+    for (;;) {
+      let lockHandle: fs.FileHandle | null = null;
+      try {
+        lockHandle = await fs.open(
+          riplineConfigLockPath,
+          fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL,
+        );
+        try {
+          return await fn();
+        } finally {
+          await lockHandle.close().catch(() => {});
+          await fs.unlink(riplineConfigLockPath).catch(() => {});
+        }
+      } catch (err) {
+        if (lockHandle) {
+          await lockHandle.close().catch(() => {});
+        }
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw err;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error("Timed out acquiring config lock");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+  }
+
+  async function readMutableRiplineConfig(): Promise<Record<string, unknown>> {
+    try {
+      const raw = await fs.readFile(riplineConfigPath, "utf-8");
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async function writeMutableRiplineConfig(next: Record<string, unknown>): Promise<void> {
+    const dir = path.dirname(riplineConfigPath);
+    await fs.mkdir(dir, { recursive: true });
+    await writeJsonAtomically(riplineConfigPath, next);
+  }
+
   /** GET /config/background-queue - return current enabled state from config */
   fastify.get("/config/background-queue", {
     preHandler: requireAuth,
@@ -1100,24 +1157,11 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         validated[name] = entry;
       }
 
-      // Persist to config.json
-      const configPath = path.join(
-        process.env.HOME ?? path.resolve("."),
-        ".ripline",
-        "config.json",
-      );
-      let existing: Record<string, unknown> = {};
-      try {
-        const raw = await fs.readFile(configPath, "utf-8");
-        existing = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        // file missing or invalid — start fresh
-      }
-      existing.queues = validated;
-
-      const dir = path.dirname(configPath);
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
+      await withRiplineConfigLock(async () => {
+        const existing = await readMutableRiplineConfig();
+        existing.queues = validated;
+        await writeMutableRiplineConfig(existing);
+      });
 
       return reply.send({ queues: validated, note: "Changes take effect on next Ripline restart" });
     },
@@ -1131,28 +1175,17 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       if (typeof body.enabled !== "boolean") {
         return reply.status(400).send({ error: "Bad Request", message: "enabled is required and must be a boolean" });
       }
-      const configPath = path.join(
-        process.env.HOME ?? path.resolve("."),
-        ".ripline",
-        "config.json",
-      );
-      let existing: Record<string, unknown> = {};
-      try {
-        const raw = await fs.readFile(configPath, "utf-8");
-        existing = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        // file missing or invalid — start fresh
-      }
-      const bgBlock =
-        existing.backgroundQueue && typeof existing.backgroundQueue === "object"
-          ? { ...(existing.backgroundQueue as Record<string, unknown>) }
-          : {};
-      bgBlock.enabled = body.enabled;
-      existing.backgroundQueue = bgBlock;
-
-      const dir = path.dirname(configPath);
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
+      const bgBlock = await withRiplineConfigLock(async () => {
+        const existing = await readMutableRiplineConfig();
+        const nextBgBlock =
+          existing.backgroundQueue && typeof existing.backgroundQueue === "object"
+            ? { ...(existing.backgroundQueue as Record<string, unknown>) }
+            : {};
+        nextBgBlock.enabled = body.enabled;
+        existing.backgroundQueue = nextBgBlock;
+        await writeMutableRiplineConfig(existing);
+        return nextBgBlock;
+      });
 
       // Dispatch is now owned externally; no AutoExecutor to toggle at runtime.
       // External orchestrators read this flag from GET /config/background-queue before enqueuing.

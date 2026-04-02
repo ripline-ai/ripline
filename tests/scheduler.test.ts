@@ -4,6 +4,7 @@ import { createRunQueue } from "../src/run-queue.js";
 import { createScheduler } from "../src/scheduler.js";
 import type { DetailedSchedulerMetrics } from "../src/scheduler.js";
 import { DeterministicRunner } from "../src/pipeline/runner.js";
+import type { RecoverStaleRunsOptions } from "../src/run-store.js";
 import type { PipelineDefinition } from "../src/types.js";
 import type { AgentRunner } from "../src/pipeline/executors/agent.js";
 
@@ -34,6 +35,43 @@ const noopAgent: AgentRunner = async () => ({
 });
 
 describe("Scheduler", () => {
+  it("start is idempotent and stale recovery is ownerPid-gated", async () => {
+    class SpyStore extends MemoryRunStore {
+      public recoverCalls: RecoverStaleRunsOptions[] = [];
+
+      async recoverStaleRuns(options?: RecoverStaleRunsOptions): Promise<number> {
+        this.recoverCalls.push(options ?? {});
+        return super.recoverStaleRuns(options);
+      }
+    }
+
+    const store = new SpyStore();
+    const queue = createRunQueue(store);
+    const scheduler = createScheduler({
+      store,
+      queue,
+      registry: stubRegistry,
+      maxConcurrency: 1,
+      agentRunner: noopAgent,
+    });
+
+    scheduler.start();
+    scheduler.start();
+    await new Promise((r) => setTimeout(r, 60));
+    expect(store.recoverCalls).toHaveLength(1);
+    expect(store.recoverCalls[0]?.requireOwnerPid).toBe(true);
+
+    scheduler.stop();
+    await new Promise((r) => setTimeout(r, 20));
+
+    scheduler.start();
+    await new Promise((r) => setTimeout(r, 60));
+    expect(store.recoverCalls).toHaveLength(2);
+    expect(store.recoverCalls[1]?.requireOwnerPid).toBe(true);
+
+    scheduler.stop();
+  });
+
   it("processes at most maxConcurrency runs at a time", async () => {
     const store = new MemoryRunStore();
     const queue = createRunQueue(store);
