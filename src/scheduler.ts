@@ -174,6 +174,8 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
   } = config;
 
   let stopped = false;
+  let started = false;
+  let startGeneration = 0;
   // Per-queue metrics tracking
   const activeWorkersPerQueue: Map<string, number> = new Map();
   const durationsPerQueue: Map<string, number[]> = new Map();
@@ -474,74 +476,98 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
 
   return {
     start() {
+      if (started) {
+        return;
+      }
+      started = true;
       stopped = false;
-      // Reset any runs orphaned in "running" state by a previous crash before workers begin
-      store.recoverStaleRuns().then((count) => {
-        if (count > 0) {
-          console.log(`[scheduler] recovered ${count} orphaned running run(s) → pending`);
-        }
-      }).catch(() => {});
+      const generation = ++startGeneration;
 
-      // Build the effective per-queue concurrency map.
-      // maxConcurrency sets concurrency for the "default" queue (backwards compat).
-      // queueConcurrencies allows overriding per named queue.
-      // Default concurrency is 1 if not specified for safety.
-      effectiveConcurrencies = new Map();
-      effectiveConcurrencies.set("default", maxConcurrency > 0 ? maxConcurrency : 1);
-      if (queueConcurrencies) {
-        for (const [name, concurrency] of Object.entries(queueConcurrencies)) {
-          effectiveConcurrencies.set(name, concurrency > 0 ? concurrency : 1);
+      void (async () => {
+        // Reset orphaned runs before workers begin claiming, and only recover
+        // records with a dead ownerPid to avoid re-queuing newly claimed runs.
+        try {
+          const count = await store.recoverStaleRuns({ requireOwnerPid: true });
+          if (count > 0) {
+            console.log(`[scheduler] recovered ${count} orphaned running run(s) → pending`);
+          }
+        } catch {
+          // best effort
         }
-      }
 
-      // Log resource limits per queue (if configured)
-      if (queueResourceLimits) {
-        for (const [qName, limits] of Object.entries(queueResourceLimits)) {
-          const parts: string[] = [];
-          if (limits.cpus) parts.push(`cpus=${limits.cpus}`);
-          if (limits.memory) parts.push(`memory=${limits.memory}`);
-          if (parts.length > 0) {
-            console.log(`[scheduler] queue "${qName}" container limits: ${parts.join(", ")}`);
+        if (stopped || generation !== startGeneration) {
+          return;
+        }
+
+        // Build the effective per-queue concurrency map.
+        // maxConcurrency sets concurrency for the "default" queue (backwards compat).
+        // queueConcurrencies allows overriding per named queue.
+        // Default concurrency is 1 if not specified for safety.
+        effectiveConcurrencies = new Map();
+        effectiveConcurrencies.set("default", maxConcurrency > 0 ? maxConcurrency : 1);
+        if (queueConcurrencies) {
+          for (const [name, concurrency] of Object.entries(queueConcurrencies)) {
+            effectiveConcurrencies.set(name, concurrency > 0 ? concurrency : 1);
           }
         }
-      }
 
-      // Log effective concurrency configuration summary
-      console.log(`[scheduler] concurrency configuration loaded — changes take effect on next restart`);
-
-      // Auto-discover named queues from the pipeline registry. Pipelines may
-      // declare `queue: "build"` etc. — ensure each referenced queue has at
-      // least one worker (default concurrency 1) even if not explicitly
-      // configured, so jobs are never orphaned.
-      const startWorkers = () => {
-        for (const [queueName, concurrency] of effectiveConcurrencies) {
-          console.log(`[scheduler] queue "${queueName}": ${concurrency} worker(s)`);
-          for (let i = 0; i < concurrency; i++) {
-            workers.push(worker(queueName));
-          }
-        }
-      };
-
-      if (typeof registry.list === "function") {
-        registry.list().then((pipelines) => {
-          for (const def of pipelines) {
-            if (def.queue && !effectiveConcurrencies.has(def.queue)) {
-              effectiveConcurrencies.set(def.queue, 1);
-              console.log(`[scheduler] auto-discovered queue "${def.queue}" from pipeline "${def.id}" (concurrency: 1)`);
+        // Log resource limits per queue (if configured)
+        if (queueResourceLimits) {
+          for (const [qName, limits] of Object.entries(queueResourceLimits)) {
+            const parts: string[] = [];
+            if (limits.cpus) parts.push(`cpus=${limits.cpus}`);
+            if (limits.memory) parts.push(`memory=${limits.memory}`);
+            if (parts.length > 0) {
+              console.log(`[scheduler] queue "${qName}" container limits: ${parts.join(", ")}`);
             }
           }
-          startWorkers();
-        }).catch(() => {
-          // If listing fails, just start with the configured queues
-          startWorkers();
-        });
-      } else {
+        }
+
+        // Log effective concurrency configuration summary
+        console.log(`[scheduler] concurrency configuration loaded — changes take effect on next restart`);
+
+        // Auto-discover named queues from the pipeline registry. Pipelines may
+        // declare `queue: "build"` etc. — ensure each referenced queue has at
+        // least one worker (default concurrency 1) even if not explicitly
+        // configured, so jobs are never orphaned.
+        const startWorkers = () => {
+          if (stopped || generation !== startGeneration) {
+            return;
+          }
+          workers.length = 0;
+          for (const [queueName, concurrency] of effectiveConcurrencies) {
+            console.log(`[scheduler] queue "${queueName}": ${concurrency} worker(s)`);
+            for (let i = 0; i < concurrency; i++) {
+              workers.push(worker(queueName));
+            }
+          }
+        };
+
+        if (typeof registry.list === "function") {
+          try {
+            const pipelines = await registry.list();
+            for (const def of pipelines) {
+              if (def.queue && !effectiveConcurrencies.has(def.queue)) {
+                effectiveConcurrencies.set(def.queue, 1);
+                console.log(`[scheduler] auto-discovered queue "${def.queue}" from pipeline "${def.id}" (concurrency: 1)`);
+              }
+            }
+            startWorkers();
+          } catch {
+            // If listing fails, just start with the configured queues
+            startWorkers();
+          }
+          return;
+        }
+
         startWorkers();
-      }
+      })();
     },
 
     stop() {
       stopped = true;
+      started = false;
+      startGeneration++;
     },
 
     async getMetrics(): Promise<SchedulerMetrics> {
