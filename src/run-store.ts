@@ -40,6 +40,11 @@ export type RecoverStaleRunsOptions = {
    * is running so genuinely active runs are left alone.
    */
   requireOwnerPid?: boolean;
+  /**
+   * Limit how many running runs are scanned during recovery.
+   * Used to avoid unbounded startup scans over on-disk run history.
+   */
+  limit?: number;
 };
 
 export interface RunStore {
@@ -418,7 +423,7 @@ export class PipelineRunStore implements RunStore {
     // Reset all "running" runs to "pending" — nothing is actually running on a fresh start.
     // Exception: if a run has exhausted its retry policy, reset to "errored" instead so it
     // doesn't re-enter the queue and cause an infinite crash loop.
-    const running = await this.list({ status: "running" });
+    const running = await this.list({ status: "running", limit: options?.limit });
     let recovered = 0;
     for (const record of running) {
       const hasOwnerPid = Number.isInteger(record.ownerPid) && (record.ownerPid ?? 0) > 0;

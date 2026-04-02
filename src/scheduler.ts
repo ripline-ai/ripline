@@ -476,7 +476,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
     start() {
       stopped = false;
       // Reset any runs orphaned in "running" state by a previous crash before workers begin
-      store.recoverStaleRuns().then((count) => {
+      store.recoverStaleRuns({ limit: 100 }).then((count) => {
         if (count > 0) {
           console.log(`[scheduler] recovered ${count} orphaned running run(s) → pending`);
         }

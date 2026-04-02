@@ -101,7 +101,13 @@ export class MemoryRunStore implements RunStore {
 
   async recoverStaleRuns(options?: RecoverStaleRunsOptions): Promise<number> {
     let recovered = 0;
-    for (const record of this.records.values()) {
+    let runningRecords = [...this.records.values()].filter((record) => record.status === "running");
+    if (options?.limit !== undefined) {
+      runningRecords = runningRecords
+        .sort((a, b) => a.startedAt - b.startedAt)
+        .slice(0, options.limit);
+    }
+    for (const record of runningRecords) {
       if (record.status === "running") {
         if (options?.requireOwnerPid && record.ownerPid === undefined) {
           continue;
