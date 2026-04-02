@@ -217,6 +217,21 @@ export class PipelineRunStore implements RunStore {
     await flushOperation;
   }
 
+  private async hasRunDirectoriesOnDisk(): Promise<boolean> {
+    const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
+    return entries.some((entry) => entry.isDirectory());
+  }
+
+  private async rebuildIndexIfEmpty(): Promise<void> {
+    if (this.runIndex.size > 0) {
+      return;
+    }
+    if (!(await this.hasRunDirectoriesOnDisk())) {
+      return;
+    }
+    await this.rebuildIndex();
+  }
+
   async init(): Promise<void> {
     await this.ensureInitialized();
   }
@@ -332,6 +347,7 @@ export class PipelineRunStore implements RunStore {
 
   async list(options?: RunStoreListOptions): Promise<PipelineRunRecord[]> {
     await this.ensureInitialized();
+    await this.rebuildIndexIfEmpty();
 
     // Determine effective sort order:
     // - Explicit sortOrder always wins.
@@ -355,7 +371,7 @@ export class PipelineRunStore implements RunStore {
     const runs = await Promise.all(
       matchingRunIds.map(async (runId) => {
         try {
-          return await this.load(runId);
+          return await this.readRunRecord(runId);
         } catch {
           return null;
         }
