@@ -77,6 +77,8 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
   const registry = new PipelineRegistry(config.pipelinesDir);
   const store = new PipelineRunStore(runsDir);
   await store.init();
+  await store.recoverStaleRuns({ limit: 100 });
+  await store.rebuildIndex();
 
   const claudeCodeRunner = config.claudeCodeRunner;
   const codexRunner = config.codexRunner;
@@ -412,15 +414,17 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     preHandler: requireAuth,
     handler: async (request, reply) => {
       const rawDays = request.query.olderThanDays;
-      const olderThanDays = rawDays !== undefined ? Math.max(0, parseFloat(rawDays) || 7) : 7;
-      const totalEligible = (await store.list()).filter((record) =>
-        (record.status === "completed" || record.status === "errored") &&
-        record.updatedAt <= Date.now() - olderThanDays * 24 * 60 * 60 * 1000
-      ).length;
-      const pruned = await store.pruneOlderThan(olderThanDays);
-      const skipped = Math.max(0, totalEligible - pruned);
+      const olderThanDays = rawDays === undefined ? 7 : Number(rawDays);
 
-      return reply.send({ pruned, skipped });
+      if (!Number.isFinite(olderThanDays) || olderThanDays < 1) {
+        return reply.status(400).send({
+          error: "Bad Request",
+          message: "olderThanDays must be a number greater than or equal to 1",
+        });
+      }
+
+      const deleted = await store.pruneOlderThan(olderThanDays);
+      return reply.send({ deleted });
     },
   });
 
