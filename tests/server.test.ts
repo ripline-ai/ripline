@@ -306,7 +306,7 @@ describe("HTTP server", () => {
         url: "/runs/prune?olderThanDays=7",
       });
       expect(pruneRes.statusCode).toBe(200);
-      expect(pruneRes.json()).toEqual({ deleted: 2 });
+      expect(pruneRes.json()).toEqual({ pruned: 2, skipped: 2 });
 
       const runsRes = await app.inject({ method: "GET", url: "/runs" });
       const runs = (runsRes.json() as { runs: { id: string; status: string }[] }).runs;

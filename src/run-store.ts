@@ -423,7 +423,10 @@ export class PipelineRunStore implements RunStore {
     // Reset all "running" runs to "pending" — nothing is actually running on a fresh start.
     // Exception: if a run has exhausted its retry policy, reset to "errored" instead so it
     // doesn't re-enter the queue and cause an infinite crash loop.
-    const running = await this.list({ status: "running", limit: options?.limit });
+    const running = await this.list({
+      status: "running",
+      ...(options?.limit !== undefined ? { limit: options.limit } : {}),
+    });
     let recovered = 0;
     for (const record of running) {
       const hasOwnerPid = Number.isInteger(record.ownerPid) && (record.ownerPid ?? 0) > 0;
@@ -497,10 +500,10 @@ export class PipelineRunStore implements RunStore {
     const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
     let removed = 0;
 
-    for (const [runId, entry] of [...this.runIndex.entries()]) {
-      if (entry.status !== "completed" && entry.status !== "errored") continue;
-      if (entry.updatedAt > cutoffMs) continue;
-      if (await this.delete(runId)) {
+    for (const record of await this.list()) {
+      if (record.status !== "completed" && record.status !== "errored") continue;
+      if (record.updatedAt > cutoffMs) continue;
+      if (await this.delete(record.id)) {
         removed++;
       }
     }

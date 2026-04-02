@@ -423,8 +423,14 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         });
       }
 
-      const deleted = await store.pruneOlderThan(olderThanDays);
-      return reply.send({ deleted });
+      const cutoffMs = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
+      const runs = await store.list();
+      const prunableCount = runs.filter((run) =>
+        (run.status === "completed" || run.status === "errored") && run.updatedAt <= cutoffMs
+      ).length;
+      const skippedCount = runs.length - prunableCount;
+      const pruned = await store.pruneOlderThan(olderThanDays);
+      return reply.send({ pruned, skipped: skippedCount });
     },
   });
 
