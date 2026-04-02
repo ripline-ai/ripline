@@ -487,7 +487,7 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
         // Reset orphaned runs before workers begin claiming, and only recover
         // records with a dead ownerPid to avoid re-queuing newly claimed runs.
         try {
-          const count = await store.recoverStaleRuns({ requireOwnerPid: true });
+          const count = await store.recoverStaleRuns({ limit: 100, requireOwnerPid: true });
           if (count > 0) {
             console.log(`[scheduler] recovered ${count} orphaned running run(s) → pending`);
           }

@@ -1,7 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { writeJsonAtomically } from "./lib/atomic-write.js";
 import type { PipelineRunRecord, PipelineRunStep, PipelineRunStatus, QueueMode, RunSource } from "./types.js";
 
 export type RunStoreCreateParams = {
@@ -41,6 +40,11 @@ export type RecoverStaleRunsOptions = {
    * is running so genuinely active runs are left alone.
    */
   requireOwnerPid?: boolean;
+  /**
+   * Limit how many running runs are scanned during recovery.
+   * Used to avoid unbounded startup scans over on-disk run history.
+   */
+  limit?: number;
 };
 
 export interface RunStore {
@@ -78,8 +82,30 @@ export interface RunStore {
   resetForRetry(runId: string, options?: { resetCount?: boolean }): Promise<void>;
 }
 
+export type RunIndexEntry = {
+  status: PipelineRunStatus;
+  pipelineId: string;
+  startedAt: number;
+  updatedAt: number;
+};
+
+const RUN_STATUSES = new Set<PipelineRunStatus>([
+  "pending",
+  "running",
+  "paused",
+  "errored",
+  "completed",
+  "needs-conflict-resolution",
+]);
+
 export class PipelineRunStore implements RunStore {
-  constructor(private readonly rootDir: string) {}
+  private readonly runIndex = new Map<string, RunIndexEntry>();
+  private initializationPromise: Promise<void> | null = null;
+  private indexFlushPromise: Promise<void> = Promise.resolve();
+
+  constructor(private readonly rootDir: string) {
+    this.initializationPromise = this.initializeIndex();
+  }
 
   private isProcessAlive(pid: number): boolean {
     if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -103,8 +129,116 @@ export class PipelineRunStore implements RunStore {
     return path.join(this.runDir(runId), "run.json");
   }
 
-  async init(): Promise<void> {
+  private indexPath(): string {
+    return path.join(this.rootDir, "_index.json");
+  }
+
+  private async readRunRecord(runId: string): Promise<PipelineRunRecord | null> {
+    try {
+      const data = await fs.readFile(this.resolvePath(runId), "utf8");
+      return JSON.parse(data) as PipelineRunRecord;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  private async initializeIndex(): Promise<void> {
     await fs.mkdir(this.rootDir, { recursive: true });
+    try {
+      const data = await fs.readFile(this.indexPath(), "utf8");
+      const parsed = JSON.parse(data) as unknown;
+      this.loadIndexEntries(parsed);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && !(err instanceof SyntaxError)) {
+        try {
+          await this.rebuildIndex();
+          return;
+        } catch {
+          throw err;
+        }
+      }
+      await this.rebuildIndex();
+    }
+  }
+
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initializationPromise) {
+      this.initializationPromise = this.initializeIndex();
+    }
+    await this.initializationPromise;
+  }
+
+  private loadIndexEntries(raw: unknown): void {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new SyntaxError("Run index must be a JSON object.");
+    }
+
+    this.runIndex.clear();
+    for (const [runId, entry] of Object.entries(raw as Record<string, unknown>)) {
+      if (!this.isRunIndexEntry(entry)) {
+        throw new SyntaxError(`Invalid run index entry for ${runId}.`);
+      }
+      this.runIndex.set(runId, entry);
+    }
+  }
+
+  private isRunIndexEntry(value: unknown): value is RunIndexEntry {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+
+    const entry = value as Partial<RunIndexEntry>;
+    return (
+      typeof entry.pipelineId === "string" &&
+      typeof entry.status === "string" &&
+      RUN_STATUSES.has(entry.status as PipelineRunStatus) &&
+      Number.isFinite(entry.startedAt) &&
+      Number.isFinite(entry.updatedAt)
+    );
+  }
+
+  private setIndexEntry(record: PipelineRunRecord): void {
+    this.runIndex.set(record.id, {
+      status: record.status,
+      pipelineId: record.pipelineId,
+      startedAt: record.startedAt,
+      updatedAt: record.updatedAt,
+    });
+  }
+
+  private async flushIndex(): Promise<void> {
+    const targetPath = this.indexPath();
+    const flushOperation = this.indexFlushPromise.catch(() => {}).then(async () => {
+      const tmpPath = `${targetPath}.${randomUUID()}.tmp`;
+      const snapshot = Object.fromEntries(this.runIndex);
+      await fs.writeFile(tmpPath, JSON.stringify(snapshot, null, 2), "utf8");
+      await fs.rename(tmpPath, targetPath);
+    });
+    this.indexFlushPromise = flushOperation;
+    await flushOperation;
+  }
+
+  private async hasRunDirectoriesOnDisk(): Promise<boolean> {
+    const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
+    return entries.some((entry) => entry.isDirectory());
+  }
+
+  private async rebuildIndexIfEmpty(): Promise<void> {
+    if (this.runIndex.size > 0) {
+      return;
+    }
+    if (!(await this.hasRunDirectoriesOnDisk())) {
+      return;
+    }
+    await this.rebuildIndex();
+  }
+
+  async init(): Promise<void> {
+    await this.ensureInitialized();
   }
 
   async createRun(params: RunStoreCreateParams): Promise<PipelineRunRecord> {
@@ -153,27 +287,72 @@ export class PipelineRunStore implements RunStore {
   }
 
   async load(runId: string): Promise<PipelineRunRecord | null> {
-    try {
-      const data = await fs.readFile(this.resolvePath(runId), "utf8");
-      return JSON.parse(data) as PipelineRunRecord;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        return null;
-      }
-      throw err;
-    }
+    await this.ensureInitialized();
+    return this.readRunRecord(runId);
   }
 
   async save(record: PipelineRunRecord): Promise<void> {
+    await this.ensureInitialized();
     record.updatedAt = Date.now();
     const dir = this.runDir(record.id);
     await fs.mkdir(dir, { recursive: true });
-    await writeJsonAtomically(this.resolvePath(record.id), record);
+    const targetPath = this.resolvePath(record.id);
+    const tmpPath = `${targetPath}.${randomUUID()}.tmp`;
+    await fs.writeFile(tmpPath, JSON.stringify(record, null, 2), "utf8");
+    await fs.rename(tmpPath, targetPath);
+    this.setIndexEntry(record);
+    await this.flushIndex();
+  }
+
+  async updateStatus(runId: string, status: PipelineRunStatus): Promise<PipelineRunRecord | null> {
+    await this.ensureInitialized();
+    const record = await this.load(runId);
+    if (!record) return null;
+    record.status = status;
+    await this.save(record);
+    return record;
+  }
+
+  async delete(runId: string): Promise<boolean> {
+    await this.ensureInitialized();
+    const existed = this.runIndex.has(runId);
+    await fs.rm(this.runDir(runId), { recursive: true, force: true });
+    this.runIndex.delete(runId);
+    await this.flushIndex();
+    return existed;
+  }
+
+  async rebuildIndex(): Promise<void> {
+    await fs.mkdir(this.rootDir, { recursive: true });
+    const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
+    const nextIndex = new Map<string, RunIndexEntry>();
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const run = await this.readRunRecord(entry.name);
+        if (!run) continue;
+        nextIndex.set(run.id, {
+          status: run.status,
+          pipelineId: run.pipelineId,
+          startedAt: run.startedAt,
+          updatedAt: run.updatedAt,
+        });
+      } catch {
+        continue;
+      }
+    }
+
+    this.runIndex.clear();
+    for (const [runId, runEntry] of nextIndex) {
+      this.runIndex.set(runId, runEntry);
+    }
+    await this.flushIndex();
   }
 
   async list(options?: RunStoreListOptions): Promise<PipelineRunRecord[]> {
-    const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
-    const dirs = entries.filter((e) => e.isDirectory());
+    await this.ensureInitialized();
+    await this.rebuildIndexIfEmpty();
 
     // Determine effective sort order:
     // - Explicit sortOrder always wins.
@@ -181,48 +360,30 @@ export class PipelineRunStore implements RunStore {
     const explicitOrder = options?.sortOrder;
     const isAsc = explicitOrder === 'asc' ||
       (explicitOrder === undefined && (options?.status === "pending" || options?.status === "running"));
+    let matchingRunIds = [...this.runIndex.entries()]
+      .filter(([, entry]) => options?.status === undefined || entry.status === options.status)
+      .sort((a, b) => (
+        isAsc
+          ? a[1].startedAt - b[1].startedAt
+          : b[1].updatedAt - a[1].updatedAt
+      ))
+      .map(([runId]) => runId);
 
-    // When a limit is requested and we want descending order, sort directories by mtime
-    // descending before reading — lets us stop early once we have enough records.
-    const wantEarlyStop = options?.limit !== undefined && !isAsc;
-
-    if (wantEarlyStop) {
-      const withMtime = await Promise.all(
-        dirs.map(async (e) => {
-          const mtime = await fs.stat(path.join(this.rootDir, e.name))
-            .then((s) => s.mtimeMs)
-            .catch(() => 0);
-          return { name: e.name, mtime };
-        })
-      );
-      withMtime.sort((a, b) => b.mtime - a.mtime);
-
-      const runs: PipelineRunRecord[] = [];
-      for (const { name } of withMtime) {
-        if (options!.limit! <= runs.length) break;
-        const run = await this.load(name);
-        if (!run) continue;
-        if (options?.status !== undefined && run.status !== options.status) continue;
-        runs.push(run);
-      }
-      return runs.sort((a, b) => b.updatedAt - a.updatedAt);
-    }
-
-    const runs: PipelineRunRecord[] = [];
-    for (const ent of dirs) {
-      const run = await this.load(ent.name);
-      if (run) runs.push(run);
-    }
-    let filtered = options?.status !== undefined ? runs.filter((r) => r.status === options!.status) : runs;
-    if (isAsc) {
-      filtered = [...filtered].sort((a, b) => a.startedAt - b.startedAt);
-    } else {
-      filtered = [...filtered].sort((a, b) => b.updatedAt - a.updatedAt);
-    }
     if (options?.limit !== undefined) {
-      filtered = filtered.slice(0, options.limit);
+      matchingRunIds = matchingRunIds.slice(0, options.limit);
     }
-    return filtered;
+
+    const runs = await Promise.all(
+      matchingRunIds.map(async (runId) => {
+        try {
+          return await this.readRunRecord(runId);
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    return runs.filter((run): run is PipelineRunRecord => run !== null);
   }
 
   async claimRun(runId: string): Promise<boolean> {
@@ -251,6 +412,7 @@ export class PipelineRunStore implements RunStore {
   }
 
   async recoverStaleRuns(options?: RecoverStaleRunsOptions): Promise<number> {
+    await this.ensureInitialized();
     const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
     // Remove any claim lock files left by crashed workers
     for (const ent of entries) {
@@ -261,7 +423,10 @@ export class PipelineRunStore implements RunStore {
     // Reset all "running" runs to "pending" — nothing is actually running on a fresh start.
     // Exception: if a run has exhausted its retry policy, reset to "errored" instead so it
     // doesn't re-enter the queue and cause an infinite crash loop.
-    const running = await this.list({ status: "running" });
+    const running = await this.list({
+      status: "running",
+      ...(options?.limit !== undefined ? { limit: options.limit } : {}),
+    });
     let recovered = 0;
     for (const record of running) {
       const hasOwnerPid = Number.isInteger(record.ownerPid) && (record.ownerPid ?? 0) > 0;
@@ -286,6 +451,7 @@ export class PipelineRunStore implements RunStore {
   }
 
   async incrementRetryCount(runId: string): Promise<number> {
+    await this.ensureInitialized();
     const lockPath = path.join(this.runDir(runId), "claim.lock");
     let fd: fs.FileHandle | null = null;
     try {
@@ -313,6 +479,7 @@ export class PipelineRunStore implements RunStore {
   }
 
   async resetForRetry(runId: string, options?: { resetCount?: boolean }): Promise<void> {
+    await this.ensureInitialized();
     const lockPath = path.join(this.runDir(runId), "claim.lock");
     const record = await this.load(runId);
     if (!record) {
@@ -326,5 +493,21 @@ export class PipelineRunStore implements RunStore {
     await this.save(record);
     // Remove claim lock if it exists (from a crashed/errored run)
     await fs.unlink(lockPath).catch(() => {});
+  }
+
+  async pruneOlderThan(days: number): Promise<number> {
+    await this.ensureInitialized();
+    const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+    let removed = 0;
+
+    for (const record of await this.list()) {
+      if (record.status !== "completed" && record.status !== "errored") continue;
+      if (record.updatedAt > cutoffMs) continue;
+      if (await this.delete(record.id)) {
+        removed++;
+      }
+    }
+
+    return removed;
   }
 }

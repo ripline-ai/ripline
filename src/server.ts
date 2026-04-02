@@ -78,6 +78,8 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
   const registry = new PipelineRegistry(config.pipelinesDir);
   const store = new PipelineRunStore(runsDir);
   await store.init();
+  await store.recoverStaleRuns({ limit: 100 });
+  await store.rebuildIndex();
 
   const claudeCodeRunner = config.claudeCodeRunner;
   const codexRunner = config.codexRunner;
@@ -413,38 +415,23 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     preHandler: requireAuth,
     handler: async (request, reply) => {
       const rawDays = request.query.olderThanDays;
-      const olderThanDays = rawDays !== undefined ? Math.max(0, parseFloat(rawDays) || 7) : 7;
-      const cutoffMs = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
+      const olderThanDays = rawDays === undefined ? 7 : Number(rawDays);
 
-      const { promises: fsP } = await import("node:fs");
-      const entries = await fsP.readdir(runsDir, { withFileTypes: true }).catch(() => []);
-      const dirs = entries.filter((e) => e.isDirectory());
-
-      let pruned = 0;
-      let skipped = 0;
-
-      for (const ent of dirs) {
-        const runId = ent.name;
-        let record: PipelineRunRecord | null = null;
-        try {
-          record = await store.load(runId);
-        } catch {
-          skipped++;
-          continue;
-        }
-        if (!record) { skipped++; continue; }
-        if (record.status !== "completed" && record.status !== "errored") { skipped++; continue; }
-        if (record.updatedAt > cutoffMs) { skipped++; continue; }
-
-        try {
-          await fsP.rm(path.join(runsDir, runId), { recursive: true, force: true });
-          pruned++;
-        } catch {
-          skipped++;
-        }
+      if (!Number.isFinite(olderThanDays) || olderThanDays < 1) {
+        return reply.status(400).send({
+          error: "Bad Request",
+          message: "olderThanDays must be a number greater than or equal to 1",
+        });
       }
 
-      return reply.send({ pruned, skipped });
+      const cutoffMs = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
+      const runs = await store.list();
+      const prunableCount = runs.filter((run) =>
+        (run.status === "completed" || run.status === "errored") && run.updatedAt <= cutoffMs
+      ).length;
+      const skippedCount = runs.length - prunableCount;
+      const pruned = await store.pruneOlderThan(olderThanDays);
+      return reply.send({ pruned, skipped: skippedCount });
     },
   });
 
