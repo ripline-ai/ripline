@@ -42,7 +42,7 @@ nodes:
   # ── 1. Fetch bug from Wintermute ─────────────────────────────────────────
   - id: fetch_bug
     type: agent
-    runner: claude-code
+    runner: codex
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /home/openclaw
@@ -59,7 +59,7 @@ nodes:
   # ── 2. Triage ─────────────────────────────────────────────────────────────
   - id: pm_triage
     type: agent
-    runner: claude-code
+    runner: codex
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /home/openclaw/wintermute
@@ -91,7 +91,7 @@ nodes:
   # if unrecognised or absent.
   - id: setup_workspace
     type: agent
-    runner: claude-code
+    runner: codex
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /home/openclaw
@@ -136,7 +136,7 @@ nodes:
   # ── 3. Fix ────────────────────────────────────────────────────────────────
   - id: fix
     type: agent
-    runner: claude-code
+    runner: codex
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /workspace/repo
@@ -167,7 +167,7 @@ nodes:
   # ── 4. Write tests ────────────────────────────────────────────────────────
   - id: write_tests
     type: agent
-    runner: claude-code
+    runner: codex
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /workspace/repo
@@ -213,7 +213,7 @@ nodes:
   # ── 6. Reload staging ────────────────────────────────────────────────────
   - id: reload_staging
     type: agent
-    runner: claude-code
+    runner: codex
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /home/openclaw
@@ -231,7 +231,7 @@ nodes:
   # ── 7. E2E smoke test against staging ────────────────────────────────────
   - id: verify_staging
     type: agent
-    runner: claude-code
+    runner: codex
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /home/openclaw/wintermute
@@ -254,7 +254,7 @@ nodes:
   # ── 8. Patch bug status to fixed ─────────────────────────────────────────
   - id: patch_bug
     type: agent
-    runner: claude-code
+    runner: codex
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /home/openclaw
@@ -306,7 +306,7 @@ nodes:
   # version, then continues the rebase.
   - id: resolve_conflicts
     type: agent
-    runner: claude-code
+    runner: codex
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /workspace/repo
@@ -346,7 +346,7 @@ nodes:
   # GHCR_TOKEN is set in the environment.
   - id: promote_isolated
     type: agent
-    runner: claude-code
+    runner: codex
     mode: execute
     dangerouslySkipPermissions: true
     cwd: /workspace/repo
@@ -368,31 +368,114 @@ nodes:
       "promote_isolated: ABORTED — conflict resolution failed, production NOT reloaded"
       and stop immediately. Do not run any further commands.
 
-      ## Merge + test + push flow
+      ## Merge + deploy flow
       Use the Bash tool for all steps. Acquire the promote lock first to prevent
-      races with any other parallel run.
+      races with any other parallel run. Promotion must use the target project's
+      deployment metadata instead of pushing into a checked-out host repo.
 
       ```bash
       # 1. Acquire promote lock (wait up to 10 minutes for it)
       exec 9>/tmp/ripline-promote.lock
       flock -w 600 9 || { echo "promote_isolated: FAILED — could not acquire promote lock"; exit 1; }
 
-      # 2. Determine the host repo path from the git remote "origin"
-      ORIGIN=$(git -C /workspace/repo remote get-url origin)
-      # origin is a file:// URL pointing at the host repo
+      # 2. Load project deployment metadata from Wintermute
+      DEPLOY_ENV=/tmp/ripline-deploy-{{parse_bug.id}}.env
+      python3 <<'PYEOF' > "$DEPLOY_ENV"
+      import json
+      import os
+      import subprocess
+      import urllib.request
 
-      # 3. Fetch latest main from origin (host) into the clone
-      # (rebase onto origin/main was already handled by rebase_branch + resolve_conflicts)
-      git -C /workspace/repo fetch origin main
+      def shell_quote(value: str) -> str:
+          return value.replace("\\", "\\\\").replace('"', '\\"')
 
-      # 4. Switch to a local main that tracks origin/main
-      git -C /workspace/repo checkout -B main origin/main
+      base_url = os.environ.get("WINTERMUTE_URL", "http://localhost:3000").rstrip("/")
+      workspace = "/workspace/repo"
+      project_hint = "{{parse_bug.project}}".strip().lower()
+      project_id = ""
+      project = {}
 
-      # 5. Merge the fix branch (fast-forward or squash as appropriate)
+      try:
+          with urllib.request.urlopen(f"{base_url}/api/projects") as resp:
+              projects = json.load(resp)
+      except Exception:
+          projects = []
+
+      if isinstance(projects, list):
+          for candidate in projects:
+              candidate_id = str(candidate.get("id") or "").strip()
+              candidate_name = str(candidate.get("name") or "").strip().lower()
+              candidate_path = str(candidate.get("localPath") or "").strip().lower()
+              if project_hint and (
+                  project_hint in candidate_id.lower()
+                  or project_hint in candidate_name
+                  or (candidate_path and project_hint in candidate_path)
+              ):
+                  project = candidate
+                  project_id = candidate_id
+                  break
+
+      metadata = project.get("metadata") or {}
+      deployment = project.get("deploymentMetadata") or {}
+      local_path = (project.get("localPath") or metadata.get("localPath") or "").strip()
+      repo_remote = (deployment.get("repoRemote") or "").strip()
+      deploy_checkout = (deployment.get("deployCheckout") or local_path or "").strip()
+      deploy_branch = (deployment.get("deployBranch") or "main").strip() or "main"
+      promote_strategy = (deployment.get("promoteStrategy") or "push_remote_and_sync_checkout").strip()
+      reload_command = (deployment.get("reloadCommand") or deployment.get("promoteScript") or "").strip()
+
+      if not repo_remote:
+          for path in [deploy_checkout, local_path, workspace]:
+              if path and os.path.isdir(os.path.join(path, ".git")):
+                  try:
+                      repo_remote = subprocess.check_output(
+                          ["git", "-C", path, "remote", "get-url", "origin"],
+                          text=True,
+                          stderr=subprocess.DEVNULL,
+                      ).strip()
+                      if repo_remote:
+                          break
+                  except Exception:
+                      pass
+
+      print(f'PROJECT_ID="{shell_quote(project_id)}"')
+      print(f'REPO_REMOTE="{shell_quote(repo_remote)}"')
+      print(f'DEPLOY_CHECKOUT="{shell_quote(deploy_checkout)}"')
+      print(f'DEPLOY_BRANCH="{shell_quote(deploy_branch)}"')
+      print(f'PROMOTE_STRATEGY="{shell_quote(promote_strategy)}"')
+      print(f'RELOAD_COMMAND="{shell_quote(reload_command)}"')
+      PYEOF
+
+      . "$DEPLOY_ENV"
+
+      if [ -z "$REPO_REMOTE" ]; then
+        echo "promote_isolated: FAILED — no canonical repo remote configured for bug project {{parse_bug.project}}"
+        exit 1
+      fi
+
+      if [ "$PROMOTE_STRATEGY" != "push_remote_and_sync_checkout" ]; then
+        echo "promote_isolated: FAILED — unsupported promote strategy: $PROMOTE_STRATEGY"
+        exit 1
+      fi
+
+      if ! git -C /workspace/repo diff --quiet || ! git -C /workspace/repo diff --cached --quiet; then
+        git -C /workspace/repo stash push --include-untracked \
+          -m "ripline-promote-{{parse_bug.id}}" >/dev/null 2>&1 || true
+        echo "promote_isolated: stashed workspace changes before rebase"
+      fi
+
+      git -C /workspace/repo fetch "$REPO_REMOTE" "$DEPLOY_BRANCH"
+      git -C /workspace/repo rebase -X theirs FETCH_HEAD || {
+        echo "promote_isolated: FAILED — could not rebase fix/{{parse_bug.id}} onto $REPO_REMOTE/$DEPLOY_BRANCH"
+        exit 1
+      }
+      git -C /workspace/repo checkout -B "$DEPLOY_BRANCH" FETCH_HEAD
       git -C /workspace/repo merge --no-ff fix/{{parse_bug.id}} \
-        -m "fix({{parse_bug.id}}): {{parse_bug.title}} — isolated fix merge"
+        -m "fix({{parse_bug.id}}): {{parse_bug.title}} — isolated fix merge" || {
+        echo "promote_isolated: FAILED — merge into $DEPLOY_BRANCH failed"
+        exit 1
+      }
 
-      # 6. Run the full test suite on the merged result
       npm --prefix /workspace/repo test -- --passWithNoTests --testPathIgnorePatterns=e2e 2>&1 | tail -40
       TEST_EXIT=${PIPESTATUS[0]}
       if [ "$TEST_EXIT" != "0" ]; then
@@ -400,37 +483,67 @@ nodes:
         exit 1
       fi
 
-      # 7. Push main back to the host repo
-      git -C /workspace/repo push origin main
-
-      echo "promote_isolated: pushed main to host repo"
-      ```
-
-      If the push succeeds, continue:
-
-      ```bash
-      # 8. Run the existing promote script (reads from the host repo, reloads PM2)
-      ~/wintermute/bin/promote
-      PROMOTE_EXIT=$?
-      if [ "$PROMOTE_EXIT" != "0" ]; then
-        echo "promote_isolated: FAILED — promote script failed, production may not have reloaded"
+      git -C /workspace/repo push "$REPO_REMOTE" "$DEPLOY_BRANCH" || {
+        echo "promote_isolated: FAILED — push to $REPO_REMOTE $DEPLOY_BRANCH failed"
         exit 1
+      }
+
+      echo "promote_isolated: pushed $DEPLOY_BRANCH to $REPO_REMOTE"
+
+      if [ -n "$DEPLOY_CHECKOUT" ]; then
+        if [ ! -d "$DEPLOY_CHECKOUT/.git" ]; then
+          mkdir -p "$(dirname "$DEPLOY_CHECKOUT")"
+          git clone "$REPO_REMOTE" "$DEPLOY_CHECKOUT" || {
+            echo "promote_isolated: FAILED — could not clone deploy checkout at $DEPLOY_CHECKOUT"
+            exit 1
+          }
+        fi
+
+        if ! git -C "$DEPLOY_CHECKOUT" diff --quiet || ! git -C "$DEPLOY_CHECKOUT" diff --cached --quiet; then
+          echo "promote_isolated: deploy checkout had local changes — resetting $DEPLOY_CHECKOUT"
+          git -C "$DEPLOY_CHECKOUT" reset --hard HEAD >/dev/null 2>&1 || true
+          git -C "$DEPLOY_CHECKOUT" clean -fdx >/dev/null 2>&1 || true
+        fi
+
+        git -C "$DEPLOY_CHECKOUT" remote set-url origin "$REPO_REMOTE" || true
+        git -C "$DEPLOY_CHECKOUT" fetch origin "$DEPLOY_BRANCH" || {
+          echo "promote_isolated: FAILED — could not fetch deploy checkout from origin"
+          exit 1
+        }
+        git -C "$DEPLOY_CHECKOUT" checkout -B "$DEPLOY_BRANCH" "origin/$DEPLOY_BRANCH" || {
+          echo "promote_isolated: FAILED — could not checkout deploy branch in $DEPLOY_CHECKOUT"
+          exit 1
+        }
+        git -C "$DEPLOY_CHECKOUT" reset --hard "origin/$DEPLOY_BRANCH" || {
+          echo "promote_isolated: FAILED — could not reset deploy checkout to origin/$DEPLOY_BRANCH"
+          exit 1
+        }
+        echo "promote_isolated: synced deploy checkout $DEPLOY_CHECKOUT"
       fi
-      echo "promote_isolated: success — production reloaded"
-      ```
 
-      After a successful promote, attempt to rebuild the Docker build image:
+      if [ -n "$RELOAD_COMMAND" ]; then
+        DEPLOY_CHECKOUT="$DEPLOY_CHECKOUT" \
+        DEPLOY_BRANCH="$DEPLOY_BRANCH" \
+        PROJECT_ID="$PROJECT_ID" \
+        REPO_REMOTE="$REPO_REMOTE" \
+        bash -lc "$RELOAD_COMMAND"
+        PROMOTE_EXIT=$?
+        if [ "$PROMOTE_EXIT" != "0" ]; then
+          echo "promote_isolated: FAILED — reload command failed, production may not have reloaded"
+          exit 1
+        fi
+      fi
 
-      ```bash
-      # 9. Rebuild wintermute-build-env image (non-blocking; failure does not abort)
-      #     Dockerfile lives at ~/wintermute/docker/Dockerfile
-      #     build-image.sh handles tagging and optional GHCR push.
-      bash /home/openclaw/wintermute/docker/build-image.sh openclaw/build-env latest 2>&1 || \
-        echo "promote_isolated: image rebuild failed (non-blocking)"
+      echo "promote_isolated: success — deploy completed"
+
+      if [ "$PROJECT_ID" = "project_wintermute" ]; then
+        bash /home/openclaw/wintermute/docker/build-image.sh openclaw/build-env latest 2>&1 || \
+          echo "promote_isolated: image rebuild failed (non-blocking)"
+      fi
       ```
 
       Output a final status line:
-      - "promote_isolated: success — production reloaded" on success
+      - "promote_isolated: success — deploy completed" on success
       - "promote_isolated: FAILED — <reason>" on any failure
 
   - id: result
