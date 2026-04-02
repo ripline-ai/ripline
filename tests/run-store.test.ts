@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { PipelineRunStore, type RunStore } from "../src/run-store.js";
+import { MemoryRunStore } from "../src/run-store-memory.js";
+import type { PipelineRunRecord, PipelineRunStep, PipelineRunStatus } from "../src/types.js";
 
 /** Remove directory and contents; retry once on ENOTEMPTY (e.g. .tmp left by concurrent save). */
 async function rmDirRobust(dir: string): Promise<void> {
@@ -17,8 +19,32 @@ async function rmDirRobust(dir: string): Promise<void> {
     }
   }
 }
-import { MemoryRunStore } from "../src/run-store-memory.js";
-import type { PipelineRunRecord, PipelineRunStep, PipelineRunStatus } from "../src/types.js";
+
+async function rewritePersistedRunMetadata(
+  runsDir: string,
+  runId: string,
+  updates: Partial<Pick<PipelineRunRecord, "status" | "startedAt" | "updatedAt">>
+): Promise<void> {
+  const runPath = path.join(runsDir, runId, "run.json");
+  const record = JSON.parse(await fs.readFile(runPath, "utf8")) as PipelineRunRecord;
+  const nextRecord = { ...record, ...updates };
+  await fs.writeFile(runPath, JSON.stringify(nextRecord, null, 2), "utf8");
+
+  const indexPath = path.join(runsDir, "_index.json");
+  const index = JSON.parse(await fs.readFile(indexPath, "utf8")) as Record<string, {
+    status: PipelineRunStatus;
+    pipelineId: string;
+    startedAt: number;
+    updatedAt: number;
+  }>;
+  index[runId] = {
+    status: nextRecord.status,
+    pipelineId: nextRecord.pipelineId,
+    startedAt: nextRecord.startedAt,
+    updatedAt: nextRecord.updatedAt,
+  };
+  await fs.writeFile(indexPath, JSON.stringify(index, null, 2), "utf8");
+}
 
 const runStoreInterfaceTests = (name: string, createStore: () => Promise<{ store: RunStore; cleanup?: () => Promise<void> }>) => {
   describe(name, () => {
@@ -335,6 +361,205 @@ describe("RunStore", () => {
       expect((await store.load(dead.id))!.status).toBe("pending");
       expect((await store.load(dead.id))!.ownerPid).toBeUndefined();
       expect((await store.load(legacy.id))!.status).toBe("running");
+    } finally {
+      await rmDirRobust(runsDir);
+    }
+  });
+
+  it("PipelineRunStore: list() only loads matching run records after filtering and limit selection", async () => {
+    const runsDir = path.join(process.cwd(), ".ripline", "runs", "test-run-store-indexed-list-" + Date.now());
+    const store = new PipelineRunStore(runsDir);
+    await store.init();
+    try {
+      const pending = await store.createRun({ pipelineId: "pending-pipeline", inputs: {} });
+      const runningOldest = await store.createRun({ pipelineId: "running-oldest", inputs: {} });
+      await new Promise((r) => setTimeout(r, 5));
+      const runningNewest = await store.createRun({ pipelineId: "running-newest", inputs: {} });
+      const completed = await store.createRun({ pipelineId: "completed-pipeline", inputs: {} });
+
+      runningOldest.status = "running";
+      runningNewest.status = "running";
+      completed.status = "completed";
+      await store.save(runningOldest);
+      await store.save(runningNewest);
+      await store.save(completed);
+
+      const readSpy = vi.spyOn(fs, "readFile");
+      try {
+        const runs = await store.list({ status: "running", limit: 1 });
+        expect(runs).toHaveLength(1);
+        expect(runs[0]!.id).toBe(runningOldest.id);
+        expect(runs[0]!.status).toBe("running");
+
+        const runFileReads = readSpy.mock.calls.filter(([filePath]) =>
+          String(filePath).endsWith(`${path.sep}run.json`)
+        );
+        expect(runFileReads).toHaveLength(1);
+        expect(String(runFileReads[0]![0])).toContain(runningOldest.id);
+      } finally {
+        readSpy.mockRestore();
+      }
+
+      const pendingRuns = await store.list({ status: "pending" });
+      expect(pendingRuns.map((run) => run.id)).toEqual([pending.id]);
+    } finally {
+      await rmDirRobust(runsDir);
+    }
+  });
+
+  it("PipelineRunStore: rebuildIndex repopulates the on-disk index from run directories", async () => {
+    const runsDir = path.join(process.cwd(), ".ripline", "runs", "test-run-store-rebuild-index-" + Date.now());
+    const store = new PipelineRunStore(runsDir);
+    await store.init();
+    try {
+      const run = await store.createRun({ pipelineId: "rebuild-target", inputs: { hello: "world" } });
+      run.status = "completed";
+      await store.save(run);
+
+      await fs.writeFile(path.join(runsDir, "_index.json"), "{}", "utf8");
+      await store.rebuildIndex();
+
+      const rawIndex = JSON.parse(await fs.readFile(path.join(runsDir, "_index.json"), "utf8")) as Record<string, {
+        pipelineId: string;
+        status: string;
+      }>;
+      expect(rawIndex[run.id]).toMatchObject({
+        pipelineId: "rebuild-target",
+        status: "completed",
+      });
+    } finally {
+      await rmDirRobust(runsDir);
+    }
+  });
+
+  it("PipelineRunStore: missing index file falls back to a full rebuild on startup", async () => {
+    const runsDir = path.join(process.cwd(), ".ripline", "runs", "test-run-store-missing-index-" + Date.now());
+    const store = new PipelineRunStore(runsDir);
+    await store.init();
+    try {
+      const run = await store.createRun({ pipelineId: "startup-rebuild", inputs: {} });
+      run.status = "running";
+      await store.save(run);
+      await fs.unlink(path.join(runsDir, "_index.json"));
+
+      const restartedStore = new PipelineRunStore(runsDir);
+      await restartedStore.init();
+
+      const running = await restartedStore.list({ status: "running" });
+      expect(running.map((entry) => entry.id)).toEqual([run.id]);
+
+      const rebuiltIndex = JSON.parse(await fs.readFile(path.join(runsDir, "_index.json"), "utf8")) as Record<string, {
+        status: string;
+      }>;
+      expect(rebuiltIndex[run.id]?.status).toBe("running");
+    } finally {
+      await rmDirRobust(runsDir);
+    }
+  });
+
+  it("PipelineRunStore: corrupt index file falls back to a full rebuild on startup", async () => {
+    const runsDir = path.join(process.cwd(), ".ripline", "runs", "test-run-store-corrupt-index-" + Date.now());
+    const store = new PipelineRunStore(runsDir);
+    await store.init();
+    try {
+      const run = await store.createRun({ pipelineId: "corrupt-index-rebuild", inputs: {} });
+      run.status = "completed";
+      await store.save(run);
+      await fs.writeFile(path.join(runsDir, "_index.json"), "{not-valid-json", "utf8");
+
+      const restartedStore = new PipelineRunStore(runsDir);
+      await restartedStore.init();
+
+      const completed = await restartedStore.list({ status: "completed" });
+      expect(completed.map((entry) => entry.id)).toEqual([run.id]);
+
+      const rebuiltIndex = JSON.parse(await fs.readFile(path.join(runsDir, "_index.json"), "utf8")) as Record<string, {
+        status: string;
+      }>;
+      expect(rebuiltIndex[run.id]?.status).toBe("completed");
+    } finally {
+      await rmDirRobust(runsDir);
+    }
+  });
+
+  it("PipelineRunStore: concurrent save calls leave a valid index containing every run", async () => {
+    const runsDir = path.join(process.cwd(), ".ripline", "runs", "test-run-store-concurrent-index-" + Date.now());
+    const store = new PipelineRunStore(runsDir);
+    await store.init();
+    try {
+      const runs = await Promise.all(
+        Array.from({ length: 12 }, (_, index) =>
+          store.createRun({ pipelineId: `pipeline-${index}`, inputs: { index } })
+        )
+      );
+
+      await Promise.all(
+        runs.map(async (run, index) => {
+          run.status = index % 2 === 0 ? "completed" : "errored";
+          await store.save(run);
+        })
+      );
+
+      const rawIndexText = await fs.readFile(path.join(runsDir, "_index.json"), "utf8");
+      const rawIndex = JSON.parse(rawIndexText) as Record<string, { status: string; pipelineId: string }>;
+      expect(Object.keys(rawIndex)).toHaveLength(12);
+      for (const run of runs) {
+        expect(rawIndex[run.id]).toBeDefined();
+        expect(rawIndex[run.id]!.pipelineId).toBe(run.pipelineId);
+      }
+
+      const listedRuns = await store.list();
+      expect(listedRuns).toHaveLength(12);
+    } finally {
+      await rmDirRobust(runsDir);
+    }
+  });
+
+  it("PipelineRunStore: pruneOlderThan removes only terminal runs older than the cutoff and updates the index", async () => {
+    const runsDir = path.join(process.cwd(), ".ripline", "runs", "test-run-store-prune-" + Date.now());
+    const store = new PipelineRunStore(runsDir);
+    await store.init();
+    try {
+      const oldCompleted = await store.createRun({ pipelineId: "old-completed", inputs: {} });
+      oldCompleted.status = "completed";
+      await store.save(oldCompleted);
+      await rewritePersistedRunMetadata(runsDir, oldCompleted.id, {
+        status: "completed",
+        updatedAt: Date.now() - 10 * 24 * 60 * 60 * 1000,
+      });
+
+      const oldErrored = await store.createRun({ pipelineId: "old-errored", inputs: {} });
+      oldErrored.status = "errored";
+      await store.save(oldErrored);
+      await rewritePersistedRunMetadata(runsDir, oldErrored.id, {
+        status: "errored",
+        updatedAt: Date.now() - 9 * 24 * 60 * 60 * 1000,
+      });
+
+      const recentCompleted = await store.createRun({ pipelineId: "recent-completed", inputs: {} });
+      recentCompleted.status = "completed";
+      await store.save(recentCompleted);
+
+      const oldRunning = await store.createRun({ pipelineId: "old-running", inputs: {} });
+      oldRunning.status = "running";
+      await store.save(oldRunning);
+      await rewritePersistedRunMetadata(runsDir, oldRunning.id, {
+        status: "running",
+        updatedAt: Date.now() - 12 * 24 * 60 * 60 * 1000,
+      });
+
+      const removed = await store.pruneOlderThan(7);
+      expect(removed).toBe(2);
+      expect(await store.load(oldCompleted.id)).toBeNull();
+      expect(await store.load(oldErrored.id)).toBeNull();
+      expect((await store.load(recentCompleted.id))?.status).toBe("completed");
+      expect((await store.load(oldRunning.id))?.status).toBe("running");
+
+      const rawIndex = JSON.parse(await fs.readFile(path.join(runsDir, "_index.json"), "utf8")) as Record<string, unknown>;
+      expect(rawIndex[oldCompleted.id]).toBeUndefined();
+      expect(rawIndex[oldErrored.id]).toBeUndefined();
+      expect(rawIndex[recentCompleted.id]).toBeDefined();
+      expect(rawIndex[oldRunning.id]).toBeDefined();
     } finally {
       await rmDirRobust(runsDir);
     }

@@ -3,10 +3,36 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import os from "node:os";
 import { createApp } from "../src/server.js";
+import { PipelineRunStore } from "../src/run-store.js";
 import type { PipelinePluginConfig } from "../src/types.js";
 import type { AgentRunner } from "../src/pipeline/executors/agent.js";
 
 const fixturesDir = path.join(process.cwd(), "pipelines", "examples");
+
+async function rewritePersistedRunMetadata(
+  runsDir: string,
+  runId: string,
+  updates: { status?: string; updatedAt?: number; ownerPid?: number }
+): Promise<void> {
+  const runPath = path.join(runsDir, runId, "run.json");
+  const record = JSON.parse(await fs.readFile(runPath, "utf8")) as Record<string, unknown>;
+  const nextRecord = { ...record, ...updates };
+  await fs.writeFile(runPath, JSON.stringify(nextRecord, null, 2), "utf8");
+
+  const indexPath = path.join(runsDir, "_index.json");
+  const index = JSON.parse(await fs.readFile(indexPath, "utf8")) as Record<string, {
+    status: string;
+    pipelineId: string;
+    startedAt: number;
+    updatedAt: number;
+  }>;
+  index[runId] = {
+    ...index[runId]!,
+    status: typeof nextRecord.status === "string" ? nextRecord.status : index[runId]!.status,
+    updatedAt: typeof nextRecord.updatedAt === "number" ? nextRecord.updatedAt : index[runId]!.updatedAt,
+  };
+  await fs.writeFile(indexPath, JSON.stringify(index, null, 2), "utf8");
+}
 
 describe("HTTP server", () => {
   let config: PipelinePluginConfig;
@@ -216,6 +242,90 @@ describe("HTTP server", () => {
       expect(res.statusCode).toBe(200);
       const body = res.json() as { runs: unknown[] };
       expect(Array.isArray(body.runs)).toBe(true);
+    });
+
+    it("rebuilds the run index and recovers stale running runs during startup", async () => {
+      await app.close();
+
+      const store = new PipelineRunStore(config.runsDir!);
+      await store.init();
+      const staleRun = await store.createRun({ pipelineId: "startup-rebuild", inputs: {} });
+      staleRun.status = "running";
+      await store.save(staleRun);
+      await fs.unlink(path.join(config.runsDir!, "_index.json"));
+
+      app = await createApp(config);
+
+      const listRes = await app.inject({ method: "GET", url: "/runs?status=pending" });
+      expect(listRes.statusCode).toBe(200);
+      const body = listRes.json() as { runs: { id: string; status: string }[] };
+      expect(body.runs.some((run) => run.id === staleRun.id && run.status === "pending")).toBe(true);
+
+      const index = JSON.parse(await fs.readFile(path.join(config.runsDir!, "_index.json"), "utf8")) as Record<string, {
+        status: string;
+      }>;
+      expect(index[staleRun.id]?.status).toBe("pending");
+    });
+  });
+
+  describe("DELETE /runs/prune", () => {
+    it("removes old terminal runs and returns the deleted count", async () => {
+      const store = new PipelineRunStore(config.runsDir!);
+      await store.init();
+
+      const oldCompleted = await store.createRun({ pipelineId: "old-completed", inputs: {} });
+      oldCompleted.status = "completed";
+      await store.save(oldCompleted);
+      await rewritePersistedRunMetadata(config.runsDir!, oldCompleted.id, {
+        status: "completed",
+        updatedAt: Date.now() - 10 * 24 * 60 * 60 * 1000,
+      });
+
+      const oldErrored = await store.createRun({ pipelineId: "old-errored", inputs: {} });
+      oldErrored.status = "errored";
+      await store.save(oldErrored);
+      await rewritePersistedRunMetadata(config.runsDir!, oldErrored.id, {
+        status: "errored",
+        updatedAt: Date.now() - 9 * 24 * 60 * 60 * 1000,
+      });
+
+      const recentCompleted = await store.createRun({ pipelineId: "recent-completed", inputs: {} });
+      recentCompleted.status = "completed";
+      await store.save(recentCompleted);
+
+      const oldRunning = await store.createRun({ pipelineId: "old-running", inputs: {} });
+      oldRunning.status = "running";
+      await store.save(oldRunning);
+      await rewritePersistedRunMetadata(config.runsDir!, oldRunning.id, {
+        status: "running",
+        updatedAt: Date.now() - 11 * 24 * 60 * 60 * 1000,
+      });
+
+      const pruneRes = await app.inject({
+        method: "DELETE",
+        url: "/runs/prune?olderThanDays=7",
+      });
+      expect(pruneRes.statusCode).toBe(200);
+      expect(pruneRes.json()).toEqual({ deleted: 2 });
+
+      const runsRes = await app.inject({ method: "GET", url: "/runs" });
+      const runs = (runsRes.json() as { runs: { id: string; status: string }[] }).runs;
+      expect(runs.some((run) => run.id === oldCompleted.id)).toBe(false);
+      expect(runs.some((run) => run.id === oldErrored.id)).toBe(false);
+      expect(runs.some((run) => run.id === recentCompleted.id && run.status === "completed")).toBe(true);
+      expect(runs.some((run) => run.id === oldRunning.id && run.status === "running")).toBe(true);
+    });
+
+    it("rejects invalid olderThanDays values", async () => {
+      const res = await app.inject({
+        method: "DELETE",
+        url: "/runs/prune?olderThanDays=0",
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({
+        error: "Bad Request",
+        message: "olderThanDays must be a number greater than or equal to 1",
+      });
     });
   });
 

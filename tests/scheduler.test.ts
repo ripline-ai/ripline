@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MemoryRunStore } from "../src/run-store-memory.js";
 import { createRunQueue } from "../src/run-queue.js";
 import { createScheduler } from "../src/scheduler.js";
@@ -34,6 +34,26 @@ const noopAgent: AgentRunner = async () => ({
 });
 
 describe("Scheduler", () => {
+  it("bounds startup stale-run recovery to 100 runs", async () => {
+    const store = new MemoryRunStore();
+    const recoverSpy = vi.spyOn(store, "recoverStaleRuns");
+    const queue = createRunQueue(store);
+
+    const scheduler = createScheduler({
+      store,
+      queue,
+      registry: stubRegistry,
+      maxConcurrency: 1,
+      agentRunner: noopAgent,
+    });
+
+    scheduler.start();
+    await new Promise((r) => setTimeout(r, 10));
+    scheduler.stop();
+
+    expect(recoverSpy).toHaveBeenCalledWith({ limit: 100 });
+  });
+
   it("processes at most maxConcurrency runs at a time", async () => {
     const store = new MemoryRunStore();
     const queue = createRunQueue(store);
