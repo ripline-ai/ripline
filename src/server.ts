@@ -413,35 +413,12 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     handler: async (request, reply) => {
       const rawDays = request.query.olderThanDays;
       const olderThanDays = rawDays !== undefined ? Math.max(0, parseFloat(rawDays) || 7) : 7;
-      const cutoffMs = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
-
-      const { promises: fsP } = await import("node:fs");
-      const entries = await fsP.readdir(runsDir, { withFileTypes: true }).catch(() => []);
-      const dirs = entries.filter((e) => e.isDirectory());
-
-      let pruned = 0;
-      let skipped = 0;
-
-      for (const ent of dirs) {
-        const runId = ent.name;
-        let record: PipelineRunRecord | null = null;
-        try {
-          record = await store.load(runId);
-        } catch {
-          skipped++;
-          continue;
-        }
-        if (!record) { skipped++; continue; }
-        if (record.status !== "completed" && record.status !== "errored") { skipped++; continue; }
-        if (record.updatedAt > cutoffMs) { skipped++; continue; }
-
-        try {
-          await fsP.rm(path.join(runsDir, runId), { recursive: true, force: true });
-          pruned++;
-        } catch {
-          skipped++;
-        }
-      }
+      const totalEligible = (await store.list()).filter((record) =>
+        (record.status === "completed" || record.status === "errored") &&
+        record.updatedAt <= Date.now() - olderThanDays * 24 * 60 * 60 * 1000
+      ).length;
+      const pruned = await store.pruneOlderThan(olderThanDays);
+      const skipped = Math.max(0, totalEligible - pruned);
 
       return reply.send({ pruned, skipped });
     },
