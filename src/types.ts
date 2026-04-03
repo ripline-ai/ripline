@@ -61,6 +61,8 @@ export type RiplineUserConfig = {
   profileDir?: string;
   skillsDir?: string;
   defaultProfile?: string;
+  /** Preferred built-in code runner for agent nodes ("codex" or "claude-code"). */
+  preferredRunner?: BuiltinAgentRunner;
   /** Only from ~/.ripline/config.json; never from pipeline/profile/input. */
   claudeCode?: { allowDangerouslySkipPermissions?: boolean };
   /** Only from ~/.ripline/config.json; never from pipeline/profile/input. */

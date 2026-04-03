@@ -84,6 +84,14 @@ const interpolationContext = (context: ExecutorContext) => ({
   run: { inputs: context.inputs },
 });
 
+function parsePreferredRunner(value: string | undefined): BuiltinAgentRunner | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "codex") return "codex";
+  if (normalized === "claude" || normalized === "claude-code") return "claude-code";
+  return undefined;
+}
+
 export async function executeAgent(
   node: AgentNode,
   context: ExecutorContext,
@@ -99,9 +107,14 @@ export async function executeAgent(
       ? (agentDef as BuiltinAgentDefinition)
       : undefined;
 
+  const preferredRunner = parsePreferredRunner(context.env.RIPLINE_DEFAULT_AGENT_RUNNER);
   const runnerType = (() => {
-    if (node.runner === "claude-code" || node.runner === "codex") return node.runner;
-    return builtinDef?.runner;
+    const explicitRunner =
+      node.runner === "claude-code" || node.runner === "codex" ? node.runner : builtinDef?.runner;
+    if (preferredRunner === undefined) return explicitRunner;
+    if (explicitRunner === undefined) return preferredRunner;
+    if (explicitRunner === "claude-code" || explicitRunner === "codex") return preferredRunner;
+    return explicitRunner;
   })();
   const runner =
     runnerType === "claude-code"
