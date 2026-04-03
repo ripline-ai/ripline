@@ -23,7 +23,7 @@ import type { AgentRunner } from "./executors/index.js";
 import { ActivityEmitter } from "../activity-emitter.js";
 import type { ActivityEvent } from "../types/activity.js";
 import type { EventSink } from "../interfaces/event-sink.js";
-import { resolveConfig } from "../config.js";
+import { loadUserConfig, resolveConfig } from "../config.js";
 import { evaluateExpression } from "../expression.js";
 import { HttpResponseError, computeBackoffMs } from "../lib/http-response-guard.js";
 import { classifyError } from "./error-classifier.js";
@@ -227,8 +227,11 @@ export class DeterministicRunner extends EventEmitter {
     // without hardcoding localhost ports.
     // Caller-supplied env values always win (e.g. for tests or manual overrides).
     const { riplineUrl } = resolveConfig();
+    const userConfig = loadUserConfig();
+    const preferredRunner = userConfig.preferredRunner;
     const stageEnv: Record<string, string> = {
       RIPLINE_URL: riplineUrl,
+      ...(preferredRunner !== undefined && { RIPLINE_DEFAULT_AGENT_RUNNER: preferredRunner }),
     };
 
     let record: PipelineRunRecord;

@@ -1,6 +1,16 @@
 module.exports = {
   apps: [
     {
+      name: "ollama",
+      script: "/home/openclaw/.local/bin/ollama",
+      args: "serve",
+      cwd: "/home/openclaw",
+      watch: false,
+      env: {
+        OLLAMA_HOST: "0.0.0.0:11434",
+      },
+    },
+    {
       name: "ripline-prod",
       script: "dist/cli/run.js",
       args: "serve --pipelines-dir /home/openclaw/.ripline/pipelines --runs-dir /home/openclaw/ripline/.ripline/runs --max-concurrency 1 --queue spec:2 --queue build:1",
@@ -11,19 +21,6 @@ module.exports = {
         NODE_ENV: "production",
       },
     },
-    {
-      name: "ripline-staging",
-      script: "dist/cli/run.js",
-      args: "serve --pipelines-dir /home/openclaw/.ripline/pipelines --runs-dir /home/openclaw/ripline/.ripline/runs-staging --max-concurrency 1 --queue spec:2 --queue build:2",
-      cwd: "/home/openclaw/ripline",
-      watch: true,
-      watch_delay: 1000,
-      ignore_watch: ["node_modules", ".ripline", "*.log"],
-      env: {
-        STAGE: "staging",
-        NODE_ENV: "development",
-        BACKGROUND_QUEUE_DISABLED: "1",
-      },
-    },
+
   ],
 };

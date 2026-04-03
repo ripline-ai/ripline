@@ -1128,6 +1128,19 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     },
   });
 
+  /** GET /config/runner-preference - return preferred built-in code runner */
+  fastify.get("/config/runner-preference", {
+    preHandler: requireAuth,
+    handler: async (_request, reply) => {
+      const currentConfig = loadUserConfig();
+      const preferredRunner = currentConfig.preferredRunner ?? "codex";
+      return reply.send({
+        preferredRunner,
+        available: ["codex", "claude-code"],
+      });
+    },
+  });
+
   /** PUT /config/queues - update per-queue concurrency and resource limits in config (takes effect on restart) */
   fastify.put<{ Body: { queues?: Record<string, { concurrency?: number; resourceLimits?: { cpus?: string; memory?: string } }> } }>("/config/queues", {
     preHandler: requireAuth,
@@ -1191,6 +1204,37 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
       // External orchestrators read this flag from GET /config/background-queue before enqueuing.
 
       return reply.send({ backgroundQueue: bgBlock });
+    },
+  });
+
+  /** PUT /config/runner-preference - set preferred built-in code runner */
+  fastify.put<{ Body: { preferredRunner?: string } }>("/config/runner-preference", {
+    preHandler: requireAuth,
+    handler: async (request, reply) => {
+      const body = (request.body as Record<string, unknown>) ?? {};
+      const input = typeof body.preferredRunner === "string" ? body.preferredRunner.trim().toLowerCase() : "";
+      const normalized =
+        input === "codex" ? "codex" :
+        (input === "claude" || input === "claude-code") ? "claude-code" :
+        null;
+
+      if (normalized === null) {
+        return reply.status(400).send({
+          error: "Bad Request",
+          message: 'preferredRunner is required and must be one of: "codex", "claude-code"',
+        });
+      }
+
+      await withRiplineConfigLock(async () => {
+        const existing = await readMutableRiplineConfig();
+        existing.preferredRunner = normalized;
+        await writeMutableRiplineConfig(existing);
+      });
+
+      return reply.send({
+        preferredRunner: normalized,
+        note: "Changes apply to new runs immediately after this update",
+      });
     },
   });
 

@@ -87,6 +87,11 @@ export function loadUserConfig(homedir?: string): RiplineUserConfig {
       const v = parsed.defaultProfile.trim();
       if (v) result.defaultProfile = v;
     }
+    if (typeof parsed.preferredRunner === "string") {
+      const raw = parsed.preferredRunner.trim().toLowerCase();
+      if (raw === "codex") result.preferredRunner = "codex";
+      if (raw === "claude" || raw === "claude-code") result.preferredRunner = "claude-code";
+    }
     const claudeBlock = parsed.claudeCode;
     if (claudeBlock && typeof claudeBlock === "object" && (claudeBlock as Record<string, unknown>).allowDangerouslySkipPermissions === true) {
       result.claudeCode = { allowDangerouslySkipPermissions: true };

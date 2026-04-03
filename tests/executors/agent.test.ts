@@ -338,6 +338,62 @@ describe("Agent executor", () => {
     expect(capturedParams?.model).toBe("gpt-5.4");
   });
 
+  it("prefers claude-code when RIPLINE_DEFAULT_AGENT_RUNNER=claude-code", async () => {
+    let usedRunner: string | null = null;
+    const claudeCodeRunner: AgentRunner = async () => {
+      usedRunner = "claude";
+      return { text: "from claude" };
+    };
+    const codexRunner: AgentRunner = async () => {
+      usedRunner = "codex";
+      return { text: "from codex" };
+    };
+    const node: AgentNode = {
+      id: "n",
+      type: "agent",
+      prompt: "Do something",
+      runner: "codex",
+    };
+    const context: ExecutorContext = {
+      inputs: {},
+      artifacts: {},
+      env: { RIPLINE_DEFAULT_AGENT_RUNNER: "claude-code" },
+      outputs: {},
+    };
+
+    await executeAgent(node, context, { claudeCodeRunner, codexRunner });
+
+    expect(usedRunner).toBe("claude");
+  });
+
+  it("prefers codex when RIPLINE_DEFAULT_AGENT_RUNNER=codex", async () => {
+    let usedRunner: string | null = null;
+    const claudeCodeRunner: AgentRunner = async () => {
+      usedRunner = "claude";
+      return { text: "from claude" };
+    };
+    const codexRunner: AgentRunner = async () => {
+      usedRunner = "codex";
+      return { text: "from codex" };
+    };
+    const node: AgentNode = {
+      id: "n",
+      type: "agent",
+      prompt: "Do something",
+      runner: "claude-code",
+    };
+    const context: ExecutorContext = {
+      inputs: {},
+      artifacts: {},
+      env: { RIPLINE_DEFAULT_AGENT_RUNNER: "codex" },
+      outputs: {},
+    };
+
+    await executeAgent(node, context, { claudeCodeRunner, codexRunner });
+
+    expect(usedRunner).toBe("codex");
+  });
+
   it("appends output schema instruction to prompt when contracts.output is set", async () => {
     let capturedParams: Parameters<AgentRunner>[0] | null = null;
     const capturingRunner: AgentRunner = async (params) => {
