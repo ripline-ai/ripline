@@ -323,6 +323,19 @@ export type ShellNode = NodeBase & {
   container?: NodeContainerConfig | false;
 };
 
+export type ExecNode = NodeBase & {
+  type: "exec";
+  /** Shell command, supports {{variable}} interpolation from artifacts. */
+  command: string;
+  /** Working directory; supports {{variable}} interpolation. */
+  cwd?: string;
+  env?: Record<string, string>;
+  /** When true (default), stdout becomes the node's artifact keyed by node.id. */
+  captureOutput?: boolean;
+  /** Default: /bin/sh on unix, cmd.exe on windows. */
+  shell?: string;
+};
+
 export type PipelineNode =
   | LiteralNode
   | InputNode
@@ -335,7 +348,8 @@ export type PipelineNode =
   | OutputNode
   | EnqueueNode
   | CollectChildrenNode
-  | ShellNode;
+  | ShellNode
+  | ExecNode;
 
 export type PipelineEdge = {
   id?: string;
@@ -475,6 +489,8 @@ export type PipelineRunRecord = {
   updatedAt: number;
   inputs: Record<string, unknown>;
   outputs?: Record<string, unknown>;
+  /** Final verdict from the last review phase, when applicable. */
+  verdict?: 'approved' | 'request_changes';
   cursor?: {
     nextNodeIndex: number;
     context: Record<string, unknown>;

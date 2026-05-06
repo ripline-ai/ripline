@@ -13,8 +13,41 @@ export type AgentResult = {
   tokenUsage?: { input?: number; output?: number };
 };
 
-/** Injectable runner for agent nodes (e.g. an external agent runner). */
-export type AgentRunner = (params: {
+// ---------------------------------------------------------------------------
+// Streaming event types
+// ---------------------------------------------------------------------------
+
+export type AgentErrorKind =
+  | 'quota_exhausted'
+  | 'timeout'
+  | 'cli_not_in_path'
+  | 'cli_failed'
+  | 'spawn_failed'
+  | 'parse_error'
+  | 'aborted'
+  | 'auth_error'
+  | 'output_truncated';
+
+export type TokenUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  costUsd?: number;
+};
+
+export type AgentEvent =
+  | { type: 'text_delta';       text: string }
+  | { type: 'tool_call_start';  id: string; name: string; input: unknown }
+  | { type: 'tool_call_end';    id: string; output: unknown }
+  | { type: 'progress' }
+  | { type: 'message_done';     text: string; usage?: TokenUsage }
+  | { type: 'error';            kind: AgentErrorKind; message: string };
+
+// ---------------------------------------------------------------------------
+// AgentRunParams — the parameter shape for runner.run()
+// ---------------------------------------------------------------------------
+
+export type AgentRunParams = {
   agentId: string;
   prompt: string;
   /** When true or omitted, use a new session (context isolation). When false, use sessionId for continuity. */
@@ -46,7 +79,44 @@ export type AgentRunner = (params: {
     nodeContainer?: NodeContainerConfig;
     defaultImage?: string;
   };
-}) => Promise<AgentResult>;
+};
+
+// ---------------------------------------------------------------------------
+// AgentRunner interface — AsyncGenerator-based
+// ---------------------------------------------------------------------------
+
+/** Injectable runner for agent nodes. Emits AgentEvents as an async generator. */
+export interface AgentRunner {
+  run(params: AgentRunParams, signal?: AbortSignal): AsyncGenerator<AgentEvent>;
+}
+
+// ---------------------------------------------------------------------------
+// collectAgentResult — convenience helper for non-streaming callers
+// ---------------------------------------------------------------------------
+
+/**
+ * Consume an AsyncGenerator<AgentEvent> and return the final text + usage.
+ * Throws if the stream ends with an error event instead of message_done.
+ */
+export async function collectAgentResult(
+  gen: AsyncGenerator<AgentEvent>
+): Promise<{ text: string; usage?: TokenUsage }> {
+  let text = "";
+  let usage: TokenUsage | undefined;
+  for await (const event of gen) {
+    if (event.type === "text_delta") {
+      text += event.text;
+    } else if (event.type === "message_done") {
+      text = event.text;
+      usage = event.usage;
+      break;
+    } else if (event.type === "error") {
+      throw new Error(`Agent error [${event.kind}]: ${event.message}`);
+    }
+  }
+  if (usage !== undefined) return { text, usage };
+  return { text };
+}
 
 function resolveSkillsContent(skillsFile: string | undefined, effectiveCwd: string | undefined): string | null {
   if (skillsFile) {
@@ -205,7 +275,7 @@ export async function executeAgent(
     context.runId !== undefined &&
     (node.container !== undefined || context.containerPool.hasContainer(context.runId));
 
-  const result = await runner({
+  const result = await collectAgentResult(runner.run({
     agentId,
     prompt,
     resetSession,
@@ -232,7 +302,7 @@ export async function executeAgent(
           },
         }
       : {}),
-  });
+  }));
 
   // AC1: Check agent output for HTTP error responses (e.g. rate-limit 429).
   // curl exits 0 even on 4xx/5xx, so the agent "succeeds" but the output is an
@@ -250,9 +320,15 @@ export async function executeAgent(
     throw new HttpResponseError(httpError);
   }
 
+  const tokenUsage = result.usage
+    ? {
+        ...(result.usage.inputTokens !== undefined && { input: result.usage.inputTokens }),
+        ...(result.usage.outputTokens !== undefined && { output: result.usage.outputTokens }),
+      }
+    : undefined;
   const value = {
     text: result.text,
-    tokenUsage: result.tokenUsage,
+    ...(tokenUsage && Object.keys(tokenUsage).length > 0 && { tokenUsage }),
   };
   context.artifacts[node.id] = value;
   return { artifactKey: node.id, value };

@@ -1,4 +1,4 @@
-import type { AgentResult, AgentRunner } from "./pipeline/executors/agent.js";
+import type { AgentRunner, AgentRunParams, AgentEvent, TokenUsage } from "./pipeline/executors/agent.js";
 
 export type LlmAgentRunnerConfig = {
   provider: "ollama" | "openai" | "anthropic";
@@ -49,7 +49,7 @@ function extractAnthropicText(data: {
 export function createLlmAgentRunner(config: LlmAgentRunnerConfig): AgentRunner {
   const { provider, model, apiKey, baseURL } = config;
 
-  return async (params): Promise<AgentResult> => {
+  async function* runImpl(params: AgentRunParams): AsyncGenerator<AgentEvent> {
     const timeoutMs =
       params.timeoutSeconds !== undefined
         ? params.timeoutSeconds * 1000
@@ -82,7 +82,8 @@ export function createLlmAgentRunner(config: LlmAgentRunnerConfig): AgentRunner 
         const text = extractOllamaText(
           data as Parameters<typeof extractOllamaText>[0]
         );
-        return { text };
+        yield { type: "message_done", text } satisfies AgentEvent;
+        return;
       }
 
       if (provider === "openai") {
@@ -113,18 +114,21 @@ export function createLlmAgentRunner(config: LlmAgentRunnerConfig): AgentRunner 
           usage?: { prompt_tokens?: number; completion_tokens?: number };
         };
         const text = extractOpenAIText(data);
-        const result: AgentResult = { text };
+        const usage: TokenUsage = {};
         if (
           data.usage &&
           typeof data.usage.prompt_tokens === "number" &&
           typeof data.usage.completion_tokens === "number"
         ) {
-          result.tokenUsage = {
-            input: data.usage.prompt_tokens,
-            output: data.usage.completion_tokens,
-          };
+          usage.inputTokens = data.usage.prompt_tokens;
+          usage.outputTokens = data.usage.completion_tokens;
         }
-        return result;
+        yield {
+          type: "message_done",
+          text,
+          ...(Object.keys(usage).length > 0 && { usage }),
+        } satisfies AgentEvent;
+        return;
       }
 
       if (provider === "anthropic") {
@@ -188,18 +192,21 @@ export function createLlmAgentRunner(config: LlmAgentRunnerConfig): AgentRunner 
           usage?: { input_tokens?: number; output_tokens?: number };
         };
         const text = extractAnthropicText(data);
-        const result: AgentResult = { text };
+        const usage: TokenUsage = {};
         if (
           data.usage &&
           typeof data.usage.input_tokens === "number" &&
           typeof data.usage.output_tokens === "number"
         ) {
-          result.tokenUsage = {
-            input: data.usage.input_tokens,
-            output: data.usage.output_tokens,
-          };
+          usage.inputTokens = data.usage.input_tokens;
+          usage.outputTokens = data.usage.output_tokens;
         }
-        return result;
+        yield {
+          type: "message_done",
+          text,
+          ...(Object.keys(usage).length > 0 && { usage }),
+        } satisfies AgentEvent;
+        return;
       }
 
       throw new Error(`Unsupported LLM provider: ${provider}`);
@@ -208,5 +215,11 @@ export function createLlmAgentRunner(config: LlmAgentRunnerConfig): AgentRunner 
       if (err instanceof Error) throw err;
       throw new Error(String(err));
     }
+  }
+
+  return {
+    run(params: AgentRunParams): AsyncGenerator<AgentEvent> {
+      return runImpl(params);
+    },
   };
 }

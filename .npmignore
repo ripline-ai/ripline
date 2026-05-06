@@ -1,0 +1,10 @@
+dist/lib/contract-validate.test.js
+dist/lib/contract-validate.test.js.map
+dist/lib/contract-validate.test.d.ts
+dist/lib/contract-validate.test.d.ts.map
+tests/
+scripts/
+docs/
+*.test.ts
+.ripline/
+tmp/

@@ -29,10 +29,11 @@ const stubRegistry = {
       : null,
 };
 
-const noopAgent: AgentRunner = async () => ({
-  text: "ok",
-  tokenUsage: { input: 0, output: 0 },
-});
+const noopAgent: AgentRunner = {
+  async *run() {
+    yield { type: "message_done" as const, text: "ok" };
+  },
+};
 
 describe("Scheduler", () => {
   it("start is idempotent and startup stale recovery is ownerPid-gated", async () => {

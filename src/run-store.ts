@@ -52,7 +52,7 @@ export interface RunStore {
   load(runId: string): Promise<PipelineRunRecord | null>;
   save(record: PipelineRunRecord): Promise<void>;
   appendStep(record: PipelineRunRecord, step: PipelineRunStep): Promise<void>;
-  completeRun(record: PipelineRunRecord, outputs?: Record<string, unknown>): Promise<void>;
+  completeRun(record: PipelineRunRecord, outputs?: Record<string, unknown>, verdict?: 'approved' | 'request_changes'): Promise<void>;
   failRun(record: PipelineRunRecord, error: string): Promise<void>;
   updateCursor(record: PipelineRunRecord, cursor: RunStoreCursor): Promise<void>;
   /** List runs, optionally filtered by status. Pending/running returned FIFO (oldest first). */
@@ -269,9 +269,10 @@ export class PipelineRunStore implements RunStore {
     await this.save(record);
   }
 
-  async completeRun(record: PipelineRunRecord, outputs?: Record<string, unknown>): Promise<void> {
+  async completeRun(record: PipelineRunRecord, outputs?: Record<string, unknown>, verdict?: 'approved' | 'request_changes'): Promise<void> {
     record.status = "completed";
     if (outputs !== undefined) record.outputs = outputs;
+    if (verdict !== undefined) record.verdict = verdict;
     await this.save(record);
   }
 

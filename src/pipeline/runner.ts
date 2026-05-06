@@ -32,6 +32,8 @@ import {
   normalizeContainerConfig,
   DEFAULT_BUILD_IMAGE,
 } from "../run-container-pool.js";
+import type { VoiceRegistryLike, ReviewPhaseEvent } from "./executors/review-phase.js";
+import { executeReviewPhase } from "./executors/review-phase.js";
 
 export type RunContext = {
   inputs: Record<string, unknown>;
@@ -86,6 +88,8 @@ export type RunnerOptions = {
   defaultContainerImage?: string;
   /** EventSink for activity events. Defaults to NoopEventSink when not provided. */
   eventSink?: EventSink;
+  /** Optional voice registry for executing Chorus phase kinds (plan, review, review_only). */
+  voiceRegistry?: VoiceRegistryLike;
 };
 
 export type NodeStartedEvent = { nodeId: string; nodeType: string; at: number };
@@ -101,6 +105,15 @@ export type NodeErroredEvent = {
   at: number;
   error: string;
 };
+
+export type RunDoneEvent = {
+  runId: string;
+  status: 'completed' | 'errored' | 'cancelled';
+  verdict?: 'approved' | 'request_changes';
+};
+
+// Re-export ReviewPhaseEvent so consumers can import it from the runner module.
+export type { ReviewPhaseEvent };
 
 const DEFAULT_RUNS_DIR = ".ripline/runs";
 
@@ -354,14 +367,6 @@ export class DeterministicRunner extends EventEmitter {
         };
         if (normalized.env !== undefined) acquireOpts.env = normalized.env;
 
-        // Create a per-run workspace directory on the host and inject it as the
-        // /workspace volume mount.  The container image's /workspace is owned by the
-        // image-internal builder user, which does not match the host UID that the
-        // container runs as (--user hostUid:hostGid).  Without this override, any
-        // step that tries to write to /workspace (e.g. git clone → /workspace/repo)
-        // fails with "Permission denied" and silently leaves /workspace empty,
-        // causing later steps that specify cwd=/workspace/repo to crash with
-        // "chdir failed: no such file or directory" during docker exec.
         const hostWorkspaceDir = path.join(runsDir, record.id, "workspace");
         await fs.mkdir(hostWorkspaceDir, { recursive: true });
         acquireOpts.volumes = {
@@ -385,6 +390,8 @@ export class DeterministicRunner extends EventEmitter {
     const skippedNodes = new Set<string>();
     /** Nodes activated via on_error edge routing (execute even if only on_error edges point to them). */
     const errorActivatedNodes = new Set<string>();
+    // Track the verdict from the last review phase_done event.
+    let lastVerdict: 'approved' | 'request_changes' | undefined;
 
     try {
     for (let i = startIndex; i < order.length; i++) {
@@ -452,39 +459,80 @@ export class DeterministicRunner extends EventEmitter {
         return record;
       }
 
+      // Check whether this node is a review phase (kind: 'plan' | 'review' | 'review_only').
+      const nodeAsAny = node as Record<string, unknown>;
+      const phaseKind = typeof nodeAsAny.kind === "string" ? nodeAsAny.kind : undefined;
+      const isReviewPhase =
+        phaseKind === "plan" || phaseKind === "review" || phaseKind === "review_only";
+
       // AC2: Rate-limit (429) and server errors (5xx) get automatic retry with
       // exponential backoff, even if the node has no explicit retry config.
       // Default: 3 attempts for retryable HTTP errors, 1 for everything else.
       const HTTP_RETRY_DEFAULT = 3;
       const configuredMax = node.retry?.maxAttempts ?? 1;
+      const maxAttempts = isReviewPhase ? 1 : configuredMax;
       const retryDelayMs = node.retry?.delayMs ?? 0;
       let lastErr: unknown;
       let nodeResult: Awaited<ReturnType<typeof executeNode>> = null;
       // Effective max attempts can grow if we hit a retryable HTTP error
-      let effectiveMaxAttempts = configuredMax;
+      let effectiveMaxAttempts = maxAttempts;
 
       for (let attempt = 1; attempt <= effectiveMaxAttempts; attempt++) {
         try {
-          const executorContext = this.getExecutorContext(node, context, record, i);
-          const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner; codexRunner?: AgentRunner; agentDefinitions?: Record<string, AgentDefinition>; skillsRegistry?: SkillsRegistry; skillsDir?: string } = {};
-          if (this.runnerOptions.agentRunner !== undefined) execOptions.agentRunner = this.runnerOptions.agentRunner;
-          if (this.runnerOptions.claudeCodeRunner !== undefined) execOptions.claudeCodeRunner = this.runnerOptions.claudeCodeRunner;
-          if (this.runnerOptions.codexRunner !== undefined) execOptions.codexRunner = this.runnerOptions.codexRunner;
-          if (this.runnerOptions.agentDefinitions !== undefined) execOptions.agentDefinitions = this.runnerOptions.agentDefinitions;
-          if (this.runnerOptions.skillsRegistry !== undefined) execOptions.skillsRegistry = this.runnerOptions.skillsRegistry;
-          if (this.runnerOptions.skillsDir !== undefined) execOptions.skillsDir = this.runnerOptions.skillsDir;
-          nodeResult = await executeNode(
-              node,
-              executorContext,
-              Object.keys(execOptions).length > 0 ? execOptions : undefined
+          if (isReviewPhase) {
+            // Dispatch review phase to executeReviewPhase (AsyncGenerator)
+            if (!this.runnerOptions.voiceRegistry) {
+              throw new Error(
+                `Node "${nodeId}" has review phase kind "${phaseKind}" but no voiceRegistry was provided in RunnerOptions`
+              );
+            }
+            const phase = node as unknown as import("../review-phase-types.js").PlanPhase | import("../review-phase-types.js").ReviewPhase;
+            const gen = executeReviewPhase(
+              phase,
+              context.inputs,
+              { voiceRegistry: this.runnerOptions.voiceRegistry }
             );
-          if (nodeResult && node.contracts?.output) {
-            validateOutputContract(
-              node.id,
-              node.type,
-              node.contracts.output,
-              nodeResult.value
-            );
+            // Iterate the generator, forwarding each event through the EventEmitter.
+            // Capture phase_done result; re-throw on phase_failed.
+            let reviewResult: import("./executors/review-phase.js").ReviewPhaseResult | undefined;
+            for await (const event of gen) {
+              this.emit('review_phase_event', event);
+              if (event.type === 'phase_done') {
+                reviewResult = event.result;
+                lastVerdict = event.result.verdict;
+              } else if (event.type === 'phase_failed') {
+                throw new Error(event.error);
+              }
+            }
+            if (!reviewResult) {
+              throw new Error(`executeReviewPhase for node "${nodeId}" completed without phase_done`);
+            }
+            nodeResult = {
+              artifactKey: nodeId,
+              value: reviewResult,
+            };
+          } else {
+            const executorContext = this.getExecutorContext(node, context, record, i);
+            const execOptions: { agentRunner?: AgentRunner; claudeCodeRunner?: AgentRunner; codexRunner?: AgentRunner; agentDefinitions?: Record<string, AgentDefinition>; skillsRegistry?: SkillsRegistry; skillsDir?: string } = {};
+            if (this.runnerOptions.agentRunner !== undefined) execOptions.agentRunner = this.runnerOptions.agentRunner;
+            if (this.runnerOptions.claudeCodeRunner !== undefined) execOptions.claudeCodeRunner = this.runnerOptions.claudeCodeRunner;
+            if (this.runnerOptions.codexRunner !== undefined) execOptions.codexRunner = this.runnerOptions.codexRunner;
+            if (this.runnerOptions.agentDefinitions !== undefined) execOptions.agentDefinitions = this.runnerOptions.agentDefinitions;
+            if (this.runnerOptions.skillsRegistry !== undefined) execOptions.skillsRegistry = this.runnerOptions.skillsRegistry;
+            if (this.runnerOptions.skillsDir !== undefined) execOptions.skillsDir = this.runnerOptions.skillsDir;
+            nodeResult = await executeNode(
+                node,
+                executorContext,
+                Object.keys(execOptions).length > 0 ? execOptions : undefined
+              );
+            if (nodeResult && node.contracts?.output) {
+              validateOutputContract(
+                node.id,
+                node.type,
+                node.contracts.output,
+                nodeResult.value
+              );
+            }
           }
           lastErr = undefined;
           break;
@@ -658,6 +706,11 @@ export class DeterministicRunner extends EventEmitter {
           if (!this.runnerOptions.quiet) {
             console.error(`[${new Date(finishedAt).toISOString()}] node.errored ${nodeId} (${node.type}) ${step.error}`);
           }
+          this.emit('run_done', {
+            runId: record.id,
+            status: 'errored',
+            ...(lastVerdict !== undefined && { verdict: lastVerdict }),
+          } as RunDoneEvent);
           throw err;
         }
       }
@@ -668,13 +721,19 @@ export class DeterministicRunner extends EventEmitter {
 
     delete record.cursor;
     delete record.ownerPid;
-    await this.store.completeRun(record, context.outputs);
+    await this.store.completeRun(record, context.outputs, lastVerdict);
     this.emitBusEvent("run.completed", record);
 
     if (context.outPath) {
       await fs.mkdir(path.dirname(context.outPath), { recursive: true });
       await fs.writeFile(context.outPath, JSON.stringify(context.outputs, null, 2), "utf8");
     }
+
+    this.emit('run_done', {
+      runId: record.id,
+      status: 'completed',
+      ...(lastVerdict !== undefined && { verdict: lastVerdict }),
+    } as RunDoneEvent);
 
     return record;
     } finally {

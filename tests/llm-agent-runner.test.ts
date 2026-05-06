@@ -3,6 +3,13 @@ import {
   createLlmAgentRunner,
   type LlmAgentRunnerConfig,
 } from "../src/llm-agent-runner.js";
+import { collectAgentResult } from "../src/pipeline/executors/agent.js";
+import type { AgentRunner, AgentRunParams } from "../src/pipeline/executors/agent.js";
+
+/** Run and collect result from any AgentRunner. */
+async function run(runner: AgentRunner, params: AgentRunParams, signal?: AbortSignal) {
+  return collectAgentResult(runner.run(params, signal));
+}
 
 describe("createLlmAgentRunner", () => {
   afterEach(() => {
@@ -34,7 +41,7 @@ describe("createLlmAgentRunner", () => {
         baseURL: "http://localhost:11434",
       };
       const runner = createLlmAgentRunner(config);
-      const result = await runner({
+      const result = await run(runner, {
         agentId: "default",
         prompt: "Hello",
       });
@@ -66,7 +73,7 @@ describe("createLlmAgentRunner", () => {
         provider: "ollama",
         model: "llama3.2",
       });
-      await runner({ agentId: "default", prompt: "Hi" });
+      await run(runner, { agentId: "default", prompt: "Hi" });
 
       expect(capturedUrl).toBe("http://localhost:11434/api/chat");
     });
@@ -91,7 +98,7 @@ describe("createLlmAgentRunner", () => {
         provider: "ollama",
         model: "llama3.2",
       });
-      const result = await runner({ agentId: "default", prompt: "Hi" });
+      const result = await run(runner, { agentId: "default", prompt: "Hi" });
 
       expect(result.text).toBe("Part one. Part two.");
     });
@@ -125,7 +132,7 @@ describe("createLlmAgentRunner", () => {
         apiKey: "sk-test",
         baseURL: "https://api.openai.com/v1",
       });
-      const result = await runner({
+      const result = await run(runner, {
         agentId: "default",
         prompt: "Summarize",
       });
@@ -138,7 +145,7 @@ describe("createLlmAgentRunner", () => {
       expect(body.model).toBe("gpt-4o-mini");
       expect(body.messages).toEqual([{ role: "user", content: "Summarize" }]);
       expect(result.text).toBe("OpenAI reply");
-      expect(result.tokenUsage).toEqual({ input: 10, output: 5 });
+      expect(result.usage).toEqual({ inputTokens: 10, outputTokens: 5 });
     });
 
     it("uses default baseURL https://api.openai.com/v1 when baseURL omitted", async () => {
@@ -162,7 +169,7 @@ describe("createLlmAgentRunner", () => {
         model: "gpt-4o",
         apiKey: "sk-x",
       });
-      await runner({ agentId: "default", prompt: "Hi" });
+      await run(runner, { agentId: "default", prompt: "Hi" });
 
       expect(capturedUrl).toBe("https://api.openai.com/v1/chat/completions");
     });
@@ -193,7 +200,7 @@ describe("createLlmAgentRunner", () => {
         model: "claude-3-5-sonnet-20241022",
         apiKey: "sk-ant-test",
       });
-      const result = await runner({
+      const result = await run(runner, {
         agentId: "default",
         prompt: "Explain",
       });
@@ -216,7 +223,7 @@ describe("createLlmAgentRunner", () => {
       expect(body.system).toBeUndefined();
       expect(body.max_tokens).toBeDefined();
       expect(result.text).toBe("Anthropic reply");
-      expect(result.tokenUsage).toEqual({ input: 20, output: 8 });
+      expect(result.usage).toEqual({ inputTokens: 20, outputTokens: 8 });
     });
 
     it("splits prompt on --- separator into system + user with cache_control on both", async () => {
@@ -291,7 +298,7 @@ describe("createLlmAgentRunner", () => {
         model: "gpt-4o",
         apiKey: "sk-x",
       });
-      await runner({
+      await run(runner, {
         agentId: "default",
         prompt: "Hi",
         timeoutSeconds: 30,
@@ -323,7 +330,7 @@ describe("createLlmAgentRunner", () => {
       });
 
       await expect(
-        runner({ agentId: "default", prompt: "Hi" })
+        run(runner, { agentId: "default", prompt: "Hi" })
       ).rejects.toThrow(/429|Too Many Requests|Rate limited|failed/i);
     });
 
@@ -344,7 +351,7 @@ describe("createLlmAgentRunner", () => {
       });
 
       await expect(
-        runner({ agentId: "default", prompt: "Hi" })
+        run(runner, { agentId: "default", prompt: "Hi" })
       ).rejects.toThrow(/text|extract|response/i);
     });
   });

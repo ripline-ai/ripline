@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { McpServerConfig } from "./types.js";
-import type { AgentResult, AgentRunner } from "./pipeline/executors/agent.js";
+import type { AgentRunner, AgentRunParams, AgentEvent, TokenUsage, AgentErrorKind } from "./pipeline/executors/agent.js";
 import { stripAnsi, extractLastJson } from "./stdout-parser.js";
 import { normalizeContainerConfig, DEFAULT_BUILD_IMAGE } from "./run-container-pool.js";
 
@@ -11,6 +11,7 @@ const MAX_TURNS_CEILING_PLAN = 10;
 const DEFAULT_TIMEOUT_SECONDS = 300;
 const DEFAULT_MAX_TURNS_EXECUTE = 200;
 const DEFAULT_MAX_TURNS_PLAN = 3;
+const HEARTBEAT_INTERVAL_MS = 5_000;
 
 /** Default execute-mode tool whitelist when permissionMode is dontAsk. Overridable via config.allowedTools. */
 const DEFAULT_EXECUTE_ALLOWED_TOOLS = [
@@ -126,6 +127,120 @@ function buildExecuteOptions(
   };
 }
 
+// ---------------------------------------------------------------------------
+// SDK message shapes (narrowed from @anthropic-ai/claude-agent-sdk types)
+// ---------------------------------------------------------------------------
+
+/** Streamlined shape of a single BetaRawMessageStreamEvent for mapping. */
+type StreamEvent = {
+  type: string;
+  index?: number;
+  content_block?: { type: string; id?: string; name?: string; input?: unknown; text?: string };
+  delta?: { type: string; text?: string; partial_json?: string; input_json?: string };
+};
+
+/** Narrowed result message shape from the SDK. */
+type SDKResultMessage = {
+  type: "result";
+  subtype: string;
+  result?: string;
+  errors?: string[];
+  total_cost_usd?: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+    // ModelUsage shape variant (used when usage is the consolidated ModelUsage)
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadInputTokens?: number;
+  };
+};
+
+/** Narrowed partial assistant message (streaming events). */
+type SDKPartialMessage = {
+  type: "stream_event";
+  event: StreamEvent;
+};
+
+/** Narrowed completed assistant turn message. */
+type SDKAssistantMessage = {
+  type: "assistant";
+  message: {
+    content: Array<{
+      type: string;
+      id?: string;
+      name?: string;
+      input?: unknown;
+      text?: string;
+    }>;
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Event mappers
+// ---------------------------------------------------------------------------
+
+/** Extract TokenUsage from a result message's usage field. */
+function extractTokenUsage(msg: SDKResultMessage): TokenUsage | undefined {
+  const u = msg.usage;
+  if (!u || typeof u !== "object") return undefined;
+
+  // Try both naming conventions the SDK may use
+  const inputTokens =
+    typeof u.input_tokens === "number"
+      ? u.input_tokens
+      : typeof u.inputTokens === "number"
+        ? u.inputTokens
+        : undefined;
+  const outputTokens =
+    typeof u.output_tokens === "number"
+      ? u.output_tokens
+      : typeof u.outputTokens === "number"
+        ? u.outputTokens
+        : undefined;
+  const cachedInputTokens =
+    typeof u.cache_read_input_tokens === "number"
+      ? u.cache_read_input_tokens
+      : typeof u.cacheReadInputTokens === "number"
+        ? u.cacheReadInputTokens
+        : undefined;
+
+  const costUsd =
+    typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : undefined;
+
+  if (
+    inputTokens === undefined &&
+    outputTokens === undefined &&
+    cachedInputTokens === undefined &&
+    costUsd === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(inputTokens !== undefined && { inputTokens }),
+    ...(outputTokens !== undefined && { outputTokens }),
+    ...(cachedInputTokens !== undefined && { cachedInputTokens }),
+    ...(costUsd !== undefined && { costUsd }),
+  };
+}
+
+/** Determine AgentErrorKind from an SDK error message or string. */
+function classifyError(msg: string, subtypeOrName?: string): AgentErrorKind {
+  if (subtypeOrName === "AbortError" || /aborted/i.test(msg)) return "aborted";
+  if (/timed?\s*out/i.test(msg)) return "timeout";
+  if (/authentication_failed|auth.*fail|not authenticated/i.test(msg)) return "auth_error";
+  if (/quota|rate.?limit|429|billing/i.test(msg)) return "quota_exhausted";
+  if (/not found.*path|not in path|ENOENT.*claude|command not found/i.test(msg)) return "cli_not_in_path";
+  if (/max.*turn|error_max_turn/i.test(msg)) return "cli_failed";
+  if (/error_during_execution|error_max_budget/i.test(msg)) return "cli_failed";
+  if (/output.*truncat|truncat.*output/i.test(msg)) return "output_truncated";
+  if (/parse|json|unexpected token/i.test(msg)) return "parse_error";
+  return "cli_failed";
+}
+
 /**
  * Create an AgentRunner that invokes the Claude Code (Agent) SDK.
  * Use for nodes with runner: claude-code; supports plan (read-only) and execute modes.
@@ -136,14 +251,33 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
   const defaultTimeout = config.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
   const outputFormat = config.outputFormat ?? "text";
 
-  return async (params): Promise<AgentResult> => {
+  async function* runImpl(params: AgentRunParams, signal?: AbortSignal): AsyncGenerator<AgentEvent> {
     if (params.containerContext) {
-      return runClaudeCodeInContainer(params, outputFormat);
+      // Container path: delegate to container exec helper then yield result
+      try {
+        const result = await runClaudeCodeInContainer(params, outputFormat);
+        yield { type: "message_done", text: result.text } satisfies AgentEvent;
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        yield { type: "error", kind: classifyError(errMsg), message: errMsg } satisfies AgentEvent;
+      }
+      return;
     }
 
     const mode = params.mode ?? defaultMode;
     const rawCwd = params.cwd ?? defaultCwd ?? process.cwd();
-    const cwd = validateCwd(rawCwd);
+    let cwd: string;
+    try {
+      cwd = validateCwd(rawCwd);
+    } catch (err) {
+      yield {
+        type: "error",
+        kind: "spawn_failed",
+        message: err instanceof Error ? err.message : String(err),
+      } satisfies AgentEvent;
+      return;
+    }
+
     const cwdExplicit = params.cwd !== undefined || defaultCwd !== undefined;
     const modelRaw = params.model ?? config.model;
     const model = typeof modelRaw === "string" && modelRaw.trim() !== "" ? modelRaw.trim() : undefined;
@@ -156,23 +290,43 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
     const defaultMaxTurnsForCall =
       mode === "plan" ? DEFAULT_MAX_TURNS_PLAN : DEFAULT_MAX_TURNS_EXECUTE;
     const maxTurns = applyMaxTurnsCeiling(mode, config.maxTurns ?? defaultMaxTurnsForCall);
-    const timeoutMs =
-      (params.timeoutSeconds ?? defaultTimeout) * 1000;
+    const timeoutMs = (params.timeoutSeconds ?? defaultTimeout) * 1000;
+
     const logErr = (msg: string): void => {
       if (params.log) params.log.log("error", msg);
       else console.error(msg);
     };
+
     if (process.env.RIPLINE_LOG_CONFIG === "1") {
       logErr(
         `[claude-code-runner] maxTurns=${maxTurns} timeoutMs=${timeoutMs} mode=${mode} cwd=${cwd}`
       );
     }
+
+    // Compose AbortController: respect external signal + internal timeout
     const controller = new AbortController();
+    if (signal) {
+      if (signal.aborted) {
+        controller.abort();
+      } else {
+        signal.addEventListener("abort", () => controller.abort(), { once: true });
+      }
+    }
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    let heartbeatId: ReturnType<typeof setInterval> | undefined;
 
     const savedClaudeCode = process.env.CLAUDECODE;
     delete process.env.CLAUDECODE;
+
     try {
+      let resultText: string | undefined;
+      let tokenUsage: TokenUsage | undefined;
+      let accumulatedText = "";
+
+      // Tool-call tracking: input JSON is streamed incrementally
+      const pendingToolInputs = new Map<number, string>(); // index -> partial JSON
+
       try {
         const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
@@ -180,18 +334,18 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
         const hooks: Record<string, Array<(input: unknown) => unknown>> = {};
         if (mode === "plan") {
           hooks.PreToolUse = [
-          (input: unknown) => {
-            const hookInput = input as { tool_name?: string };
-            const toolName = hookInput?.tool_name;
-            if (typeof toolName === "string" && planModeDenyTools.has(toolName)) {
-              return {
-                hookEventName: "PreToolUse" as const,
-                permissionDecision: "deny" as const,
-                permissionDecisionReason: "Plan mode: write/edit tools are not allowed",
-              };
-            }
-            return undefined;
-          },
+            (input: unknown) => {
+              const hookInput = input as { tool_name?: string };
+              const toolName = hookInput?.tool_name;
+              if (typeof toolName === "string" && planModeDenyTools.has(toolName)) {
+                return {
+                  hookEventName: "PreToolUse" as const,
+                  permissionDecision: "deny" as const,
+                  permissionDecisionReason: "Plan mode: write/edit tools are not allowed",
+                };
+              }
+              return undefined;
+            },
           ];
         }
 
@@ -249,67 +403,132 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
           options,
         });
 
-        let resultText: string | undefined;
-        let usage: { input?: number; output?: number } | undefined;
+        // Heartbeat: track last-yield time and emit progress between messages
+        let lastProgressAt = Date.now();
 
         for await (const message of q) {
-          const m = message as { type?: string; subtype?: string; result?: string; usage?: unknown; errors?: string[]; message?: { content?: Array<{ type: string; text?: string; name?: string; input?: unknown }> }; error?: string };
-          if (params.log && m.type === "assistant") {
-            for (const block of (m.message?.content ?? [])) {
-              if (block.type === "text" && block.text) {
-                params.log.log("info", block.text.trimEnd());
-              } else if (block.type === "tool_use" && block.name) {
-                const inp = block.input as Record<string, unknown> | undefined;
-                const detail = inp?.command ?? inp?.file_path ?? inp?.path ?? inp?.pattern ?? inp?.prompt;
-                const suffix = typeof detail === "string" ? `: ${detail.slice(0, 200)}` : "";
-                params.log.log("info", `tool: ${block.name}${suffix}`);
-              }
-            }
-            if (m.error) {
-              logErr(`[claude-code-runner] assistant error: ${m.error}`);
-            }
+          // Check if we should emit a heartbeat (approximate 5s interval)
+          const now = Date.now();
+          if (now - lastProgressAt >= HEARTBEAT_INTERVAL_MS) {
+            yield { type: "progress" } satisfies AgentEvent;
+            lastProgressAt = now;
           }
-          if (m.type === "result") {
-            clearTimeout(timeoutId);
-            if (m.subtype === "success" && typeof m.result === "string") {
-              resultText = m.result;
-              const u = m.usage as
-                | { input_tokens?: number; output_tokens?: number }
-                | { input?: number; output?: number }
-                | undefined;
-              if (u && typeof u === "object") {
-                const inputTokens =
-                  typeof (u as { input_tokens?: number }).input_tokens === "number"
-                    ? (u as { input_tokens: number }).input_tokens
-                    : (u as { input?: number }).input;
-                const outputTokens =
-                  typeof (u as { output_tokens?: number }).output_tokens === "number"
-                    ? (u as { output_tokens: number }).output_tokens
-                    : (u as { output?: number }).output;
-                if (typeof inputTokens === "number" || typeof outputTokens === "number") {
-                  usage = {};
-                  if (typeof inputTokens === "number") usage.input = inputTokens;
-                  if (typeof outputTokens === "number") usage.output = outputTokens;
+
+          const m = message as { type?: string; subtype?: string; result?: string; event?: StreamEvent };
+
+          // ---------------------------------------------------------------
+          // stream_event — streaming content from assistant
+          // ---------------------------------------------------------------
+          if (m.type === "stream_event" && m.event) {
+            const ev = m.event;
+
+            if (ev.type === "content_block_start") {
+              const block = ev.content_block;
+              if (block?.type === "tool_use" && block.id && block.name) {
+                // Tool call starting; input arrives later via content_block_delta
+                pendingToolInputs.set(ev.index ?? -1, "");
+                yield {
+                  type: "tool_call_start",
+                  id: block.id,
+                  name: block.name,
+                  input: block.input ?? {},
+                } satisfies AgentEvent;
+              }
+            } else if (ev.type === "content_block_delta") {
+              const delta = ev.delta;
+              if (delta?.type === "text_delta" && typeof delta.text === "string" && delta.text.length > 0) {
+                accumulatedText += delta.text;
+                yield { type: "text_delta", text: delta.text } satisfies AgentEvent;
+              } else if (delta?.type === "input_json_delta") {
+                const partial = delta.partial_json ?? delta.input_json ?? "";
+                const existing = pendingToolInputs.get(ev.index ?? -1) ?? "";
+                pendingToolInputs.set(ev.index ?? -1, existing + partial);
+              }
+            } else if (ev.type === "content_block_stop") {
+              // If there's pending input JSON for this index, we've finished accumulating it
+              // The tool_call_end will be emitted when we see the full assistant message
+              // (SDKAssistantMessage with complete content blocks). Nothing to emit here
+              // since we already emitted tool_call_start.
+            }
+            // message_start, message_delta, message_stop — ignore; result handles completion
+            continue;
+          }
+
+          // ---------------------------------------------------------------
+          // assistant — completed turn message (tool use content blocks)
+          // ---------------------------------------------------------------
+          if (m.type === "assistant") {
+            const am = m as unknown as SDKAssistantMessage;
+            for (const block of am.message?.content ?? []) {
+              if (block.type === "tool_use" && block.id) {
+                // Emit tool_call_end with resolved input
+                yield {
+                  type: "tool_call_end",
+                  id: block.id,
+                  output: block.input ?? {},
+                } satisfies AgentEvent;
+              } else if (block.type === "text" && typeof block.text === "string" && block.text.length > 0) {
+                // If we didn't get streaming text_deltas, accumulate from full message
+                if (accumulatedText === "") {
+                  accumulatedText += block.text;
+                  yield { type: "text_delta", text: block.text } satisfies AgentEvent;
                 }
               }
-            } else if (m.subtype !== "success") {
-              const errors = (m as { errors?: string[] }).errors;
+            }
+            continue;
+          }
+
+          // ---------------------------------------------------------------
+          // result — terminal message
+          // ---------------------------------------------------------------
+          if (m.type === "result") {
+            clearTimeout(timeoutId);
+            heartbeatId && clearInterval(heartbeatId);
+
+            const rm = m as unknown as SDKResultMessage;
+            logErr(
+              `[claude-code-runner] result message: subtype=${rm.subtype}`
+            );
+
+            if (rm.subtype === "success" && typeof rm.result === "string") {
+              resultText = rm.result;
+              tokenUsage = extractTokenUsage(rm);
+            } else {
+              const errors = rm.errors ?? [];
               const errDetail = [
-                `subtype=${m.subtype ?? "unknown"}`,
-                `errors=${JSON.stringify(errors ?? [])}`,
-                `result=${typeof m.result === "string" ? m.result.slice(0, 500) : String(m.result ?? "")}`,
+                `subtype=${rm.subtype ?? "unknown"}`,
+                `errors=${JSON.stringify(errors)}`,
+                `result=${typeof rm.result === "string" ? rm.result.slice(0, 500) : String(rm.result ?? "")}`,
               ].join(", ");
               logErr(`[claude-code-runner] FAILED: ${errDetail}`);
-              throw new Error(`Claude Code runner: ${errDetail}`);
+              const kind = classifyError(errDetail, rm.subtype);
+              yield {
+                type: "error",
+                kind,
+                message: `Claude Code runner: ${errDetail}`,
+              } satisfies AgentEvent;
+              return;
             }
             break;
           }
+
+          // Other messages (user, system, tool_use_summary, etc.) — ignored
+          const anyMsg = m as { type?: string; subtype?: string };
+          logErr(
+            `[claude-code-runner] message: type=${anyMsg.type ?? "n/a"} subtype=${anyMsg.subtype ?? "n/a"}`
+          );
         }
 
         q.close?.();
+        pendingToolInputs.clear();
 
         if (resultText === undefined) {
-          throw new Error("Claude Code runner: no result message received");
+          yield {
+            type: "error",
+            kind: "cli_failed",
+            message: "Claude Code runner: no result message received",
+          } satisfies AgentEvent;
+          return;
         }
 
         // Clean ANSI escape codes from result text unconditionally
@@ -327,38 +546,62 @@ export function createClaudeCodeRunner(config: ClaudeCodeRunnerConfig): AgentRun
           try {
             JSON.parse(resultText);
           } catch {
-            throw new Error(
-              `Claude Code runner: outputFormat is "json" but response was not valid JSON: ${resultText.slice(0, 200)}`
-            );
+            yield {
+              type: "error",
+              kind: "parse_error",
+              message: `Claude Code runner: outputFormat is "json" but response was not valid JSON: ${resultText.slice(0, 200)}`,
+            } satisfies AgentEvent;
+            return;
           }
         }
 
-        const agentResult: AgentResult = { text: resultText };
-        if (usage && (usage.input !== undefined || usage.output !== undefined)) {
-          agentResult.tokenUsage = usage;
+        yield {
+          type: "message_done",
+          text: resultText,
+          ...(tokenUsage && { usage: tokenUsage }),
+        } satisfies AgentEvent;
+
+      } catch (err) {
+        clearTimeout(timeoutId);
+        heartbeatId && clearInterval(heartbeatId);
+
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const errName = err instanceof Error ? err.name : undefined;
+
+        // Classify the error
+        let kind: AgentErrorKind;
+        if (controller.signal.aborted || errName === "AbortError" || /aborted/i.test(errMsg)) {
+          kind = "aborted";
+        } else {
+          kind = classifyError(errMsg, errName);
         }
-        return agentResult;
-      } finally {
-        if (savedClaudeCode !== undefined) process.env.CLAUDECODE = savedClaudeCode;
-        else delete process.env.CLAUDECODE;
+
+        logErr(`[claude-code-runner] caught error: ${errMsg}`);
+        yield {
+          type: "error",
+          kind,
+          message: errMsg,
+        } satisfies AgentEvent;
       }
-    } catch (err) {
+    } finally {
       clearTimeout(timeoutId);
-      if (err instanceof Error) {
-        if (err.name === "AbortError") {
-          throw new Error(`Claude Code runner: request timed out after ${timeoutMs / 1000}s`);
-        }
-        throw err;
-      }
-      throw new Error(String(err));
+      heartbeatId && clearInterval(heartbeatId);
+      if (savedClaudeCode !== undefined) process.env.CLAUDECODE = savedClaudeCode;
+      else delete process.env.CLAUDECODE;
     }
+  }
+
+  return {
+    run(params: AgentRunParams, signal?: AbortSignal): AsyncGenerator<AgentEvent> {
+      return runImpl(params, signal);
+    },
   };
 }
 
 async function runClaudeCodeInContainer(
-  params: Parameters<AgentRunner>[0],
+  params: AgentRunParams,
   outputFormat: "text" | "json"
-): Promise<AgentResult> {
+): Promise<{ text: string }> {
   const timeoutMs =
     params.timeoutSeconds !== undefined
       ? params.timeoutSeconds * 1000

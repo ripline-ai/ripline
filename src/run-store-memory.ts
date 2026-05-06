@@ -51,9 +51,10 @@ export class MemoryRunStore implements RunStore {
     await this.save(record);
   }
 
-  async completeRun(record: PipelineRunRecord, outputs?: Record<string, unknown>): Promise<void> {
+  async completeRun(record: PipelineRunRecord, outputs?: Record<string, unknown>, verdict?: 'approved' | 'request_changes'): Promise<void> {
     record.status = "completed";
     if (outputs !== undefined) record.outputs = outputs;
+    if (verdict !== undefined) record.verdict = verdict;
     await this.save(record);
   }
 

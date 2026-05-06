@@ -67,9 +67,23 @@ function resolvePath(value: string): string {
 }
 
 export { createOpenClawAgentRunner, type OpenClawPluginApi } from "./integrations/openclaw/index.js";
+export type { AgentEvent, AgentErrorKind, TokenUsage } from "./pipeline/executors/agent.js";
+export { collectAgentResult } from "./pipeline/executors/agent.js";
 export { createLlmAgentRunner, type LlmAgentRunnerConfig } from "./llm-agent-runner.js";
 export { createClaudeCodeRunner, type ClaudeCodeRunnerConfig } from "./claude-code-runner.js";
 export { createCodexRunner, type CodexRunnerConfig } from "./codex-runner.js";
+export { createGeminiRunner, type GeminiRunnerConfig } from "./gemini-runner.js";
+export { createKimiRunner, type KimiRunnerConfig } from "./kimi-runner.js";
+export { createOpenCodeRunner, type OpenCodeRunnerConfig } from "./opencode-runner.js";
+export {
+  executeReviewPhase,
+  type ReviewPhaseEvent,
+  type ReviewPhaseResult,
+  type ReviewPhaseExecutorOptions,
+  type VoiceRegistryLike,
+  type ReviewerFeedbackEntry,
+} from "./pipeline/executors/review-phase.js";
+export type { RunDoneEvent } from "./pipeline/runner.js";
 export {
   normalizeLlmAgentConfigFromPlugin,
   normalizeClaudeCodeConfigFromPlugin,
@@ -106,6 +120,69 @@ export {
   type ValidationIssue,
   type ValidationSeverity,
 } from "./pipeline-validator.js";
+
+// Voice registry
+export { createVoiceRegistry } from "./voice-registry.js";
+export type {
+  VoiceRegistry,
+  VoiceRegistryEntry,
+  VoiceRegistryOptions,
+} from "./voice-registry.js";
+
+// Review pipeline parser
+export { parseReviewPipeline, loadReviewPipeline } from "./review-pipeline-parser.js";
+export type { ParseResult } from "./review-pipeline-parser.js";
+
+// Review pipeline types and schemas
+export type {
+  AgentLineage,
+  VoiceSpec,
+  DoerConfig,
+  ReviewerConfig,
+  PhaseIterateConfig,
+  PhaseInputsConfig,
+  PlanPhase,
+  ReviewPhase,
+  ReviewOnlyPhase,
+  ShipConfig,
+  PipelinePhase,
+  ReviewPipelineDefinition,
+  RiplineLiteralPhase,
+  RiplineInputPhase,
+  RiplineTransformPhase,
+  RiplineAgentPhase,
+  RiplineRunPipelinePhase,
+  RiplineLoopPhase,
+  RiplineCheckpointPhase,
+  RiplineOutputPhase,
+  RiplineEnqueuePhase,
+  RiplineCollectChildrenPhase,
+} from "./review-phase-types.js";
+export {
+  agentLineageSchema,
+  voiceSpecSchema,
+  doerConfigSchema,
+  reviewerConfigSchema,
+  phaseIterateConfigSchema,
+  phaseInputsConfigSchema,
+  planPhaseSchema,
+  reviewPhaseSchema,
+  reviewOnlyPhaseSchema,
+  shipConfigSchema,
+  pipelinePhaseSchema,
+  reviewPipelineDefinitionSchema,
+  riplineLiteralPhaseSchema,
+  riplineInputPhaseSchema,
+  riplineTransformPhaseSchema,
+  riplineAgentPhaseSchema,
+  riplineRunPipelinePhaseSchema,
+  riplineLoopPhaseSchema,
+  riplineCheckpointPhaseSchema,
+  riplineOutputPhaseSchema,
+  riplineEnqueuePhaseSchema,
+  riplineCollectChildrenPhaseSchema,
+  edgeSchema,
+} from "./review-phase-types.js";
 
 export function normalizeConfig(raw: unknown): NormalizedConfig {
   const source = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};

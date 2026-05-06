@@ -5,6 +5,7 @@ import { executeTransform } from "./transform.js";
 import { executeOutput } from "./output.js";
 import { executeEnqueue } from "./enqueue.js";
 import { executeCollectChildren } from "./collect-children.js";
+import { executeExecNode } from "./exec.js";
 import type { AgentRunner } from "./agent.js";
 import { executeAgent } from "./agent.js";
 import { executeLoop } from "./loop.js";
@@ -12,12 +13,14 @@ import { executeSwitch } from "./switch.js";
 import { executeShell } from "./shell.js";
 
 export type { NodeResult, ExecutorContext, NodeExecutor } from "./types.js";
-export type { AgentRunner, AgentResult } from "./agent.js";
+export type { AgentRunner, AgentResult, AgentRunParams, AgentEvent, AgentErrorKind, TokenUsage } from "./agent.js";
+export { collectAgentResult } from "./agent.js";
 export { executeInput } from "./input.js";
 export { executeTransform } from "./transform.js";
 export { executeOutput } from "./output.js";
 export { executeEnqueue } from "./enqueue.js";
 export { executeCollectChildren } from "./collect-children.js";
+export { executeExecNode } from "./exec.js";
 export { executeAgent } from "./agent.js";
 export { executeLoop } from "./loop.js";
 export { executeSwitch } from "./switch.js";
@@ -42,6 +45,7 @@ function registerExecutors() {
   executors.set("output", (node, ctx) => executeOutput(node as import("../../types.js").OutputNode, ctx));
   executors.set("enqueue", (node, ctx) => executeEnqueue(node as import("../../types.js").EnqueueNode, ctx));
   executors.set("collect_children", (node, ctx) => executeCollectChildren(node as import("../../types.js").CollectChildrenNode, ctx));
+  executors.set("exec", (node, ctx) => executeExecNode(node as import("../../types.js").ExecNode, ctx));
   executors.set("loop", (node, ctx, options) => executeLoop(
     node as import("../../types.js").LoopNode,
     ctx,

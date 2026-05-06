@@ -441,10 +441,11 @@ describe("HTTP server", () => {
 
   describe("POST /pipelines/:id/run with custom agentRunner", () => {
     it("uses injected agentRunner for agent nodes (not stub)", { timeout: 10000 }, async () => {
-      const mockAgentRunner: AgentRunner = async ({ agentId, prompt }) => ({
-        text: `[mock] ${agentId}: ${prompt.slice(0, 50)}`,
-        tokenUsage: { input: 1, output: 2 },
-      });
+      const mockAgentRunner: AgentRunner = {
+        async *run({ agentId, prompt }) {
+          yield { type: "message_done" as const, text: `[mock] ${agentId}: ${prompt.slice(0, 50)}` };
+        },
+      };
       await app.close();
       app = await createApp({ ...config, agentRunner: mockAgentRunner });
 
@@ -475,10 +476,11 @@ describe("HTTP server", () => {
     });
 
     it("RIPLINE_AGENT_RUNNER=stub forces stub even when config provides agentRunner", { timeout: 10000 }, async () => {
-      const mockAgentRunner: AgentRunner = async ({ agentId, prompt }) => ({
-        text: `[mock] ${agentId}: ${prompt.slice(0, 50)}`,
-        tokenUsage: { input: 1, output: 2 },
-      });
+      const mockAgentRunner: AgentRunner = {
+        async *run({ agentId, prompt }) {
+          yield { type: "message_done" as const, text: `[mock] ${agentId}: ${prompt.slice(0, 50)}` };
+        },
+      };
       await app.close();
       const prev = process.env.RIPLINE_AGENT_RUNNER;
       process.env.RIPLINE_AGENT_RUNNER = "stub";

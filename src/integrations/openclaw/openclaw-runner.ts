@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentResult, AgentRunner } from "../../pipeline/executors/agent.js";
+import type { AgentRunner, AgentRunParams, AgentEvent } from "../../pipeline/executors/agent.js";
 
 /** OpenClaw plugin API surface used to run agent commands. */
 export type OpenClawPluginApi = {
@@ -39,7 +39,7 @@ const DEFAULT_AGENT_TIMEOUT_MS = 300_000; // 5 min
 export function createOpenClawAgentRunner(api: OpenClawPluginApi): AgentRunner {
   const { runCommandWithTimeout } = api.runtime.system;
 
-  return async (params): Promise<AgentResult> => {
+  async function* runImpl(params: AgentRunParams): AsyncGenerator<AgentEvent> {
     const args = ["openclaw", "agent", "--json", "--agent", params.agentId];
     const sessionId =
       params.resetSession === false && params.sessionId !== undefined
@@ -103,13 +103,26 @@ export function createOpenClawAgentRunner(api: OpenClawPluginApi): AgentRunner {
 
     // Extract token usage from either format
     const usageRaw = env.tokenUsage ?? env.result?.meta?.agentMeta?.usage;
-    const result: AgentResult = { text };
+    const usage: import("../../pipeline/executors/agent.js").TokenUsage = {};
     if (usageRaw && typeof usageRaw === "object") {
-      result.tokenUsage = {
-        ...(typeof (usageRaw as { input?: number }).input === "number" && { input: (usageRaw as { input: number }).input }),
-        ...(typeof (usageRaw as { output?: number }).output === "number" && { output: (usageRaw as { output: number }).output }),
-      };
+      if (typeof (usageRaw as { input?: number }).input === "number") {
+        usage.inputTokens = (usageRaw as { input: number }).input;
+      }
+      if (typeof (usageRaw as { output?: number }).output === "number") {
+        usage.outputTokens = (usageRaw as { output: number }).output;
+      }
     }
-    return result;
+
+    yield {
+      type: "message_done",
+      text,
+      ...(Object.keys(usage).length > 0 && { usage }),
+    } satisfies AgentEvent;
+  }
+
+  return {
+    run(params: AgentRunParams): AsyncGenerator<AgentEvent> {
+      return runImpl(params);
+    },
   };
 }

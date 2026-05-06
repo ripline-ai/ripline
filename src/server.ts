@@ -24,6 +24,7 @@ import { YamlFileQueueStore } from "./interfaces/queue-store.js";
 import { loadUserConfig } from "./config.js";
 import { createLogger, createRunScopedFileSink, LOG_FILE_NAME } from "./log.js";
 import { DeterministicRunner } from "./pipeline/runner.js";
+import type { RunDoneEvent, ReviewPhaseEvent } from "./pipeline/runner.js";
 import type { AgentRunner } from "./pipeline/executors/agent.js";
 import { loadAgentDefinitionsFromFile, loadSkillsRegistryFromFile } from "./agent-runner-config.js";
 import { listProfiles, loadProfile } from "./profiles.js";
@@ -46,11 +47,19 @@ const DEFAULT_PROFILES_DIR = path.join(
 );
 const SSE_POLL_MS = 500;
 
+/**
+ * Per-run event bus: maps runId → DeterministicRunner so that the SSE
+ * endpoint can subscribe to live events emitted during execution.
+ * Entries are removed when run_done fires.
+ */
+const runnerRegistry = new Map<string, DeterministicRunner>();
+
 /** Stub agent for HTTP-triggered runs when no external agent runner is available. */
-const stubAgentRunner: AgentRunner = async ({ agentId, prompt }) => ({
-  text: `[http-stub] ${agentId}: ${prompt.slice(0, 80)}…`,
-  tokenUsage: { input: 0, output: 0 },
-});
+const stubAgentRunner: AgentRunner = {
+  async *run({ agentId, prompt }) {
+    yield { type: "message_done" as const, text: `[http-stub] ${agentId}: ${prompt.slice(0, 80)}…` };
+  },
+};
 
 export type ServerConfig = PipelinePluginConfig & {
   runsDir?: string;
@@ -232,12 +241,18 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         });
         const runIdPromise = new Promise<string>((resolve) => {
           runner.once("run.started", async (record: PipelineRunRecord) => {
+            // Register the runner so the SSE endpoint can subscribe to events.
+            runnerRegistry.set(record.id, runner);
             if (webhookUrl) {
               record.webhook_url = webhookUrl;
               await store.save(record);
             }
             resolve(record.id);
           });
+        });
+        // Remove runner from registry once the run terminates.
+        runner.once("run_done", (event: RunDoneEvent) => {
+          runnerRegistry.delete(event.runId);
         });
         const runBgP: Promise<void> = runner.run({
           inputs,
@@ -594,13 +609,14 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
     },
   });
 
-  /** GET /runs/:runId/stream - SSE for node updates */
+  /** GET /runs/:runId/stream - SSE for run events (review phase events + run_done) */
   fastify.get<{ Params: { runId: string } }>("/runs/:runId/stream", {
     preHandler: requireAuth,
     handler: async (request, reply) => {
+      const { runId } = request.params;
       let record: PipelineRunRecord | null;
       try {
-        record = await loadRunWithRetry(request.params.runId);
+        record = await loadRunWithRetry(runId);
       } catch (err) {
         return reply.status(500).send({
           error: "Internal Server Error",
@@ -608,42 +624,104 @@ export async function createApp(config: ServerConfig): Promise<FastifyInstance> 
         });
       }
       if (!record) {
-        return reply.status(404).send({ error: "Not Found", message: `Run ${request.params.runId} not found` });
+        return reply.status(404).send({ error: "Not Found", message: `Run ${runId} not found` });
       }
+
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
       });
-      const send = (data: PipelineRunRecord) => {
-        reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
-      };
-      let lastUpdated = record.updatedAt;
-      const interval = setInterval(async () => {
-        let current: PipelineRunRecord | null;
+
+      // SSE write helpers — matching the Chorus daemon event format.
+      const sendEvent = (eventType: string, data: unknown): void => {
         try {
-          current = await loadRunWithRetry(request.params.runId);
+          reply.raw.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
         } catch {
-          clearInterval(interval);
-          reply.raw.end();
-          return;
+          /* connection closed mid-write */
         }
-        if (!current) {
-          clearInterval(interval);
-          reply.raw.end();
-          return;
-        }
-        if (current.updatedAt !== lastUpdated) {
-          lastUpdated = current.updatedAt;
-          send(current);
-        }
-        if (current.status === "completed" || current.status === "errored" || current.status === "needs-conflict-resolution") {
-          clearInterval(interval);
-          reply.raw.end();
-        }
-      }, SSE_POLL_MS);
-      request.raw.on("close", () => clearInterval(interval));
-      send(record);
+      };
+
+      const sendRunRecord = (r: PipelineRunRecord): void => {
+        sendEvent('run_record', r);
+      };
+
+      // If the run is already terminal, send the final state and close.
+      if (record.status === "completed" || record.status === "errored") {
+        sendRunRecord(record);
+        reply.raw.end();
+        return;
+      }
+
+      // Check whether a live runner exists for this run.
+      const liveRunner = runnerRegistry.get(runId);
+
+      if (liveRunner) {
+        // Send the current record as the initial snapshot.
+        sendRunRecord(record);
+
+        const onReviewPhaseEvent = (event: ReviewPhaseEvent): void => {
+          sendEvent('review_phase_event', event);
+        };
+        const onRunDone = (event: RunDoneEvent): void => {
+          sendEvent('run_done', event);
+          cleanup();
+        };
+
+        const cleanup = (): void => {
+          liveRunner.off('review_phase_event', onReviewPhaseEvent);
+          liveRunner.off('run_done', onRunDone);
+          try {
+            reply.raw.end();
+          } catch {
+            /* already closed */
+          }
+        };
+
+        liveRunner.on('review_phase_event', onReviewPhaseEvent);
+        liveRunner.once('run_done', onRunDone);
+
+        request.raw.on('close', () => {
+          liveRunner.off('review_phase_event', onReviewPhaseEvent);
+          liveRunner.off('run_done', onRunDone);
+        });
+      } else {
+        // No live runner — fall back to polling the run record.
+        // (Handles scheduler-dispatched runs or runs started before this server instance.)
+        sendRunRecord(record);
+        let lastUpdated = record.updatedAt;
+        const interval = setInterval(async () => {
+          let current: PipelineRunRecord | null;
+          try {
+            current = await loadRunWithRetry(runId);
+          } catch {
+            clearInterval(interval);
+            reply.raw.end();
+            return;
+          }
+          if (!current) {
+            clearInterval(interval);
+            reply.raw.end();
+            return;
+          }
+          if (current.updatedAt !== lastUpdated) {
+            lastUpdated = current.updatedAt;
+            sendRunRecord(current);
+          }
+          if (current.status === "completed" || current.status === "errored") {
+            // Emit a synthetic run_done for polling clients.
+            const doneEvent: RunDoneEvent = {
+              runId,
+              status: current.status === "completed" ? "completed" : "errored",
+              ...(current.verdict !== undefined && { verdict: current.verdict }),
+            };
+            sendEvent('run_done', doneEvent);
+            clearInterval(interval);
+            reply.raw.end();
+          }
+        }, SSE_POLL_MS);
+        request.raw.on("close", () => clearInterval(interval));
+      }
     },
   });
 

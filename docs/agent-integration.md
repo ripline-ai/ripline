@@ -1,5 +1,167 @@
 # Agent integration
 
+## Multi-CLI runners
+
+Ripline supports multiple AI CLI runners through a voice/lineage registry. Rather than hardcoding a specific runner into each pipeline node, you declare a lineage (`anthropic`, `openai`, `google`, `moonshot`, `opencode`) and the registry resolves the appropriate runner at runtime. This makes pipelines portable: the same YAML runs against whichever CLIs are installed, and you can swap runners without touching pipeline definitions.
+
+### Voice/lineage registry
+
+The registry is created with `createVoiceRegistry(options?)` from `src/voice-registry.ts`. It detects installed AI CLI binaries and maps lineages to the runner instances you inject.
+
+```typescript
+import { createVoiceRegistry } from './voice-registry.js';
+import { createClaudeCodeRunner } from './claude-code-runner.js';
+import { createCodexRunner } from './codex-runner.js';
+import { createGeminiRunner } from './gemini-runner.js';
+import { createKimiRunner } from './kimi-runner.js';
+import { createOpenCodeRunner } from './opencode-runner.js';
+
+const voiceRegistry = createVoiceRegistry({
+  claudeCodeRunner: createClaudeCodeRunner(),
+  codexRunner:      createCodexRunner(),
+  geminiRunner:     createGeminiRunner(),
+  kimiRunner:       createKimiRunner(),
+  opencodeRunner:   createOpenCodeRunner(),
+});
+```
+
+**Lineages and their CLI binaries:**
+
+| Lineage | Binary | Runner option |
+|---------|--------|---------------|
+| `anthropic` | `claude` | `claudeCodeRunner` |
+| `openai` | `codex` | `codexRunner` |
+| `google` | `gemini` | `geminiRunner` |
+| `moonshot` | `kimi` | `kimiRunner` |
+| `opencode` | `opencode` | `opencodeRunner` |
+| `any` | (resolved at runtime) | — |
+
+**`resolve(lineage)`**
+
+`voiceRegistry.resolve(lineage)` returns the `AgentRunner` for a given lineage, or `null` if that lineage has no runner configured. When `lineage` is `'any'`, the registry prefers `anthropic` if available, then falls back to the first registered lineage in declaration order.
+
+```typescript
+const runner = voiceRegistry.resolve('google');
+// → GeminiRunner | null
+
+const fallback = voiceRegistry.resolve('any');
+// → anthropic runner if available, else first available runner
+```
+
+**`list()`**
+
+Returns all registered `VoiceRegistryEntry` items — useful for introspection and logging which CLIs are available at startup.
+
+**Binary detection**
+
+The registry runs `which <binary>` (or `where` on Windows) for each lineage at construction time and logs a warning if a binary is detected on PATH but no runner was injected. Lineages with neither an injected runner nor a detected binary are silently unavailable.
+
+---
+
+### Codex runner
+
+The Codex runner invokes the OpenAI Codex CLI (`codex exec -`), piping the prompt to stdin.
+
+```typescript
+import { createCodexRunner, CodexRunnerConfig } from './codex-runner.js';
+
+const runner = createCodexRunner({
+  binaryPath: 'codex',       // default: 'codex'
+  timeoutMs:  600_000,       // default: 600000 (10 min)
+  cwd:        '/my/project', // default: process.cwd()
+});
+```
+
+**`CodexRunnerConfig` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `binaryPath` | string | `'codex'` | Path to the codex binary (resolved from PATH if not absolute). |
+| `timeoutMs` | number | `600000` | Milliseconds before the subprocess is killed and an error is thrown. |
+| `cwd` | string | `process.cwd()` | Working directory for the subprocess. Per-call `params.cwd` overrides this. |
+
+The runner detects quota exhaustion via an anchored `ERROR:` prefix on stderr (to avoid false positives from Codex echoing the prompt). On non-zero exit it throws with the exit code and the first 500 bytes of stderr. Supports per-call `params.model` to pass `--model <model>` to the CLI.
+
+---
+
+### Gemini runner
+
+The Gemini runner invokes the Google Gemini CLI in headless `--output-format stream-json` mode.
+
+```typescript
+import { createGeminiRunner, GeminiRunnerConfig } from './gemini-runner.js';
+
+const runner = createGeminiRunner({
+  binaryPath: 'gemini',
+  timeoutMs:  600_000,
+  cwd:        '/my/project',
+});
+```
+
+**`GeminiRunnerConfig` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `binaryPath` | string | `'gemini'` | Path to the Gemini CLI binary. |
+| `timeoutMs` | number | `600000` | Timeout in milliseconds. |
+| `cwd` | string | `process.cwd()` | Working directory for the process. |
+
+The runner accumulates streaming `text_delta` events and resolves on a `message_done` event. It parses stderr for structured authentication and quota errors (e.g. missing `GEMINI_API_KEY`, HTTP 429) and surfaces them as typed errors. The default model is `gemini-2.5-pro-preview-05-06`; pass `params.model` to override. Set `RIPLINE_LOG_CONFIG=1` to log effective config at startup.
+
+---
+
+### Kimi runner
+
+The Kimi runner invokes the MoonshotAI Kimi CLI (`kimi --print --output-format stream-json`).
+
+```typescript
+import { createKimiRunner, KimiRunnerConfig } from './kimi-runner.js';
+
+const runner = createKimiRunner({
+  binaryPath: 'kimi',
+  timeoutMs:  600_000,
+  cwd:        '/my/project',
+});
+```
+
+**`KimiRunnerConfig` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `binaryPath` | string | `'kimi'` | Path to the kimi binary. |
+| `timeoutMs` | number | `600000` | Timeout in milliseconds. |
+| `cwd` | string | `process.cwd()` | Working directory for the process. |
+
+Kimi emits a JSON-Lines stream compatible with the Claude Code event format (`{"type":"text","text":"..."}` deltas, `{"type":"result","result":"..."}` for completion). The runner accumulates text deltas and resolves on a result event. Pass `params.model` to select a specific Kimi model (`-m <model>`).
+
+---
+
+### OpenCode runner
+
+The OpenCode runner invokes the OpenCode CLI (`opencode run --format json`).
+
+```typescript
+import { createOpenCodeRunner, OpenCodeRunnerConfig } from './opencode-runner.js';
+
+const runner = createOpenCodeRunner({
+  binaryPath: 'opencode',
+  timeoutMs:  600_000,
+  cwd:        '/my/project',
+});
+```
+
+**`OpenCodeRunnerConfig` fields:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `binaryPath` | string | `'opencode'` | Path to the opencode binary. |
+| `timeoutMs` | number | `600000` | Timeout in milliseconds. |
+| `cwd` | string | `process.cwd()` | Working directory for the process. |
+
+The runner handles both streaming JSON-Lines output (via `message_done` events) and the full-blob exit format used by OpenCode 1.14.x. The prompt is passed as a positional argument (OpenCode's `run` subcommand does not support stdin); keep prompts under ~100 KB or use file indirection for very large inputs. Pass `params.model` to select a model (`--model <model>`).
+
+---
+
 ## How agent nodes run
 
 Every pipeline **agent** node delegates to a configurable **agent runner**. The runner is responsible for sending the prompt to a model (with optional thinking level and timeout) and returning text plus optional token usage.

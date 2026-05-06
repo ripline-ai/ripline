@@ -1,6 +1,240 @@
 # Pipeline Reference
 
-This document is the complete reference for Ripline's pipeline YAML/JSON format. It covers all node types, fields, edges, contracts, and template syntax.
+This document is the complete reference for Ripline's pipeline YAML/JSON format. It covers all node types, review phase kinds, fields, edges, contracts, and template syntax.
+
+---
+
+## Review pipeline phases
+
+Ripline has three built-in phase kinds for multi-agent review workflows: `plan`, `review`, and `review_only`. These are declared in a `phases` array (instead of or alongside the `nodes` array) using a `ReviewPipelineDefinition`.
+
+Review pipelines support sequential chaining by default — each phase flows to the next — or explicit wiring via `inputs.include`. Edges between phases are derived automatically from the phase order; explicit `edges` are not required.
+
+For a complete guide including the programmatic API and worked examples, see [Review Pipelines](review-pipelines.md).
+
+---
+
+### `plan` phase
+
+A `plan` phase runs a single doer agent and produces output. There is no reviewer gate: the doer's output passes directly to the next phase. If an optional `reviewer` is specified with `require: 0`, it still behaves as doer-only.
+
+```yaml
+phases:
+  - id: draft_spec
+    kind: plan
+    title: Draft the spec
+    description: |
+      You are a senior engineer. Write a technical spec for:
+      {{ inputs.task }}
+    doer:
+      lineage: anthropic
+      models:
+        - claude-opus-4-5
+    iterate:
+      maxRounds: 1
+      onDisagreement: stop
+    inputs:
+      include: []    # optional — list prior phase ids to receive as context
+```
+
+#### Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | Yes | Unique phase identifier within the pipeline. |
+| `kind` | `"plan"` | Yes | Discriminant for this phase type. |
+| `title` | string | No | Short label shown in logs and run records. |
+| `description` | string | No | The prompt text sent to the doer (supports `{{ }}` template interpolation). |
+| `doer` | `DoerConfig` | Yes | Specifies which AI CLI runs the task. See below. |
+| `reviewer` | `ReviewerConfig` | No | If omitted (or `require: 0`), the phase has no review gate. |
+| `iterate` | `PhaseIterateConfig` | Yes | Controls the retry loop. |
+| `inputs` | `PhaseInputsConfig` | No | Controls which prior phase outputs are included as context. |
+
+**`DoerConfig`:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `lineage` | `AgentLineage` | Yes | Which AI CLI family to use: `anthropic`, `openai`, `google`, `moonshot`, `opencode`, or `any`. |
+| `models` | string[] | No | Preferred model names for this lineage, in priority order. The registry uses the first available. |
+
+**`PhaseIterateConfig`:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `maxRounds` | number (int ≥ 1) | Yes | Maximum number of doer/reviewer rounds before returning `request_changes`. |
+| `onDisagreement` | `"continue"` \| `"stop"` | Yes | When quorum is not met: `"continue"` feeds reviewer feedback back to the doer and retries; `"stop"` returns `request_changes` immediately. |
+| `shareSessionAcrossRounds` | boolean | No | When `true`, the doer reuses the same session across retry rounds. |
+| `shareSessionAcrossPhases` | boolean | No | When `true`, the doer reuses the same session across different phases. |
+
+**`PhaseInputsConfig`:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `include` | string[] | List of prior phase IDs whose outputs are injected as context. When present and non-empty, suppresses the automatic sequential edge from the previous phase. |
+| `exclude` | string[] | Prior phase IDs to exclude from the automatic context injection. |
+
+---
+
+### `review` phase
+
+A `review` phase runs a doer agent, then fans out to N reviewer agents in parallel. If quorum is not met, the doer can be retried with reviewer feedback injected into its next-round prompt.
+
+```yaml
+phases:
+  - id: review_spec
+    kind: review
+    title: Peer review the spec
+    description: |
+      Review the architecture spec. Focus on completeness, correctness,
+      and risk coverage. State APPROVE or REQUEST CHANGES.
+    doer:
+      lineage: anthropic
+    reviewer:
+      require: 2
+      crossLineage: true
+      candidates:
+        - lineage: google
+        - lineage: openai
+        - lineage: moonshot
+    iterate:
+      maxRounds: 3
+      onDisagreement: continue
+    inputs:
+      include: [draft_spec]
+```
+
+#### Additional fields (beyond `plan`)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `reviewer` | `ReviewerConfig` | Yes | Specifies how many reviewers must approve and who the candidates are. |
+
+**`ReviewerConfig`:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `require` | number (int ≥ 0) | Yes | Minimum number of reviewer approvals needed for quorum. |
+| `crossLineage` | boolean | No | When `true`, approvals must come from at least 2 distinct lineages. This prevents a single AI family from approving its own work. |
+| `candidates` | `VoiceSpec[]` | Yes | The reviewer slots. Each slot is a `{ lineage, models? }` pair resolved via the voice registry. Reviewers run in parallel. |
+
+**`VoiceSpec`:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `lineage` | `AgentLineage` | Yes | Which AI CLI family to use for this reviewer slot. |
+| `models` | string[] | No | Preferred model names for this slot. |
+
+**Quorum evaluation:**
+
+The executor collects verdicts from all reviewer candidates by parsing the reviewer's free-form text for approval keywords (`approve`, `lgtm`, `looks good`, `ship it`) and rejection keywords (`request changes`, `disagree`, `reject`, `blocker`). If the text is ambiguous, it is treated as non-approval. When `crossLineage` is `true`, the set of approving lineages must span at least 2 distinct values.
+
+**Retry loop:**
+
+When quorum is not met and `iterate.onDisagreement` is `"continue"` and `round < maxRounds`, the executor builds a feedback block from all non-approving reviewers and prepends it to the doer's prompt for the next round. When `onDisagreement` is `"stop"`, or when all rounds are exhausted, the phase returns `verdict: "request_changes"`.
+
+---
+
+### `review_only` phase
+
+A `review_only` phase has no doer. It takes an existing artifact (from a prior phase or an external source) and fans it out to reviewers. Use this to review diffs, documents, or any pre-existing artifact without running a generation step first.
+
+```yaml
+phases:
+  - id: audit_pr_diff
+    kind: review_only
+    title: Review the PR diff
+    description: |
+      Review this diff for correctness and adherence to our coding standards.
+    reviewer:
+      require: 1
+      candidates:
+        - lineage: anthropic
+        - lineage: google
+    artifact:
+      source: fetch_diff   # ID of the phase or artifact key whose output is being reviewed
+      label: PR diff
+    iterate:
+      maxRounds: 1
+      onDisagreement: stop
+```
+
+#### Additional fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `artifact` | object | No | Identifies the upstream output being reviewed. |
+| `artifact.source` | string | Yes (if `artifact` present) | Phase ID or artifact key containing the content to review. |
+| `artifact.label` | string | No | Human-readable label for the artifact (shown in reviewer prompts). |
+
+---
+
+### Full worked example: architecture review pipeline
+
+```yaml
+id: arch_review
+name: Architecture review
+version: 1
+description: Draft an architecture, review it with two external reviewers, then ship if approved.
+entry: [plan_arch]
+
+ship:
+  enabled: true
+  branchPattern: ripline/arch-review-{chatId}
+  titleTemplate: "Architecture review: {chatId}"
+
+phases:
+  - id: plan_arch
+    kind: plan
+    title: Draft architecture
+    description: |
+      You are a senior software architect. The request is:
+
+      {{ inputs.request }}
+
+      Write a concise architecture document: components, data flow, technology choices, risks.
+    doer:
+      lineage: anthropic
+      models:
+        - claude-opus-4-5
+    iterate:
+      maxRounds: 1
+      onDisagreement: stop
+
+  - id: review_arch
+    kind: review
+    title: Architecture review
+    description: |
+      Review the architecture document below for soundness, scalability, and risk coverage.
+      State APPROVE (with a brief summary) or REQUEST CHANGES (with specific issues).
+    doer:
+      lineage: anthropic
+    reviewer:
+      require: 2
+      crossLineage: true
+      candidates:
+        - lineage: google
+        - lineage: openai
+    iterate:
+      maxRounds: 3
+      onDisagreement: continue
+    inputs:
+      include: [plan_arch]
+
+contracts:
+  input:
+    type: object
+    properties:
+      request: { type: string }
+    required: [request]
+```
+
+**How it executes:**
+
+1. `plan_arch` runs the `anthropic` doer. Because `iterate.maxRounds` is 1 and there is no reviewer, the doer's output passes through immediately.
+2. `review_arch` receives the `plan_arch` output as context (via `inputs.include`). The `anthropic` doer runs first. Then `google` and `openai` reviewers run in parallel.
+3. If both reviewers approve (`require: 2`, `crossLineage: true` ensures different lineages), the phase returns `approved`.
+4. If either reviewer requests changes and `maxRounds` allows, the doer receives the feedback and retries.
+5. After up to 3 rounds, the pipeline completes with a `verdict` and the doer's final output.
 
 ---
 

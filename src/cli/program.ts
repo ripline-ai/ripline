@@ -278,10 +278,11 @@ export function createRiplineCliProgram(options: RiplineCliOptions = {}): Comman
         }
         outPath = path.resolve(cwd, "dist", "demo-artifact.json");
         if (!agentRunner) {
-          agentRunner = async ({ agentId, prompt }) => ({
-            text: `[demo] ${agentId}: ${prompt.slice(0, 60)}…`,
-            tokenUsage: { input: 0, output: 0 },
-          });
+          agentRunner = {
+            async *run({ agentId, prompt }) {
+              yield { type: "message_done" as const, text: `[demo] ${agentId}: ${prompt.slice(0, 60)}…` };
+            },
+          };
         }
       } else {
         outPath = opts.out ? path.resolve(opts.out) : undefined;

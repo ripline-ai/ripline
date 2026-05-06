@@ -3,13 +3,17 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { loadPipelineDefinition } from "../src/lib/pipeline/loader.js";
 import { DeterministicRunner } from "../src/pipeline/runner.js";
+import type { RunDoneEvent, ReviewPhaseEvent } from "../src/pipeline/runner.js";
 import type { PipelineDefinition } from "../src/types.js";
 import type { AgentRunner } from "../src/pipeline/executors/index.js";
+import type { VoiceRegistryLike } from "../src/pipeline/executors/review-phase.js";
+import type { PlanPhase } from "../src/review-phase-types.js";
 
-const mockAgentRunner: AgentRunner = async () => ({
-  text: "Mock agent response",
-  tokenUsage: { input: 0, output: 0 },
-});
+const mockAgentRunner: AgentRunner = {
+  async *run() {
+    yield { type: "message_done" as const, text: "Mock agent response" };
+  },
+};
 
 const fixturesDir = path.join(process.cwd(), "pipelines", "examples");
 const riplinePath = path.join(fixturesDir, "ripline-area-owner.yaml");
@@ -262,10 +266,12 @@ describe("DeterministicRunner", () => {
         ],
       };
       let attempts = 0;
-      const flakyAgent: AgentRunner = async () => {
-        attempts++;
-        if (attempts < 2) throw new Error("Transient failure");
-        return { text: "OK", tokenUsage: { input: 0, output: 0 } };
+      const flakyAgent: AgentRunner = {
+        async *run() {
+          attempts++;
+          if (attempts < 2) throw new Error("Transient failure");
+          yield { type: "message_done" as const, text: "OK" };
+        },
       };
       const { MemoryRunStore } = await import("../src/run-store-memory.js");
       const store = new MemoryRunStore();
@@ -481,6 +487,119 @@ describe("DeterministicRunner", () => {
       expect(record.steps.find((s) => s.nodeId === "propose_split")?.status).toBe("skipped");
       // generate should still run
       expect(record.steps.find((s) => s.nodeId === "generate")?.status).toBe("completed");
+    });
+
+    it("emits review_phase_event when a plan phase runs", async () => {
+      // Build a minimal plan phase node (doer-only: reviewer.require = 0, no candidates)
+      const planPhaseNode: PlanPhase & { type: "agent" } = {
+        id: "plan-1",
+        type: "agent",
+        kind: "plan",
+        doer: { lineage: "anthropic" },
+        reviewer: { require: 0, candidates: [] },
+        iterate: { maxRounds: 1, onDisagreement: "stop" },
+      };
+      const def: PipelineDefinition = {
+        id: "review-phase-event-test",
+        entry: ["plan-1"],
+        nodes: [planPhaseNode as unknown as import("../src/types.js").PipelineNode],
+        edges: [],
+      };
+
+      const stubAgentRunner: AgentRunner = {
+        async *run() {
+          yield { type: "message_done" as const, text: "Doer output approved" };
+        },
+      };
+      const stubVoiceRegistry: VoiceRegistryLike = {
+        resolve(_lineage) {
+          return stubAgentRunner;
+        },
+      };
+
+      const { MemoryRunStore } = await import("../src/run-store-memory.js");
+      const store = new MemoryRunStore();
+      const runner = new DeterministicRunner(def, { store, voiceRegistry: stubVoiceRegistry });
+
+      const reviewPhaseEvents: ReviewPhaseEvent[] = [];
+      runner.on("review_phase_event", (event: ReviewPhaseEvent) => {
+        reviewPhaseEvents.push(event);
+      });
+
+      await runner.run({ inputs: {} });
+
+      // At minimum we expect phase_start and phase_done
+      const types = reviewPhaseEvents.map((e) => e.type);
+      expect(types).toContain("phase_start");
+      expect(types).toContain("phase_done");
+    });
+
+    it("emits run_done with status: 'completed' after a successful run", async () => {
+      const def: PipelineDefinition = {
+        id: "run-done-completed-test",
+        entry: ["a"],
+        nodes: [{ id: "a", type: "input" }],
+        edges: [],
+      };
+
+      const { MemoryRunStore } = await import("../src/run-store-memory.js");
+      const store = new MemoryRunStore();
+      const runner = new DeterministicRunner(def, { store });
+
+      let runDoneEvent: RunDoneEvent | undefined;
+      runner.once("run_done", (event: RunDoneEvent) => {
+        runDoneEvent = event;
+      });
+
+      const record = await runner.run({ inputs: {} });
+
+      expect(runDoneEvent).toBeDefined();
+      expect(runDoneEvent!.runId).toBe(record.id);
+      expect(runDoneEvent!.status).toBe("completed");
+    });
+
+    it("emits run_done with verdict: 'approved' when review phase approves", async () => {
+      const planPhaseNode: PlanPhase & { type: "agent" } = {
+        id: "plan-approve",
+        type: "agent",
+        kind: "plan",
+        doer: { lineage: "anthropic" },
+        reviewer: { require: 0, candidates: [] },
+        iterate: { maxRounds: 1, onDisagreement: "stop" },
+      };
+      const def: PipelineDefinition = {
+        id: "run-done-verdict-test",
+        entry: ["plan-approve"],
+        nodes: [planPhaseNode as unknown as import("../src/types.js").PipelineNode],
+        edges: [],
+      };
+
+      const stubAgentRunner: AgentRunner = {
+        async *run() {
+          yield { type: "message_done" as const, text: "LGTM approve" };
+        },
+      };
+      const stubVoiceRegistry: VoiceRegistryLike = {
+        resolve(_lineage) {
+          return stubAgentRunner;
+        },
+      };
+
+      const { MemoryRunStore } = await import("../src/run-store-memory.js");
+      const store = new MemoryRunStore();
+      const runner = new DeterministicRunner(def, { store, voiceRegistry: stubVoiceRegistry });
+
+      let runDoneEvent: RunDoneEvent | undefined;
+      runner.once("run_done", (event: RunDoneEvent) => {
+        runDoneEvent = event;
+      });
+
+      await runner.run({ inputs: {} });
+
+      // Doer-only plan phases return verdict 'approved' unconditionally.
+      expect(runDoneEvent).toBeDefined();
+      expect(runDoneEvent!.status).toBe("completed");
+      expect(runDoneEvent!.verdict).toBe("approved");
     });
 
     it("enqueue node creates child runs and pauses parent until children complete", async () => {

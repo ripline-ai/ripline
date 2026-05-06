@@ -3,6 +3,15 @@ import {
   createOpenClawAgentRunner,
   type OpenClawPluginApi,
 } from "../src/integrations/openclaw/openclaw-runner.js";
+import { collectAgentResult } from "../src/pipeline/executors/agent.js";
+
+/** Helper: collect result from a runner invocation. */
+async function runAndCollect(
+  runner: ReturnType<typeof createOpenClawAgentRunner>,
+  params: Parameters<(typeof runner)["run"]>[0]
+) {
+  return collectAgentResult(runner.run(params));
+}
 
 describe("createOpenClawAgentRunner", () => {
   it("builds openclaw agent --json with agentId and prompt, parses JSON to AgentResult", async () => {
@@ -26,7 +35,7 @@ describe("createOpenClawAgentRunner", () => {
     };
 
     const runner = createOpenClawAgentRunner(api);
-    const result = await runner({
+    const result = await runAndCollect(runner, {
       agentId: "vector",
       prompt: "Summarize this.",
     });
@@ -44,7 +53,8 @@ describe("createOpenClawAgentRunner", () => {
     expect(capturedCmd).toContain("--message");
     expect(capturedCmd).toContain("Summarize this.");
     expect(result.text).toBe("Hello from agent");
-    expect(result.tokenUsage).toEqual({ input: 10, output: 5 });
+    expect(result.usage?.inputTokens).toBe(10);
+    expect(result.usage?.outputTokens).toBe(5);
   });
 
   it("passes thinking and timeoutSeconds to command", async () => {
@@ -65,7 +75,7 @@ describe("createOpenClawAgentRunner", () => {
     };
 
     const runner = createOpenClawAgentRunner(api);
-    await runner({
+    await runAndCollect(runner, {
       agentId: "nova",
       prompt: "Hi",
       thinking: "high",
@@ -93,7 +103,7 @@ describe("createOpenClawAgentRunner", () => {
 
     const runner = createOpenClawAgentRunner(api);
     await expect(
-      runner({ agentId: "default", prompt: "Hi" })
+      runAndCollect(runner, { agentId: "default", prompt: "Hi" })
     ).rejects.toThrow(/agent.*failed|timeout|stderr/i);
   });
 
@@ -112,7 +122,7 @@ describe("createOpenClawAgentRunner", () => {
 
     const runner = createOpenClawAgentRunner(api);
     await expect(
-      runner({ agentId: "default", prompt: "Hi" })
+      runAndCollect(runner, { agentId: "default", prompt: "Hi" })
     ).rejects.toThrow(/JSON|parse|envelope/i);
   });
 
@@ -134,7 +144,7 @@ describe("createOpenClawAgentRunner", () => {
     };
 
     const runner = createOpenClawAgentRunner(api);
-    await runner({ agentId: "default", prompt: "Hi" });
+    await runAndCollect(runner, { agentId: "default", prompt: "Hi" });
 
     expect(capturedCmd).toContain("--session-id");
     const sessionIdx = capturedCmd.indexOf("--session-id");
@@ -160,7 +170,7 @@ describe("createOpenClawAgentRunner", () => {
     };
 
     const runner = createOpenClawAgentRunner(api);
-    await runner({
+    await runAndCollect(runner, {
       agentId: "nova",
       prompt: "Continue",
       resetSession: false,
@@ -190,7 +200,7 @@ describe("createOpenClawAgentRunner", () => {
     };
 
     const runner = createOpenClawAgentRunner(api);
-    await runner({
+    await runAndCollect(runner, {
       agentId: "default",
       prompt: "Hi",
       resetSession: false,
@@ -202,7 +212,7 @@ describe("createOpenClawAgentRunner", () => {
     expect(sessionValue).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   });
 
-  it("returns text and optional tokenUsage when envelope has only text", async () => {
+  it("returns text and no usage when envelope has only text", async () => {
     const api: OpenClawPluginApi = {
       runtime: {
         system: {
@@ -216,8 +226,8 @@ describe("createOpenClawAgentRunner", () => {
     };
 
     const runner = createOpenClawAgentRunner(api);
-    const result = await runner({ agentId: "default", prompt: "Hi" });
+    const result = await runAndCollect(runner, { agentId: "default", prompt: "Hi" });
     expect(result.text).toBe("Only text");
-    expect(result.tokenUsage).toBeUndefined();
+    expect(result.usage).toBeUndefined();
   });
 });
